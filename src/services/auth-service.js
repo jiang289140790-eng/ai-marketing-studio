@@ -11,6 +11,11 @@ function isCorruptedAuthStorageError(error) {
   return String(error?.message || error).includes('non ISO-8859-1 code point');
 }
 
+function isRecoverableAuthCallbackError(error) {
+  const message = String(error?.message || error);
+  return message.includes('PKCE code verifier not found') || message.includes('invalid request: both auth code and code verifier should be non-empty');
+}
+
 export function resetStoredAuthSession() {
   if (typeof window === 'undefined') return;
 
@@ -60,8 +65,17 @@ export async function initializeAuthSession() {
       const { data, error } = await client.auth.exchangeCodeForSession(code);
       cleanAuthParamsFromUrl();
       if (error) {
-        const currentSession = await getCurrentSession();
-        if (currentSession) return currentSession;
+        if (isRecoverableAuthCallbackError(error)) {
+          try {
+            const currentSession = await getCurrentSession();
+            if (currentSession) return currentSession;
+          } catch (sessionError) {
+            if (!isRecoverableAuthCallbackError(sessionError) && !isCorruptedAuthStorageError(sessionError)) {
+              throw sessionError;
+            }
+          }
+          return null;
+        }
         throw error;
       }
       return data.session;
@@ -79,7 +93,7 @@ export async function initializeAuthSession() {
 
     return await getCurrentSession();
   } catch (error) {
-    if (isCorruptedAuthStorageError(error)) {
+    if (isCorruptedAuthStorageError(error) || isRecoverableAuthCallbackError(error)) {
       resetStoredAuthSession();
       return null;
     }

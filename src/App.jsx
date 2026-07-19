@@ -142,7 +142,7 @@ export default function App() {
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
       <div className="main-shell">
         <Header session={session} profile={profile} title={pageTitles[activePage]} />
-        {authError && <div className="notice error">{authError}</div>}
+        {authError && !session && <div className="notice error">{authError}</div>}
         {authNotice && !session && <div className="notice">{authNotice}</div>}
         {page}
       </div>

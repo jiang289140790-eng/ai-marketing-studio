@@ -51,25 +51,33 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [authError, setAuthError] = useState('');
 
+  async function syncProfile(user) {
+    if (!user) {
+      setProfile(null);
+      return;
+    }
+
+    try {
+      setProfile(await upsertProfile(user));
+    } catch (error) {
+      console.warn('Profile sync failed; continuing with auth session.', error);
+      setProfile(null);
+    }
+  }
+
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
 
     initializeAuthSession()
       .then(async (currentSession) => {
         setSession(currentSession);
-        if (currentSession?.user) {
-          setProfile(await upsertProfile(currentSession.user));
-        }
+        await syncProfile(currentSession?.user);
       })
       .catch((error) => setAuthError(error.message));
 
     return onAuthStateChange(async (nextSession) => {
       setSession(nextSession);
-      if (nextSession?.user) {
-        setProfile(await upsertProfile(nextSession.user));
-      } else {
-        setProfile(null);
-      }
+      await syncProfile(nextSession?.user);
     });
   }, []);
 

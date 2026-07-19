@@ -3,6 +3,8 @@ import { isSupabaseConfigured } from '../services/supabase-client';
 
 export function Header({ session, profile, title }) {
   const user = session?.user;
+  const displayName = profile?.username || user?.user_metadata?.user_name || user?.user_metadata?.preferred_username || user?.email;
+  const avatarUrl = profile?.avatar_url || user?.user_metadata?.avatar_url;
 
   return (
     <header className="header">
@@ -17,9 +19,9 @@ export function Header({ session, profile, title }) {
           <>
             <span className="status-badge connected">已登录</span>
             <div className="user-chip">
-              {profile?.avatar_url ? <img src={profile.avatar_url} alt="" /> : <span>{user.email?.[0]?.toUpperCase()}</span>}
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{user.email?.[0]?.toUpperCase()}</span>}
               <div>
-                <strong>{profile?.username || user.email}</strong>
+                <strong>{displayName}</strong>
                 <small>{user.email}</small>
               </div>
             </div>

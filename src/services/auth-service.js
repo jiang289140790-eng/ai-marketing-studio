@@ -95,13 +95,18 @@ export function onAuthStateChange(callback) {
 
 export async function signInWithGitHub() {
   const client = requireSupabase();
-  const { error } = await client.auth.signInWithOAuth({
+  const { data, error } = await client.auth.signInWithOAuth({
     provider: 'github',
     options: {
       redirectTo: window.location.origin + window.location.pathname,
+      skipBrowserRedirect: true,
     },
   });
   if (error) throw error;
+  if (!data?.url) {
+    throw new Error('GitHub 登录地址生成失败，请检查 Supabase GitHub Provider 配置。');
+  }
+  window.location.assign(data.url);
 }
 
 export async function signOut() {

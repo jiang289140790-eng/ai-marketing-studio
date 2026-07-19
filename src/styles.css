@@ -142,6 +142,20 @@ a {
   flex-wrap: wrap;
 }
 
+.login-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.inline-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+  max-width: 360px;
+  text-align: right;
+}
+
 .user-chip {
   display: flex;
   align-items: center;

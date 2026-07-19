@@ -1,10 +1,25 @@
+import { useState } from 'react';
 import { signInWithGitHub, signOut } from '../services/auth-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
 export function Header({ session, profile, title }) {
   const user = session?.user;
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState('');
   const displayName = profile?.username || user?.user_metadata?.user_name || user?.user_metadata?.preferred_username || user?.email;
   const avatarUrl = profile?.avatar_url || user?.user_metadata?.avatar_url;
+
+  async function handleGitHubSignIn() {
+    setSignInError('');
+    setIsSigningIn(true);
+
+    try {
+      await signInWithGitHub();
+    } catch (error) {
+      setIsSigningIn(false);
+      setSignInError(error.message || 'GitHub 登录启动失败，请稍后重试。');
+    }
+  }
 
   return (
     <header className="header">
@@ -30,9 +45,12 @@ export function Header({ session, profile, title }) {
             </button>
           </>
         ) : (
-          <button className="primary-button" type="button" onClick={signInWithGitHub} disabled={!isSupabaseConfigured}>
-            GitHub 登录
-          </button>
+          <div className="login-stack">
+            <button className="primary-button" type="button" onClick={handleGitHubSignIn} disabled={!isSupabaseConfigured || isSigningIn}>
+              {isSigningIn ? '正在跳转…' : 'GitHub 登录'}
+            </button>
+            {signInError && <span className="inline-error">{signInError}</span>}
+          </div>
         )}
       </div>
     </header>

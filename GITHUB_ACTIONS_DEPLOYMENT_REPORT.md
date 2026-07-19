@@ -2,6 +2,67 @@
 
 Project: `ai-marketing-studio`
 
+## Latest status after workflow permission repair
+
+Workflow uploaded:
+
+```text
+Yes
+```
+
+Workflow commit:
+
+```text
+e81f4bf9802947b6b5b0b69b85fffc712cacea12
+```
+
+Workflow path fix commit:
+
+```text
+20f06427912cd6961938de779b7eaae5d2058154
+```
+
+Actions triggered:
+
+```text
+Yes
+```
+
+Latest run:
+
+```text
+https://github.com/jiang289140790-eng/ai-marketing-studio/actions/runs/29688754941
+```
+
+Current deployment status:
+
+```text
+Blocked
+```
+
+Current blocker:
+
+```text
+GitHub Pages is not enabled because the repository is PRIVATE and the current GitHub plan/API response says:
+"Your current plan does not support GitHub Pages for this repository."
+```
+
+Repository visibility:
+
+```text
+PRIVATE
+```
+
+Resolution options:
+
+```text
+1. Make the repository public, then enable GitHub Pages with GitHub Actions.
+2. Keep the repository private and upgrade/use a GitHub plan that supports private GitHub Pages.
+3. Keep the repository private and deploy with another host that supports private-source static deploys.
+```
+
+No business code was changed for the permission repair. Only GitHub workflow/deployment configuration and this report were updated.
+
 ## Repository
 
 ```text

@@ -45,10 +45,13 @@ a {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--line);
   background: #0b1020;
   color: white;
   padding: 24px 18px;
+  scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
 }
 
 .brand {
@@ -81,6 +84,7 @@ a {
 .nav-list {
   display: grid;
   gap: 8px;
+  padding-bottom: 48px;
 }
 
 .nav-item {
@@ -703,6 +707,8 @@ th {
   .sidebar {
     position: static;
     height: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .nav-list {

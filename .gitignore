@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+.phase*
+PHASE214_*RESULT.json
+supabase/.temp/
+supabase/.branches/
+.github/workflows/deploy-github-pages.yml

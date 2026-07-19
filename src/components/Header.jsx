@@ -1,4 +1,4 @@
-import { signInWithGoogle, signOut } from '../services/auth-service';
+import { signInWithGitHub, signOut } from '../services/auth-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
 export function Header({ session, profile, title }) {
@@ -27,8 +27,8 @@ export function Header({ session, profile, title }) {
             </button>
           </>
         ) : (
-          <button className="primary-button" type="button" onClick={signInWithGoogle} disabled={!isSupabaseConfigured}>
-            Google 登录
+          <button className="primary-button" type="button" onClick={signInWithGitHub} disabled={!isSupabaseConfigured}>
+            GitHub 登录
           </button>
         )}
       </div>

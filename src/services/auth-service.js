@@ -13,10 +13,10 @@ export function onAuthStateChange(callback) {
   return () => data.subscription.unsubscribe();
 }
 
-export async function signInWithGoogle() {
+export async function signInWithGitHub() {
   const client = requireSupabase();
   const { error } = await client.auth.signInWithOAuth({
-    provider: 'google',
+    provider: 'github',
     options: {
       redirectTo: window.location.origin + window.location.pathname,
     },

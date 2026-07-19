@@ -128,7 +128,7 @@ export default function App() {
         {authError && <div className="notice error">{authError}</div>}
         {!session && isSupabaseConfigured && (
           <div className="notice">
-            请先使用 Google 登录。登录后才会从 Supabase 读取你的账号、内容、素材、角色、Prompt、Workflow 和发布任务。
+            请先使用 GitHub 登录。登录后才会从 Supabase 读取你的账号、内容、素材、角色、Prompt、Workflow 和发布任务。
           </div>
         )}
         {page}

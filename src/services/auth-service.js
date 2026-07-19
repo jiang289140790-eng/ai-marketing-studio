@@ -7,6 +7,27 @@ export async function getCurrentSession() {
   return data.session;
 }
 
+function isCorruptedAuthStorageError(error) {
+  return String(error?.message || error).includes('non ISO-8859-1 code point');
+}
+
+export function resetStoredAuthSession() {
+  if (typeof window === 'undefined') return;
+
+  const storageKeys = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key) continue;
+    if (key.includes('supabase') || key.includes('sb-') || key.includes('qtrlymiqohbjvklwegsw')) {
+      storageKeys.push(key);
+    }
+  }
+
+  storageKeys.forEach((key) => window.localStorage.removeItem(key));
+  window.sessionStorage.clear();
+  cleanAuthParamsFromUrl();
+}
+
 function cleanAuthParamsFromUrl() {
   const cleanUrl = new window.URL(window.location.href);
   [
@@ -27,35 +48,43 @@ function cleanAuthParamsFromUrl() {
 }
 
 export async function initializeAuthSession() {
-  const client = requireSupabase();
-  const url = new window.URL(window.location.href);
-  const code = url.searchParams.get('code');
-  const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const accessToken = hashParams.get('access_token');
-  const refreshToken = hashParams.get('refresh_token');
+  try {
+    const client = requireSupabase();
+    const url = new window.URL(window.location.href);
+    const code = url.searchParams.get('code');
+    const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const accessToken = hashParams.get('access_token');
+    const refreshToken = hashParams.get('refresh_token');
 
-  if (code) {
-    const { data, error } = await client.auth.exchangeCodeForSession(code);
-    cleanAuthParamsFromUrl();
-    if (error) {
-      const currentSession = await getCurrentSession();
-      if (currentSession) return currentSession;
-      throw error;
+    if (code) {
+      const { data, error } = await client.auth.exchangeCodeForSession(code);
+      cleanAuthParamsFromUrl();
+      if (error) {
+        const currentSession = await getCurrentSession();
+        if (currentSession) return currentSession;
+        throw error;
+      }
+      return data.session;
     }
-    return data.session;
-  }
 
-  if (accessToken && refreshToken) {
-    const { data, error } = await client.auth.setSession({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-    cleanAuthParamsFromUrl();
-    if (error) throw error;
-    return data.session;
-  }
+    if (accessToken && refreshToken) {
+      const { data, error } = await client.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+      cleanAuthParamsFromUrl();
+      if (error) throw error;
+      return data.session;
+    }
 
-  return getCurrentSession();
+    return await getCurrentSession();
+  } catch (error) {
+    if (isCorruptedAuthStorageError(error)) {
+      resetStoredAuthSession();
+      return null;
+    }
+    throw error;
+  }
 }
 
 export function onAuthStateChange(callback) {

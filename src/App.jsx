@@ -50,6 +50,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authError, setAuthError] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
 
   async function syncProfile(user) {
     if (!user) {
@@ -72,8 +73,11 @@ export default function App() {
       .then(async (currentSession) => {
         setSession(currentSession);
         await syncProfile(currentSession?.user);
+        if (!currentSession) {
+          setAuthNotice('登录状态已重置，请重新点击 GitHub 登录。');
+        }
       })
-      .catch((error) => setAuthError(error.message));
+      .catch((error) => setAuthError(`登录状态初始化失败：${error.message}`));
 
     return onAuthStateChange(async (nextSession) => {
       setSession(nextSession);
@@ -134,6 +138,7 @@ export default function App() {
       <div className="main-shell">
         <Header session={session} profile={profile} title={pageTitles[activePage]} />
         {authError && <div className="notice error">{authError}</div>}
+        {authNotice && !session && <div className="notice">{authNotice}</div>}
         {page}
       </div>
     </div>

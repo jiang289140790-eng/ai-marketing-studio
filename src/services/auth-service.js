@@ -8,8 +8,22 @@ export async function getCurrentSession() {
 }
 
 function cleanAuthParamsFromUrl() {
-  const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
-  window.history.replaceState({}, document.title, cleanUrl);
+  const cleanUrl = new window.URL(window.location.href);
+  [
+    'code',
+    'error',
+    'error_code',
+    'error_description',
+    'access_token',
+    'expires_at',
+    'expires_in',
+    'provider_token',
+    'refresh_token',
+    'token_type',
+    'sb',
+  ].forEach((key) => cleanUrl.searchParams.delete(key));
+  cleanUrl.hash = '';
+  window.history.replaceState({}, document.title, cleanUrl.toString());
 }
 
 export async function initializeAuthSession() {
@@ -23,7 +37,11 @@ export async function initializeAuthSession() {
   if (code) {
     const { data, error } = await client.auth.exchangeCodeForSession(code);
     cleanAuthParamsFromUrl();
-    if (error) throw error;
+    if (error) {
+      const currentSession = await getCurrentSession();
+      if (currentSession) return currentSession;
+      throw error;
+    }
     return data.session;
   }
 

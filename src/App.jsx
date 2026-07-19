@@ -73,7 +73,9 @@ export default function App() {
       .then(async (currentSession) => {
         setSession(currentSession);
         await syncProfile(currentSession?.user);
-        if (!currentSession) {
+        if (currentSession) {
+          setAuthNotice('');
+        } else {
           setAuthNotice('登录状态已重置，请重新点击 GitHub 登录。');
         }
       })
@@ -82,6 +84,9 @@ export default function App() {
     return onAuthStateChange(async (nextSession) => {
       setSession(nextSession);
       await syncProfile(nextSession?.user);
+      if (nextSession) {
+        setAuthNotice('');
+      }
     });
   }, []);
 

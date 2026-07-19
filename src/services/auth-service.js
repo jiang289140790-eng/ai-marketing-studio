@@ -7,6 +7,39 @@ export async function getCurrentSession() {
   return data.session;
 }
 
+function cleanAuthParamsFromUrl() {
+  const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+  window.history.replaceState({}, document.title, cleanUrl);
+}
+
+export async function initializeAuthSession() {
+  const client = requireSupabase();
+  const url = new window.URL(window.location.href);
+  const code = url.searchParams.get('code');
+  const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const accessToken = hashParams.get('access_token');
+  const refreshToken = hashParams.get('refresh_token');
+
+  if (code) {
+    const { data, error } = await client.auth.exchangeCodeForSession(code);
+    cleanAuthParamsFromUrl();
+    if (error) throw error;
+    return data.session;
+  }
+
+  if (accessToken && refreshToken) {
+    const { data, error } = await client.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    cleanAuthParamsFromUrl();
+    if (error) throw error;
+    return data.session;
+  }
+
+  return getCurrentSession();
+}
+
 export function onAuthStateChange(callback) {
   const client = requireSupabase();
   const { data } = client.auth.onAuthStateChange((_event, session) => callback(session));

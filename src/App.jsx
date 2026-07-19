@@ -20,7 +20,7 @@ import { PublishPlan } from './pages/PublishPlan';
 import { SettingsPage } from './pages/SettingsPage';
 import { SystemHealth } from './pages/SystemHealth';
 import { WorkflowRuns } from './pages/WorkflowRuns';
-import { getCurrentSession, onAuthStateChange, upsertProfile } from './services/auth-service';
+import { initializeAuthSession, onAuthStateChange, upsertProfile } from './services/auth-service';
 import { isSupabaseConfigured } from './services/supabase-client';
 
 const pageTitles = {
@@ -54,7 +54,7 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
 
-    getCurrentSession()
+    initializeAuthSession()
       .then(async (currentSession) => {
         setSession(currentSession);
         if (currentSession?.user) {
@@ -126,11 +126,6 @@ export default function App() {
       <div className="main-shell">
         <Header session={session} profile={profile} title={pageTitles[activePage]} />
         {authError && <div className="notice error">{authError}</div>}
-        {!session && isSupabaseConfigured && (
-          <div className="notice">
-            请先使用 GitHub 登录。登录后才会从 Supabase 读取你的账号、内容、素材、角色、Prompt、Workflow 和发布任务。
-          </div>
-        )}
         {page}
       </div>
     </div>

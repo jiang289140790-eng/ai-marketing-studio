@@ -4,6 +4,43 @@ type PlatformAction = 'connect' | 'disconnect' | 'reconnect' | 'status' | 'getAc
 
 const supportedActions: PlatformAction[] = ['connect', 'disconnect', 'reconnect', 'status', 'getAccount', 'fetchContent', 'publish', 'getMetrics', 'setWebhook', 'notifyAdmin'];
 
+const preparedPlatformConfigs: Record<string, {
+  label: string;
+  authType: string;
+  requiredSecrets: string[];
+  supportedActions: string[];
+  notes: string[];
+}> = {
+  Instagram: {
+    label: 'Instagram',
+    authType: 'oauth2',
+    requiredSecrets: ['INSTAGRAM_CLIENT_ID', 'INSTAGRAM_CLIENT_SECRET', 'INSTAGRAM_REDIRECT_URI'],
+    supportedActions: ['connect', 'disconnect', 'reconnect', 'status', 'publish', 'getMetrics'],
+    notes: ['Use Instagram OAuth / Meta Graph permissions from the migrated platform layer.', 'Tokens must be written only to platform_credentials.'],
+  },
+  YouTube: {
+    label: 'YouTube',
+    authType: 'oauth2',
+    requiredSecrets: ['YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REDIRECT_URI'],
+    supportedActions: ['connect', 'disconnect', 'reconnect', 'status', 'publish', 'getMetrics'],
+    notes: ['Use Google OAuth with YouTube channel scopes.', 'Channel selection should create one platform_connection per channel.'],
+  },
+  TikTok: {
+    label: 'TikTok',
+    authType: 'oauth2',
+    requiredSecrets: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET', 'TIKTOK_REDIRECT_URI'],
+    supportedActions: ['connect', 'disconnect', 'reconnect', 'status', 'publish', 'getMetrics'],
+    notes: ['Use TikTok OAuth and content posting scopes.', 'Creator info and publish privacy settings stay in publish task metadata.'],
+  },
+  Discord: {
+    label: 'Discord',
+    authType: 'bot / oauth2',
+    requiredSecrets: ['DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'DISCORD_BOT_TOKEN', 'DISCORD_REDIRECT_URI'],
+    supportedActions: ['connect', 'disconnect', 'reconnect', 'status', 'publish', 'getMetrics'],
+    notes: ['Discord can use Bot channel publishing first, then OAuth for server/channel discovery.', 'Each server/channel should become an independent platform_connection.'],
+  },
+};
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return jsonResponse({ ok: true });
@@ -50,17 +87,8 @@ Deno.serve(async (request) => {
     }
 
     if (platform !== 'Telegram') {
-      return jsonResponse({
-        ok: true,
-        action,
-        mode: 'placeholder',
-        message: 'Only Telegram is implemented in this phase. Other platforms are still placeholders.',
-        safe_result: {
-          platform,
-          connection_id: body.connection_id || null,
-          token_exposed: false,
-        },
-      });
+      const { user } = await createAuthorizedClient(authHeader);
+      return jsonResponse(buildPreparedPlatformResponse(String(platform), action, body, user.id));
     }
 
     const { client, user } = await createAuthorizedClient(authHeader);
@@ -135,6 +163,70 @@ function createServiceClient() {
     },
   });
   return { client };
+}
+
+function buildPreparedPlatformResponse(platformInput: string, action: PlatformAction, body: Record<string, unknown>, userId: string) {
+  const platform = normalizePreparedPlatform(platformInput);
+  const config = preparedPlatformConfigs[platform];
+  if (!config) {
+    return {
+      ok: false,
+      platform: platformInput,
+      action,
+      mode: 'unsupported_platform',
+      error: `Unsupported platform: ${platformInput}`,
+      token_exposed: false,
+    };
+  }
+
+  const configuredSecrets = config.requiredSecrets.filter((secretName) => Boolean(Deno.env.get(secretName)));
+  const missingSecrets = config.requiredSecrets.filter((secretName) => !Deno.env.get(secretName));
+  const redirectUri = Deno.env.get(`${platform.toUpperCase()}_REDIRECT_URI`) || defaultPreparedRedirectUri(platform);
+  const readyForOAuth = missingSecrets.length === 0;
+
+  return {
+    ok: true,
+    platform,
+    action,
+    mode: readyForOAuth ? 'adapter_ready_pending_implementation' : 'configuration_required',
+    status: readyForOAuth ? 'ready' : 'missing_secrets',
+    message: readyForOAuth
+      ? `${config.label} credentials are configured. The OAuth handler can be implemented against this prepared adapter boundary.`
+      : `${config.label} connection is prepared, but Edge Function secrets are not complete yet.`,
+    setup: {
+      auth_type: config.authType,
+      required_secrets: config.requiredSecrets,
+      configured_secrets: configuredSecrets,
+      missing_secrets: missingSecrets,
+      redirect_uri: redirectUri,
+      callback_url: defaultPreparedRedirectUri(platform),
+      supported_actions: config.supportedActions,
+      multi_account: true,
+      token_storage: 'platform_credentials_only',
+      frontend_token_access: false,
+      notes: config.notes,
+    },
+    safe_result: {
+      user_id: userId,
+      platform,
+      connection_id: body.connection_id || null,
+      token_exposed: false,
+    },
+  };
+}
+
+function normalizePreparedPlatform(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'instagram') return 'Instagram';
+  if (normalized === 'youtube') return 'YouTube';
+  if (normalized === 'tiktok') return 'TikTok';
+  if (normalized === 'discord') return 'Discord';
+  return value;
+}
+
+function defaultPreparedRedirectUri(platform: string) {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') || 'https://qtrlymiqohbjvklwegsw.supabase.co';
+  return `${supabaseUrl}/functions/v1/platform?platform=${encodeURIComponent(platform)}`;
 }
 
 async function connectTelegram(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {

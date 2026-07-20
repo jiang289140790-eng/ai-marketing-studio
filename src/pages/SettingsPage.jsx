@@ -159,7 +159,7 @@ export function SettingsPage({ userId }) {
         </article>
         <article className="settings-card">
           <h3>真实发布</h3>
-          <p>当前只接入 Telegram。X、Instagram、TikTok、YouTube 仍是占位 adapter。</p>
+          <p>Telegram 与 X 已进入真实连接链路；Instagram、YouTube、TikTok、Discord 已建立配置入口，真实授权密钥统一放在 Supabase Edge Function Secrets。</p>
         </article>
       </div>
 

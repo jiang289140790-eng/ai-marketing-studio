@@ -99,6 +99,13 @@ export async function getXPlatformStatus(connectionId) {
   });
 }
 
+export async function preparePlatformConnection(platform, payload = {}) {
+  return invokePlatformConnectionAction(platform, 'connect', {
+    mode: 'prepare',
+    ...payload,
+  });
+}
+
 async function invokeTelegramConnectionAction(action, payload = {}) {
   return invokePlatformConnectionAction('Telegram', action, payload);
 }

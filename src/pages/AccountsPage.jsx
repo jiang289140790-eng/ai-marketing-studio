@@ -4,6 +4,7 @@ import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { accountCategories } from '../data/navigation';
+import { platformConnectionCards } from '../data/platform-connections';
 import {
   analyzeAccountWithAI,
   createSocialAccount,
@@ -17,62 +18,11 @@ import {
   disconnectXPlatform,
   getXPlatformStatus,
   listPlatformConnections,
+  preparePlatformConnection,
   reconnectXPlatform,
 } from '../services/platform-connection-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate, statusLabel } from '../utils/formatters';
-
-const platformConnectionCards = [
-  {
-    platform: 'X',
-    title: 'X / Twitter',
-    description: '通过 OAuth 连接自己的 X 账号，成功后自动写入账号矩阵。支持重复连接多个 X 账号。',
-    priority: '已接入',
-    implemented: true,
-    authType: 'oauth',
-  },
-  {
-    platform: 'Telegram',
-    title: 'Telegram',
-    description: '使用 Bot / Channel 连接。每个 Channel 会保存为一条独立连接。',
-    priority: '已接入',
-    implemented: true,
-    settingsOnly: true,
-    authType: 'bot',
-  },
-  {
-    platform: 'Instagram',
-    title: 'Instagram',
-    description: '连接入口已建立，等待迁移旧系统成熟 OAuth 流程与平台密钥。',
-    priority: '待迁移',
-    implemented: false,
-    authType: 'oauth',
-  },
-  {
-    platform: 'YouTube',
-    title: 'YouTube',
-    description: '连接入口已建立，后续接入频道授权、发布和数据同步。',
-    priority: '待迁移',
-    implemented: false,
-    authType: 'oauth',
-  },
-  {
-    platform: 'TikTok',
-    title: 'TikTok',
-    description: '连接入口已建立，后续接入 OAuth、发布和表现数据。',
-    priority: '待迁移',
-    implemented: false,
-    authType: 'oauth',
-  },
-  {
-    platform: 'Discord',
-    title: 'Discord',
-    description: '新增平台入口。后续可接入 Bot / OAuth，用于频道发布和社区运营。',
-    priority: '待迁移',
-    implemented: false,
-    authType: 'bot / oauth',
-  },
-];
 
 function getAccountRole(account) {
   const role = account.account_role || account.account_type || account.account_category || 'owned';
@@ -130,6 +80,11 @@ function formatList(value) {
   return value || '—';
 }
 
+function isErrorMessage(message) {
+  const text = String(message || '').toLowerCase();
+  return text.includes('missing') || text.includes('error') || text.includes('failed') || text.includes('失败');
+}
+
 export function AccountsPage({ userId, onNavigate }) {
   const [accounts, setAccounts] = useState([]);
   const [connections, setConnections] = useState([]);
@@ -137,6 +92,7 @@ export function AccountsPage({ userId, onNavigate }) {
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
   const [message, setMessage] = useState('');
+  const [setupInfo, setSetupInfo] = useState(null);
   const [busyKey, setBusyKey] = useState(null);
   const [strategyResult, setStrategyResult] = useState(null);
 
@@ -176,7 +132,7 @@ export function AccountsPage({ userId, onNavigate }) {
         setMessage('账号已更新。');
       } else {
         await createSocialAccount(userId, payload);
-        setMessage('账号已创建。自有账号建议优先使用上方平台连接；竞品和灵感账号可以手动维护。');
+        setMessage('账号已创建。自有账号建议优先使用上方平台连接；竞品和灵感账号可手动维护。');
       }
       setEditing(null);
       setIsCreating(false);
@@ -227,29 +183,68 @@ export function AccountsPage({ userId, onNavigate }) {
   }
 
   async function handleConnectPlatform(card) {
-    if (card.platform !== 'X') {
-      if (card.settingsOnly && onNavigate) {
-        setMessage('已切换到设置页，请在那里填写 Telegram Channel / Chat ID。每次填写一个新 Channel，就会新增一条连接。');
-        onNavigate('settings');
-        return;
+    setSetupInfo(null);
+
+    if (card.connectMode === 'settings') {
+      setMessage('已切换到设置页。每填写一个新的 Telegram Channel / Chat ID，就会新增一条独立连接。');
+      if (onNavigate) onNavigate('settings');
+      return;
+    }
+
+    if (card.platform === 'X') {
+      setBusyKey(`platform:${card.platform}`);
+      setMessage('');
+      try {
+        const result = await connectXPlatform({ account_role: 'owned' });
+        if (result?.auth_url) {
+          setMessage('正在进入 X 授权页。授权成功返回后，账号会自动出现在账号矩阵。');
+          window.location.assign(result.auth_url);
+        } else {
+          setMessage('X OAuth 初始化完成，但没有返回授权地址。请检查 Edge Function 配置。');
+          await refresh();
+        }
+      } catch (error) {
+        setMessage(error.message);
+      } finally {
+        setBusyKey(null);
       }
-      setMessage(`${card.title} 已加入连接中心，但真实 ${card.authType} 流程还需要迁移旧系统实现和配置平台密钥。`);
       return;
     }
 
     setBusyKey(`platform:${card.platform}`);
     setMessage('');
     try {
-      const result = await connectXPlatform({ account_role: 'owned' });
-      if (result?.auth_url) {
-        setMessage('正在进入 X 授权页。授权成功返回后，账号会自动出现在账号矩阵。');
-        window.location.assign(result.auth_url);
-      } else {
-        setMessage('X OAuth 初始化完成，但没有返回授权地址。请检查 Edge Function 配置。');
-        await refresh();
-      }
+      const result = await preparePlatformConnection(card.platform);
+      setSetupInfo({
+        platform: card.platform,
+        title: card.title,
+        ...result,
+        setup: result.setup || {
+          required_secrets: card.requiredSecrets,
+          missing_secrets: card.requiredSecrets,
+          callback_url: card.callbackUrl,
+          auth_type: card.authType,
+          multi_account: true,
+        },
+      });
+      const missing = result.setup?.missing_secrets || card.requiredSecrets || [];
+      setMessage(missing.length
+        ? `${card.title} 连接入口已完成，还需要在 Supabase Edge Function Secrets 配置：${missing.join(', ')}`
+        : `${card.title} 密钥已配置，下一步可以迁移真实 OAuth handler。`);
     } catch (error) {
-      setMessage(error.message);
+      setSetupInfo({
+        platform: card.platform,
+        title: card.title,
+        error: error.message,
+        setup: {
+          required_secrets: card.requiredSecrets,
+          missing_secrets: card.requiredSecrets,
+          callback_url: card.callbackUrl,
+          auth_type: card.authType,
+          multi_account: true,
+        },
+      });
+      setMessage(`${card.title} 配置入口已准备，但 Edge Function 返回：${error.message}`);
     } finally {
       setBusyKey(null);
     }
@@ -345,7 +340,7 @@ export function AccountsPage({ userId, onNavigate }) {
       );
     }
 
-    if (card.settingsOnly) {
+    if (card.connectMode === 'settings') {
       return (
         <button type="button" className="ghost-button" onClick={() => handleConnectPlatform(card)}>
           {hasConnection ? '添加另一个 Telegram' : '到设置页连接'}
@@ -354,8 +349,13 @@ export function AccountsPage({ userId, onNavigate }) {
     }
 
     return (
-      <button type="button" className="ghost-button" disabled={!card.implemented} onClick={() => handleConnectPlatform(card)}>
-        {card.implemented ? `连接 ${card.platform}` : '准备接入'}
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={busy || !isSupabaseConfigured || !userId}
+        onClick={() => handleConnectPlatform(card)}
+      >
+        查看接入配置
       </button>
     );
   }
@@ -380,6 +380,38 @@ export function AccountsPage({ userId, onNavigate }) {
     );
   }
 
+  function renderSetupInfo() {
+    if (!setupInfo) return null;
+    const setup = setupInfo.setup || {};
+    return (
+      <article className="setup-panel">
+        <div>
+          <p className="eyebrow">Connection Setup</p>
+          <h3>{setupInfo.title || setupInfo.platform} 接入配置</h3>
+          <p>这不是假连接。系统端入口已准备好；真实授权前，需要先把平台开发者后台的密钥放到 Supabase Edge Function Secrets。</p>
+        </div>
+        <div className="setup-grid">
+          <div><span>授权方式</span><strong>{setup.auth_type || 'oauth2'}</strong></div>
+          <div><span>多账号</span><strong>{setup.multi_account ? '支持，每个账号一条连接' : '未开启'}</strong></div>
+          <div><span>回调地址</span><code>{setup.callback_url || setup.redirect_uri || '—'}</code></div>
+          <div><span>Token存储</span><strong>{setup.token_storage || 'platform_credentials_only'}</strong></div>
+        </div>
+        <div className="secret-list">
+          <strong>需要配置的 Secrets</strong>
+          {(setup.required_secrets || []).map((secret) => {
+            const missing = (setup.missing_secrets || []).includes(secret);
+            return <span className={missing ? 'tag warning' : 'tag success'} key={secret}>{secret}{missing ? ' · 缺少' : ' · 已配置'}</span>;
+          })}
+        </div>
+        {setup.notes?.length > 0 && (
+          <ul className="setup-notes">
+            {setup.notes.map((note) => <li key={note}>{note}</li>)}
+          </ul>
+        )}
+      </article>
+    );
+  }
+
   function renderPlatformConnectionCenter() {
     return (
       <section className="connection-center">
@@ -387,7 +419,7 @@ export function AccountsPage({ userId, onNavigate }) {
           <div>
             <p className="eyebrow">Platform Connection Center</p>
             <h2>连接自己的运营账号</h2>
-            <p>每个平台都可以保存多个连接账号。连接成功后系统会自动创建或绑定到 social_accounts，Token 只在后端安全层处理。</p>
+            <p>每个平台都支持保存多个连接账号。连接成功后系统会自动创建或绑定到 social_accounts；Token 只在后端安全层处理。</p>
           </div>
         </div>
 
@@ -535,7 +567,8 @@ export function AccountsPage({ userId, onNavigate }) {
         <AccountForm initialValue={editing} onSubmit={handleSave} onCancel={() => { setIsCreating(false); setEditing(null); }} />
       )}
 
-      {message && <div className={message.toLowerCase().includes('missing') || message.toLowerCase().includes('error') || message.includes('失败') ? 'notice error' : 'notice'}>{message}</div>}
+      {message && <div className={isErrorMessage(message) ? 'notice error' : 'notice'}>{message}</div>}
+      {renderSetupInfo()}
 
       {strategyResult && (
         <article className="analysis-card">

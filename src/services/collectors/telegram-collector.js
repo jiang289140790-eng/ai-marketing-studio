@@ -1,3 +1,5 @@
+import { fetchWithSafeHeaders } from '../supabase-client';
+
 const TELEGRAM_PUBLIC_BASE = 'https://t.me/s';
 
 export function connect(source) {
@@ -16,7 +18,7 @@ export function connect(source) {
 export async function fetchMessages(source, options = {}) {
   const connection = connect(source);
   const limit = Number(options.limit || 20);
-  const response = await globalThis.fetch(connection.url, {
+  const response = await fetchWithSafeHeaders(connection.url, {
     headers: {
       accept: 'text/html,application/xhtml+xml',
     },

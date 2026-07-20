@@ -1,7 +1,9 @@
 import { createAuditLog } from './stability-service';
-import { requireSupabase } from './supabase-client';
+import { fetchWithSafeHeaders, requireSupabase, sanitizeHttpHeaderValue } from './supabase-client';
 
 const BUCKET = 'marketing-assets';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export async function listAssets(userId) {
   const client = requireSupabase();
@@ -67,23 +69,16 @@ export async function deleteAsset(id) {
 
 export async function uploadAsset(userId, file, metadata = {}) {
   const client = requireSupabase();
-  const extension = file.name.split('.').pop();
+  const extension = sanitizeExtension(file.name.split('.').pop());
   const path = `${userId}/${crypto.randomUUID()}.${extension}`;
+  const publicUrl = await uploadFileToStorage(client, path, file);
 
-  const { error: uploadError } = await client.storage.from(BUCKET).upload(path, file, {
-    cacheControl: '3600',
-    upsert: false,
-  });
-
-  if (uploadError) throw uploadError;
-
-  const { data: publicUrlData } = client.storage.from(BUCKET).getPublicUrl(path);
   const asset = {
     user_id: userId,
     name: metadata.name || file.name,
     type: metadata.type || (file.type.startsWith('video/') ? 'video' : 'image'),
-    url: publicUrlData.publicUrl,
-    thumbnail: metadata.thumbnail || publicUrlData.publicUrl,
+    url: publicUrl,
+    thumbnail: metadata.thumbnail || publicUrl,
     prompt: metadata.prompt || null,
     model: metadata.model || null,
     workflow: metadata.workflow || null,
@@ -94,6 +89,48 @@ export async function uploadAsset(userId, file, metadata = {}) {
   const { data, error } = await client.from('assets').insert(asset).select().single();
   if (error) throw error;
   return data;
+}
+
+async function uploadFileToStorage(client, path, file) {
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+  if (sessionError) throw sessionError;
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error('请先登录后再上传素材。');
+
+  const encodedPath = path.split('/').map((part) => encodeURIComponent(part)).join('/');
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${BUCKET}/${encodedPath}`;
+  const response = await fetchWithSafeHeaders(uploadUrl, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': sanitizeHttpHeaderValue(file.type || 'application/octet-stream') || 'application/octet-stream',
+      'cache-control': '3600',
+      'x-upsert': 'false',
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    const message = await readStorageError(response);
+    throw new Error(message || `素材上传失败：HTTP ${response.status}`);
+  }
+
+  return `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${encodedPath}`;
+}
+
+async function readStorageError(response) {
+  try {
+    const payload = await response.json();
+    return payload.error || payload.message || payload.msg || '';
+  } catch {
+    return response.statusText || '';
+  }
+}
+
+function sanitizeExtension(extension) {
+  const safe = String(extension || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return safe || 'bin';
 }
 
 export async function savePromptAsset(userId, prompt) {

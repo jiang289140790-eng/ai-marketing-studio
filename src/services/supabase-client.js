@@ -1,4 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
+import {
+  buildSafeHeadersObject,
+  installSafeHeadersPatch,
+  sanitizeHttpHeaderName,
+  sanitizeHttpHeaderValue,
+} from '../utils/safe-headers';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -6,47 +12,43 @@ const authStorageKey = 'ai-marketing-studio-auth-session';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
-function toAsciiHeaderValue(value) {
-  return String(value ?? '').replace(/[^\x20-\x7E]/g, '');
-}
+installSafeHeadersPatch();
 
-function toAsciiHeaderName(name) {
-  return String(name ?? '').replace(/[^!#$%&'*+\-.^_`|~0-9A-Za-z]/g, '');
-}
+export { buildSafeHeadersObject, sanitizeHttpHeaderName, sanitizeHttpHeaderValue };
 
-function createSafeHeaders(headers) {
-  const safeHeaders = new globalThis.Headers();
+function mergeSafeHeaders(...headerSources) {
+  const merged = {};
 
-  if (!headers) return safeHeaders;
-
-  const setSafeHeader = (key, value) => {
-    const safeKey = toAsciiHeaderName(key);
-    if (!safeKey) return;
-    safeHeaders.set(safeKey, toAsciiHeaderValue(value));
-  };
-
-  if (headers instanceof globalThis.Headers) {
-    headers.forEach((value, key) => setSafeHeader(key, value));
-    return safeHeaders;
+  for (const source of headerSources) {
+    Object.assign(merged, buildSafeHeadersObject(source));
   }
 
-  if (Array.isArray(headers)) {
-    headers.forEach(([key, value]) => setSafeHeader(key, value));
-    return safeHeaders;
-  }
-
-  Object.entries(headers).forEach(([key, value]) => setSafeHeader(key, value));
-
-  return safeHeaders;
+  return merged;
 }
 
-async function safeFetch(input, init = {}) {
+export async function fetchWithSafeHeaders(input, init = {}) {
+  const request = input instanceof globalThis.Request ? input : null;
+  const requestInit = request
+    ? {
+        method: request.method,
+        mode: request.mode,
+        credentials: request.credentials,
+        cache: request.cache,
+        redirect: request.redirect,
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
+        integrity: request.integrity,
+        keepalive: request.keepalive,
+        signal: request.signal,
+      }
+    : {};
   const safeInit = {
+    ...requestInit,
     ...init,
-    headers: createSafeHeaders(init.headers),
+    headers: mergeSafeHeaders(request?.headers, init.headers),
   };
 
-  return globalThis.fetch(input, safeInit);
+  return globalThis.fetch(request?.url || input, safeInit);
 }
 
 export const supabase = isSupabaseConfigured
@@ -59,7 +61,7 @@ export const supabase = isSupabaseConfigured
         storageKey: authStorageKey,
       },
       global: {
-        fetch: safeFetch,
+        fetch: fetchWithSafeHeaders,
         headers: {
           'X-Client-Info': 'ai-marketing-studio-web',
         },

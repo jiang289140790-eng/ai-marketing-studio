@@ -1,24 +1,20 @@
 import { useState } from 'react';
-import { createGitHubSignInUrl, signOut } from '../services/auth-service';
+import { useAuth } from '../contexts/auth-context';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
-export function Header({ session, profile, title }) {
-  const user = session?.user;
+export function Header({ title }) {
+  const { authUrl, loading, loginWithGitHub, logout, profile, user } = useAuth();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState('');
-  const [authUrl, setAuthUrl] = useState('');
   const displayName = profile?.username || user?.user_metadata?.user_name || user?.user_metadata?.preferred_username || user?.email;
   const avatarUrl = profile?.avatar_url || user?.user_metadata?.avatar_url;
 
   async function handleGitHubSignIn() {
     setSignInError('');
-    setAuthUrl('');
     setIsSigningIn(true);
 
     try {
-      const nextUrl = await createGitHubSignInUrl();
-      setAuthUrl(nextUrl);
-      window.location.assign(nextUrl);
+      await loginWithGitHub();
 
       window.setTimeout(() => {
         setIsSigningIn(false);
@@ -43,19 +39,19 @@ export function Header({ session, profile, title }) {
           <>
             <span className="status-badge connected">已登录</span>
             <div className="user-chip">
-              {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{user.email?.[0]?.toUpperCase()}</span>}
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{user.email?.[0]?.toUpperCase() || 'U'}</span>}
               <div>
-                <strong>{displayName}</strong>
+                <strong>{displayName || 'GitHub 用户'}</strong>
                 <small>{user.email}</small>
               </div>
             </div>
-            <button className="ghost-button" type="button" onClick={signOut}>
+            <button className="ghost-button" type="button" onClick={logout}>
               退出
             </button>
           </>
         ) : (
           <div className="login-stack">
-            <button className="primary-button" type="button" onClick={handleGitHubSignIn} disabled={!isSupabaseConfigured || isSigningIn}>
+            <button className="primary-button" type="button" onClick={handleGitHubSignIn} disabled={!isSupabaseConfigured || isSigningIn || loading}>
               {isSigningIn ? '正在跳转…' : 'GitHub 登录'}
             </button>
             {authUrl && (

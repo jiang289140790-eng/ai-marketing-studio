@@ -162,6 +162,24 @@ export function Dashboard({ userId, onNavigate }) {
     );
   }
 
+  if (!userId) {
+    return (
+      <section className="page-stack">
+        <div className="hero-panel">
+          <p className="eyebrow">Personal AI Ops Workspace</p>
+          <h2>请先登录你的个人运营工作台</h2>
+          <p>
+            登录后，Dashboard 会从 Supabase 读取你的账号矩阵、内容库、素材、Agent、发布任务、效果分析和成本数据。
+          </p>
+        </div>
+        <EmptyState
+          title="等待 GitHub 登录"
+          description="点击右上角 GitHub 登录。授权成功返回后，这里会显示你的真实运营数据。"
+        />
+      </section>
+    );
+  }
+
   const value = (number) => (loading ? '-' : number);
   const money = (number) => (loading ? '-' : Number(number || 0).toFixed(4));
 

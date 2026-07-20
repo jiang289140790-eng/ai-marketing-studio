@@ -1,7 +1,10 @@
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
+import { AuthProvider } from './contexts/AuthProvider.jsx';
 import './styles.css';
 
 createRoot(document.getElementById('root')).render(
-  <App />,
+  <AuthProvider>
+    <App />
+  </AuthProvider>,
 );

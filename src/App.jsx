@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
+import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
 import { AgentCenter } from './pages/AgentCenter';
 import { AIStudio } from './pages/AIStudio';
@@ -11,33 +12,31 @@ import { CharacterLibrary } from './pages/CharacterLibrary';
 import { CollectionCenter } from './pages/CollectionCenter';
 import { ContentIntelligence } from './pages/ContentIntelligence';
 import { ContentLibrary } from './pages/ContentLibrary';
-import { Dashboard } from './pages/Dashboard';
 import { DailyReport } from './pages/DailyReport';
-import { PromptLibrary } from './pages/PromptLibrary';
+import { Dashboard } from './pages/Dashboard';
 import { PerformanceCenter } from './pages/PerformanceCenter';
+import { PromptLibrary } from './pages/PromptLibrary';
 import { PublishCenter } from './pages/PublishCenter';
 import { PublishPlan } from './pages/PublishPlan';
 import { SettingsPage } from './pages/SettingsPage';
 import { SystemHealth } from './pages/SystemHealth';
 import { WorkflowRuns } from './pages/WorkflowRuns';
-import { initializeAuthSession, onAuthStateChange, upsertProfile } from './services/auth-service';
-import { isSupabaseConfigured } from './services/supabase-client';
 
 const pageTitles = {
   dashboard: 'Dashboard',
   accounts: '账号管理',
   content: '内容库',
-  'ai-studio': 'AI生成',
+  'ai-studio': 'AI 生成',
   assets: '素材库',
   characters: '角色库',
-  prompts: 'Prompt库',
+  prompts: 'Prompt 库',
   workflows: 'Workflow Runs',
   agents: 'Agent Center',
   intelligence: '内容情报',
   collection: '采集中心',
   automation: '自动化中心',
   publish: '发布中心',
-  performance: '表现分析',
+  performance: '效果分析',
   health: '系统健康',
   report: '运营日报',
   planner: '发布计划',
@@ -47,50 +46,7 @@ const pageTitles = {
 
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard');
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [authError, setAuthError] = useState('');
-  const [authNotice, setAuthNotice] = useState('');
-
-  async function syncProfile(user) {
-    if (!user) {
-      setProfile(null);
-      return;
-    }
-
-    try {
-      setProfile(await upsertProfile(user));
-    } catch (error) {
-      console.warn('Profile sync failed; continuing with auth session.', error);
-      setProfile(null);
-    }
-  }
-
-  useEffect(() => {
-    if (!isSupabaseConfigured) return undefined;
-
-    initializeAuthSession()
-      .then(async (currentSession) => {
-        setSession(currentSession);
-        await syncProfile(currentSession?.user);
-        if (currentSession) {
-          setAuthNotice('');
-        } else {
-          setAuthNotice('登录状态已重置，请重新点击 GitHub 登录。');
-        }
-      })
-      .catch((error) => setAuthError(`登录状态初始化失败：${error.message}`));
-
-    return onAuthStateChange(async (nextSession) => {
-      setSession(nextSession);
-      await syncProfile(nextSession?.user);
-      if (nextSession) {
-        setAuthNotice('');
-      }
-    });
-  }, []);
-
-  const userId = session?.user?.id;
+  const { error: authError, loading: authLoading, session, userId } = useAuth();
 
   const page = useMemo(() => {
     const props = { userId };
@@ -141,9 +97,9 @@ export default function App() {
     <div className="app-shell">
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
       <div className="main-shell">
-        <Header session={session} profile={profile} title={pageTitles[activePage]} />
+        <Header title={pageTitles[activePage]} />
+        {authLoading && <div className="notice">正在恢复登录状态…</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
-        {authNotice && !session && <div className="notice">{authNotice}</div>}
         {page}
       </div>
     </div>

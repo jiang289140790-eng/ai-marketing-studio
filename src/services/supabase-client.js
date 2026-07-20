@@ -79,7 +79,7 @@ export function requireSupabase() {
 
 function cleanEnvValue(value) {
   return String(value ?? '')
-    .replace(/^\uFEFF/, '')
-    .replace(/[\u200B-\u200D\u2060]/g, '')
+    .replace(/^(?:\u00EF\u00BB\u00BF|\u9518\u7E23|\u9518\u00BF)+/, '')
+    .replace(/[\uFEFF\u200B-\u200D\u2060]/g, '')
     .trim();
 }

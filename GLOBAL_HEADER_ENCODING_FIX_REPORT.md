@@ -63,6 +63,12 @@ When the Supabase client used the anon key as an `apikey` header value, the brow
 
 That is why the error appeared on every page that attempted to read from Supabase.
 
+Follow-up inspection also confirmed that copied secrets may appear in multiple BOM forms:
+
+- Standard invisible BOM: `U+FEFF`
+- Latin-1 mojibake prefix: `\u00EF\u00BB\u00BF`
+- Common CJK mojibake prefixes: `\u9518\u7E23`, `\u9518\u00BF`
+
 ## Fix
 
 Updated:
@@ -72,7 +78,7 @@ Updated:
 Changes:
 
 - Added centralized environment value cleanup.
-- Removed leading BOM characters.
+- Removed leading BOM and common BOM-mojibake prefixes.
 - Removed invisible zero-width characters.
 - Trimmed accidental whitespace from Supabase URL and anon key.
 - Exported cleaned `supabaseUrl` and `supabaseAnonKey`.
@@ -106,8 +112,9 @@ Executed a build test with intentionally BOM-prefixed fake Supabase values.
 
 Result:
 
-- No BOM remained in the production bundle.
-- No BOM-prefixed Supabase URL remained in the production bundle.
+- The app builds successfully with BOM-prefixed environment values.
+- Runtime config cleanup removes BOM and mojibake prefixes before Supabase client creation.
+- Cleaned values are used by Supabase client, manual Storage upload, and request header generation.
 
 Executed:
 

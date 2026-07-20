@@ -212,7 +212,7 @@ export function SystemHealth({ userId }) {
               </label>
               <label>
                 来源
-                <input value={costForm.source} onChange={(event) => setCostForm({ ...costForm, source: event.target.value })} placeholder="例如 Telegram Bot / RunningHub / Qwen" />
+                <input value={costForm.source} onChange={(event) => setCostForm({ ...costForm, source: event.target.value })} placeholder="例如 Telegram Bot / ComfyUI / Qwen" />
               </label>
               <label>
                 成本

@@ -1,0 +1,560 @@
+{
+  "scanned_directories": [
+    "workflows-production"
+  ],
+  "scanned_files": 2,
+  "parsed_workflows": 2,
+  "recommended_workflows": 2,
+  "categories": {
+    "character_generation": 2
+  },
+  "workflows": [
+    {
+      "source_file": "workflows-production/character/flux-character-portrait-v1.json",
+      "name": "Flux Character Portrait",
+      "version": "1.0.0",
+      "description": "Imported from flux-character-portrait-v1.json by ComfyUI Workflow Registry.",
+      "category": "character_generation",
+      "mode": "image",
+      "model": "Flux",
+      "checkpoint": "flux1-dev-fp8.safetensors",
+      "loras": [
+        "character-consistency-lora.safetensors"
+      ],
+      "controlnets": [],
+      "workflow_json": {
+        "4": {
+          "inputs": {
+            "ckpt_name": "flux1-dev-fp8.safetensors"
+          },
+          "class_type": "CheckpointLoaderSimple",
+          "_meta": {
+            "title": "Flux Checkpoint"
+          }
+        },
+        "5": {
+          "inputs": {
+            "lora_name": "character-consistency-lora.safetensors",
+            "strength_model": 0.75,
+            "strength_clip": 0.75,
+            "model": [
+              "4",
+              0
+            ],
+            "clip": [
+              "4",
+              1
+            ]
+          },
+          "class_type": "LoraLoader",
+          "_meta": {
+            "title": "Character LoRA"
+          }
+        },
+        "7": {
+          "inputs": {
+            "width": 1024,
+            "height": 1024,
+            "batch_size": 1
+          },
+          "class_type": "EmptyLatentImage",
+          "_meta": {
+            "title": "Generation Size"
+          }
+        },
+        "8": {
+          "inputs": {
+            "text": "high quality portrait photo of a consistent AI character, natural skin, expressive eyes, cinematic light, editorial photography, detailed background",
+            "clip": [
+              "5",
+              1
+            ]
+          },
+          "class_type": "CLIPTextEncode",
+          "_meta": {
+            "title": "Positive Prompt"
+          }
+        },
+        "9": {
+          "inputs": {
+            "text": "low quality, blurry, distorted face, bad anatomy, deformed hands, extra fingers, watermark, text, logo",
+            "clip": [
+              "5",
+              1
+            ]
+          },
+          "class_type": "CLIPTextEncode",
+          "_meta": {
+            "title": "Negative Prompt"
+          }
+        },
+        "10": {
+          "inputs": {
+            "seed": 10241024,
+            "steps": 28,
+            "cfg": 3.5,
+            "sampler_name": "dpmpp_2m",
+            "scheduler": "sgm_uniform",
+            "denoise": 1,
+            "model": [
+              "5",
+              0
+            ],
+            "positive": [
+              "8",
+              0
+            ],
+            "negative": [
+              "9",
+              0
+            ],
+            "latent_image": [
+              "7",
+              0
+            ]
+          },
+          "class_type": "KSampler",
+          "_meta": {
+            "title": "Sampler"
+          }
+        },
+        "11": {
+          "inputs": {
+            "samples": [
+              "10",
+              0
+            ],
+            "vae": [
+              "4",
+              2
+            ]
+          },
+          "class_type": "VAEDecode",
+          "_meta": {
+            "title": "VAE Decode"
+          }
+        },
+        "12": {
+          "inputs": {
+            "filename_prefix": "ai-marketing-studio/flux-character-portrait",
+            "images": [
+              "11",
+              0
+            ]
+          },
+          "class_type": "SaveImage",
+          "_meta": {
+            "title": "Save Image"
+          }
+        }
+      },
+      "input_schema": {
+        "category": "character_generation",
+        "schema_version": "1.0",
+        "properties": {
+          "positive_prompt": {
+            "type": "string",
+            "required": true
+          },
+          "negative_prompt": {
+            "type": "string",
+            "required": true
+          },
+          "seed": {
+            "type": "number",
+            "required": true
+          },
+          "width": {
+            "type": "number",
+            "required": true
+          },
+          "height": {
+            "type": "number",
+            "required": true
+          },
+          "steps": {
+            "type": "number",
+            "required": false
+          },
+          "cfg": {
+            "type": "number",
+            "required": false
+          },
+          "lora": {
+            "type": "string",
+            "required": false,
+            "options": [
+              "character-consistency-lora.safetensors"
+            ]
+          }
+        }
+      },
+      "output_schema": {
+        "type": "image"
+      },
+      "node_mappings": {
+        "positive_prompt": {
+          "node_id": "8",
+          "input": "text"
+        },
+        "negative_prompt": {
+          "node_id": "9",
+          "input": "text"
+        },
+        "seed": {
+          "node_id": "10",
+          "input": "seed"
+        },
+        "steps": {
+          "node_id": "10",
+          "input": "steps"
+        },
+        "cfg": {
+          "node_id": "10",
+          "input": "cfg"
+        },
+        "width": {
+          "node_id": "7",
+          "input": "width"
+        },
+        "height": {
+          "node_id": "7",
+          "input": "height"
+        },
+        "checkpoint": {
+          "node_id": "4",
+          "input": "ckpt_name"
+        },
+        "lora": {
+          "node_id": "5",
+          "input": "lora_name"
+        }
+      },
+      "detected_nodes": {
+        "total": 8,
+        "class_counts": {
+          "CheckpointLoaderSimple": 1,
+          "LoraLoader": 1,
+          "EmptyLatentImage": 1,
+          "CLIPTextEncode": 2,
+          "KSampler": 1,
+          "VAEDecode": 1,
+          "SaveImage": 1
+        },
+        "key_nodes": [
+          {
+            "id": "4",
+            "class_type": "CheckpointLoaderSimple",
+            "title": "Flux Checkpoint"
+          },
+          {
+            "id": "5",
+            "class_type": "LoraLoader",
+            "title": "Character LoRA"
+          },
+          {
+            "id": "8",
+            "class_type": "CLIPTextEncode",
+            "title": "Positive Prompt"
+          },
+          {
+            "id": "9",
+            "class_type": "CLIPTextEncode",
+            "title": "Negative Prompt"
+          },
+          {
+            "id": "10",
+            "class_type": "KSampler",
+            "title": "Sampler"
+          },
+          {
+            "id": "11",
+            "class_type": "VAEDecode",
+            "title": "VAE Decode"
+          },
+          {
+            "id": "12",
+            "class_type": "SaveImage",
+            "title": "Save Image"
+          }
+        ]
+      },
+      "detected_models": {
+        "model": "Flux",
+        "checkpoint": "flux1-dev-fp8.safetensors",
+        "checkpoints": [
+          "flux1-dev-fp8.safetensors"
+        ],
+        "unets": [],
+        "loras": [
+          "character-consistency-lora.safetensors"
+        ],
+        "controlnets": []
+      },
+      "tags": [
+        "flux",
+        "character",
+        "portrait",
+        "lora",
+        "character_generation"
+      ],
+      "priority": 10,
+      "status": "active",
+      "recommended": true
+    },
+    {
+      "source_file": "workflows-production/image/basic-image-smoke-test.json",
+      "name": "Basic Image Smoke Test",
+      "version": "1.0.0",
+      "description": "Imported from basic-image-smoke-test.json by ComfyUI Workflow Registry.",
+      "category": "character_generation",
+      "mode": "image",
+      "model": "SDXL",
+      "checkpoint": "sd_xl_base_1.0.safetensors",
+      "loras": [],
+      "controlnets": [],
+      "workflow_json": {
+        "3": {
+          "inputs": {
+            "seed": 123456789,
+            "steps": 24,
+            "cfg": 7,
+            "sampler_name": "dpmpp_2m",
+            "scheduler": "karras",
+            "denoise": 1,
+            "model": [
+              "4",
+              0
+            ],
+            "positive": [
+              "6",
+              0
+            ],
+            "negative": [
+              "7",
+              0
+            ],
+            "latent_image": [
+              "5",
+              0
+            ]
+          },
+          "class_type": "KSampler",
+          "_meta": {
+            "title": "KSampler"
+          }
+        },
+        "4": {
+          "inputs": {
+            "ckpt_name": "sd_xl_base_1.0.safetensors"
+          },
+          "class_type": "CheckpointLoaderSimple",
+          "_meta": {
+            "title": "Load Checkpoint"
+          }
+        },
+        "5": {
+          "inputs": {
+            "width": 1024,
+            "height": 1024,
+            "batch_size": 1
+          },
+          "class_type": "EmptyLatentImage",
+          "_meta": {
+            "title": "Empty Latent Image"
+          }
+        },
+        "6": {
+          "inputs": {
+            "text": "portrait photo of an AI creator character, cinematic lighting, highly detailed",
+            "clip": [
+              "4",
+              1
+            ]
+          },
+          "class_type": "CLIPTextEncode",
+          "_meta": {
+            "title": "Positive Prompt"
+          }
+        },
+        "7": {
+          "inputs": {
+            "text": "low quality, blurry, distorted, extra fingers, bad anatomy",
+            "clip": [
+              "4",
+              1
+            ]
+          },
+          "class_type": "CLIPTextEncode",
+          "_meta": {
+            "title": "Negative Prompt"
+          }
+        },
+        "8": {
+          "inputs": {
+            "samples": [
+              "3",
+              0
+            ],
+            "vae": [
+              "4",
+              2
+            ]
+          },
+          "class_type": "VAEDecode",
+          "_meta": {
+            "title": "VAE Decode"
+          }
+        },
+        "9": {
+          "inputs": {
+            "filename_prefix": "ai-marketing-studio/basic-image-smoke-test",
+            "images": [
+              "8",
+              0
+            ]
+          },
+          "class_type": "SaveImage",
+          "_meta": {
+            "title": "Save Image"
+          }
+        }
+      },
+      "input_schema": {
+        "category": "character_generation",
+        "schema_version": "1.0",
+        "properties": {
+          "positive_prompt": {
+            "type": "string",
+            "required": true
+          },
+          "negative_prompt": {
+            "type": "string",
+            "required": true
+          },
+          "seed": {
+            "type": "number",
+            "required": true
+          },
+          "width": {
+            "type": "number",
+            "required": true
+          },
+          "height": {
+            "type": "number",
+            "required": true
+          },
+          "steps": {
+            "type": "number",
+            "required": false
+          },
+          "cfg": {
+            "type": "number",
+            "required": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "image"
+      },
+      "node_mappings": {
+        "positive_prompt": {
+          "node_id": "6",
+          "input": "text"
+        },
+        "negative_prompt": {
+          "node_id": "7",
+          "input": "text"
+        },
+        "seed": {
+          "node_id": "3",
+          "input": "seed"
+        },
+        "steps": {
+          "node_id": "3",
+          "input": "steps"
+        },
+        "cfg": {
+          "node_id": "3",
+          "input": "cfg"
+        },
+        "width": {
+          "node_id": "5",
+          "input": "width"
+        },
+        "height": {
+          "node_id": "5",
+          "input": "height"
+        },
+        "checkpoint": {
+          "node_id": "4",
+          "input": "ckpt_name"
+        }
+      },
+      "detected_nodes": {
+        "total": 7,
+        "class_counts": {
+          "KSampler": 1,
+          "CheckpointLoaderSimple": 1,
+          "EmptyLatentImage": 1,
+          "CLIPTextEncode": 2,
+          "VAEDecode": 1,
+          "SaveImage": 1
+        },
+        "key_nodes": [
+          {
+            "id": "3",
+            "class_type": "KSampler",
+            "title": "KSampler"
+          },
+          {
+            "id": "4",
+            "class_type": "CheckpointLoaderSimple",
+            "title": "Load Checkpoint"
+          },
+          {
+            "id": "6",
+            "class_type": "CLIPTextEncode",
+            "title": "Positive Prompt"
+          },
+          {
+            "id": "7",
+            "class_type": "CLIPTextEncode",
+            "title": "Negative Prompt"
+          },
+          {
+            "id": "8",
+            "class_type": "VAEDecode",
+            "title": "VAE Decode"
+          },
+          {
+            "id": "9",
+            "class_type": "SaveImage",
+            "title": "Save Image"
+          }
+        ]
+      },
+      "detected_models": {
+        "model": "SDXL",
+        "checkpoint": "sd_xl_base_1.0.safetensors",
+        "checkpoints": [
+          "sd_xl_base_1.0.safetensors"
+        ],
+        "unets": [],
+        "loras": [],
+        "controlnets": []
+      },
+      "tags": [
+        "image",
+        "smoke-test",
+        "sdxl",
+        "character_generation",
+        "portrait"
+      ],
+      "priority": 20,
+      "status": "active",
+      "recommended": true
+    }
+  ],
+  "errors": []
+}

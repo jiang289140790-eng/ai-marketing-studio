@@ -2,14 +2,14 @@ import { fetchMessages, normalizeContent } from './collectors/telegram-collector
 import { canRetry, createNotification, nextRetryCount } from './stability-service';
 import { requireSupabase } from './supabase-client';
 
-const taskSelect = '*, content_sources(id,name,platform,source_type,account,category,status,url,channel,username,last_message_id,sync_time)';
-const runSelect = '*, collection_tasks(frequency,content_sources(name,platform,source_type,account,channel,username))';
+const taskSelect = '*, social_accounts(id,account_name,username,platform,account_role), content_sources(id,name,platform,source_type,account,category,status,url,channel,username,last_message_id,sync_time,social_account_id,social_accounts(id,account_name,username,platform,account_role))';
+const runSelect = '*, collection_tasks(frequency,content_sources(name,platform,source_type,account,channel,username,social_account_id,social_accounts(account_name,username,platform)))';
 
 export async function listSources(userId, filters = {}) {
   const client = requireSupabase();
   let query = client
     .from('content_sources')
-    .select('*')
+    .select('*, social_accounts(id,account_name,username,platform,account_role)')
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
@@ -29,6 +29,7 @@ export async function createSource(userId, payload) {
     .from('content_sources')
     .insert({
       user_id: userId,
+      social_account_id: payload.social_account_id || null,
       platform: payload.platform,
       source_type: payload.source_type,
       name: payload.name,
@@ -82,11 +83,19 @@ export async function listCollectionTasks(userId, filters = {}) {
 export async function createTask(userId, payload) {
   const client = requireSupabase();
   const nextRun = payload.next_run || calculateNextRun(payload.frequency);
+  const { data: source, error: sourceError } = await client
+    .from('content_sources')
+    .select('social_account_id')
+    .eq('user_id', userId)
+    .eq('id', payload.source_id)
+    .single();
+  if (sourceError) throw sourceError;
   const { data, error } = await client
     .from('collection_tasks')
     .insert({
       user_id: userId,
       source_id: payload.source_id,
+      account_id: source?.social_account_id || null,
       frequency: payload.frequency || 'manual',
       status: payload.status || 'active',
       next_run: nextRun,
@@ -278,7 +287,7 @@ async function collectTelegram(userId, task) {
   const source = task.content_sources;
   const messages = await fetchMessages(source, { limit: 20 });
   const normalizedItems = normalizeContent(messages, source);
-  const inserted = await saveTelegramViralContents(userId, normalizedItems);
+  const inserted = await saveTelegramViralContents(userId, normalizedItems, source);
   const lastMessageId = findLastMessageId(normalizedItems) || source.last_message_id || null;
 
   return {
@@ -289,7 +298,7 @@ async function collectTelegram(userId, task) {
   };
 }
 
-async function saveTelegramViralContents(userId, items) {
+async function saveTelegramViralContents(userId, items, source) {
   if (items.length === 0) return [];
   const client = requireSupabase();
   const urls = items.map((item) => item.url).filter(Boolean);
@@ -307,6 +316,7 @@ async function saveTelegramViralContents(userId, items) {
     .map((item) => ({
       user_id: userId,
       account_id: null,
+      social_account_id: source?.social_account_id || null,
       platform: 'Telegram',
       url: item.url,
       title: item.title,

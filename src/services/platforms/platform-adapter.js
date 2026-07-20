@@ -7,6 +7,8 @@ import { youtubeAdapter } from './youtube-adapter';
 export const platformAdapterMethods = [
   'connect',
   'disconnect',
+  'reconnect',
+  'status',
   'getAccount',
   'fetchContent',
   'publish',

@@ -199,7 +199,7 @@ export function WorkflowRuns({ userId }) {
             <input
               value={form.tool_id}
               onChange={(event) => updateForm('tool_id', event.target.value)}
-              placeholder="n8n / comfyui / runninghub / manual"
+              placeholder="comfyui / n8n / manual"
             />
           </label>
           <label>

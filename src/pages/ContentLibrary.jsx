@@ -7,6 +7,7 @@ import { accountCategories, contentStatuses, contentTypes, platforms } from '../
 import { listAssets } from '../services/asset-service';
 import { listCharacters } from '../services/character-service';
 import { createContentItem, deleteContentItem, listContent, updateContentItem } from '../services/content-service';
+import { generateImageAssetForContent } from '../services/media-gateway-service';
 import { listPrompts } from '../services/prompt-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate, statusLabel } from '../utils/formatters';
@@ -20,6 +21,7 @@ export function ContentLibrary({ userId }) {
   const [selected, setSelected] = useState(null);
   const [editing, setEditing] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [generatingAssetId, setGeneratingAssetId] = useState('');
   const [message, setMessage] = useState('');
 
   const refresh = useCallback(async () => {
@@ -80,6 +82,27 @@ export function ContentLibrary({ userId }) {
       await refresh();
     } catch (error) {
       setMessage(error.message);
+    }
+  }
+
+  async function handleGenerateAsset(item) {
+    setGeneratingAssetId(item.id);
+    setMessage('');
+    try {
+      const result = await generateImageAssetForContent(userId, item);
+      setMessage(`素材生成完成：已保存到素材库。Asset ID: ${result.asset_id || '—'}`);
+      if (selected?.id === item.id) {
+        setSelected({
+          ...selected,
+          asset_id: result.asset_id || selected.asset_id,
+          media_url: result.url || selected.media_url,
+        });
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setGeneratingAssetId('');
     }
   }
 
@@ -178,6 +201,9 @@ export function ContentLibrary({ userId }) {
                 <small>{formatDate(item.created_at)}</small>
                 <div className="table-actions">
                   <button type="button" onClick={() => setEditing(item)}>编辑</button>
+                  <button type="button" onClick={() => handleGenerateAsset(item)} disabled={generatingAssetId === item.id}>
+                    {generatingAssetId === item.id ? '生成中...' : '生成素材'}
+                  </button>
                   <button type="button" onClick={() => handleDelete(item)}>删除</button>
                 </div>
                 <div className="status-actions" aria-label="内容状态管理">

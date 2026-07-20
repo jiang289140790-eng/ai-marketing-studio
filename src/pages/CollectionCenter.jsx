@@ -3,6 +3,7 @@ import { EmptyState } from '../components/EmptyState';
 import { StatusBadge } from '../components/StatusBadge';
 import { StatCard } from '../components/StatCard';
 import { collectionFrequencies, collectorPlatforms, sourceTypes } from '../data/navigation';
+import { listSocialAccounts } from '../services/account-service';
 import {
   createSource,
   createTask,
@@ -20,6 +21,7 @@ import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate, statusLabel } from '../utils/formatters';
 
 const defaultSource = {
+  social_account_id: '',
   platform: 'Telegram',
   source_type: 'telegram',
   name: '',
@@ -39,6 +41,7 @@ const defaultTask = {
 };
 
 export function CollectionCenter({ userId }) {
+  const [accounts, setAccounts] = useState([]);
   const [sources, setSources] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [runs, setRuns] = useState([]);
@@ -52,11 +55,13 @@ export function CollectionCenter({ userId }) {
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
-    const [nextSources, nextTasks, nextRuns] = await Promise.all([
+    const [nextAccounts, nextSources, nextTasks, nextRuns] = await Promise.all([
+      listSocialAccounts(userId),
       listSources(userId, filters),
       listCollectionTasks(userId, taskFilters),
       listCollectionRuns(userId),
     ]);
+    setAccounts(nextAccounts.filter((account) => ['competitor', 'inspiration'].includes(account.account_role || account.account_type || account.account_category)));
     setSources(nextSources);
     setTasks(nextTasks);
     setRuns(nextRuns);
@@ -73,7 +78,25 @@ export function CollectionCenter({ userId }) {
   const stats = useMemo(() => getCollectorStats(sources, tasks, runs), [sources, tasks, runs]);
 
   function setSourceField(field, value) {
-    setSourceForm((current) => ({ ...current, [field]: value }));
+    setSourceForm((current) => {
+      const next = { ...current, [field]: value };
+      if (field === 'social_account_id') {
+        const account = accounts.find((item) => item.id === value);
+        if (account) {
+          next.platform = account.platform;
+          next.name = account.account_name || account.username || '';
+          next.account = account.username || account.account_name || '';
+          next.username = account.username || '';
+          next.url = account.account_url || '';
+          next.category = account.account_role || account.account_type || account.account_category || '';
+          if (account.platform === 'Telegram') {
+            next.source_type = 'telegram';
+            next.channel = normalizeTelegramChannel(account.account_url || account.username || account.account_name || '');
+          }
+        }
+      }
+      return next;
+    });
   }
 
   function setTaskField(field, value) {
@@ -85,7 +108,7 @@ export function CollectionCenter({ userId }) {
     try {
       await createSource(userId, sourceForm);
       setSourceForm(defaultSource);
-      setMessage('数据源已保存。');
+      setMessage('采集数据源已保存。它已绑定账号矩阵中的账号，不会创建新账号。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -124,26 +147,6 @@ export function CollectionCenter({ userId }) {
     }
   }
 
-  async function handleDeleteSource(source) {
-    try {
-      await deleteSource(source.id);
-      setMessage(`已删除数据源：${source.name}`);
-      await refresh();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
-  async function handleDeleteTask(task) {
-    try {
-      await deleteTask(task.id);
-      setMessage('已删除采集任务。');
-      await refresh();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-
   async function handleRunCollection(task) {
     try {
       const run = await runCollection(userId, task);
@@ -160,7 +163,7 @@ export function CollectionCenter({ userId }) {
         <div>
           <p className="eyebrow">Collection Center</p>
           <h2>Social Intelligence Collector</h2>
-          <p>管理外部内容来源、采集任务和运行历史。当前 Telegram 公开频道已接入真实读取，其他平台保留适配位置。</p>
+          <p>采集中心只管理采集配置和运行任务。账号必须来自账号矩阵 social_accounts，采集结果进入 viral_contents，再交给 Analysis Agent。</p>
         </div>
       </div>
 
@@ -173,13 +176,22 @@ export function CollectionCenter({ userId }) {
 
       <div className="stat-grid compact">
         <StatCard label="采集成功率" value={loading ? '—' : `${stats.successRate}%`} hint="success / total" />
-        <StatCard label="来源热门平台" value={loading ? '—' : stats.topPlatform} hint="数据源最多的平台" />
+        <StatCard label="热门平台" value={loading ? '—' : stats.topPlatform} hint="数据源最多的平台" />
       </div>
 
       <div className="studio-grid">
         <form className="form-card" onSubmit={handleCreateSource}>
           <p className="eyebrow">Content Sources</p>
-          <h3>添加数据源</h3>
+          <h3>创建采集数据源</h3>
+          <label>
+            绑定账号
+            <select value={sourceForm.social_account_id} onChange={(event) => setSourceField('social_account_id', event.target.value)} required>
+              <option value="">从账号矩阵选择竞品/灵感账号</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.account_name || account.username} · {account.platform}</option>
+              ))}
+            </select>
+          </label>
           <label>
             平台
             <select value={sourceForm.platform} onChange={(event) => setSourceField('platform', event.target.value)}>
@@ -196,30 +208,10 @@ export function CollectionCenter({ userId }) {
               ))}
             </select>
           </label>
-          <label>
-            名称
-            <input value={sourceForm.name} onChange={(event) => setSourceField('name', event.target.value)} required />
-          </label>
-          <label>
-            URL
-            <input value={sourceForm.url} onChange={(event) => setSourceField('url', event.target.value)} />
-          </label>
-          <label>
-            账号 / 频道
-            <input value={sourceForm.account} onChange={(event) => setSourceField('account', event.target.value)} />
-          </label>
-          <label>
-            Telegram Channel
-            <input value={sourceForm.channel} onChange={(event) => setSourceField('channel', event.target.value)} placeholder="例如 durov 或 https://t.me/s/durov" />
-          </label>
-          <label>
-            Telegram Username
-            <input value={sourceForm.username} onChange={(event) => setSourceField('username', event.target.value)} placeholder="@channel_username" />
-          </label>
-          <label>
-            分类
-            <input value={sourceForm.category} onChange={(event) => setSourceField('category', event.target.value)} placeholder="竞品 / 灵感 / 新闻 / 社区" />
-          </label>
+          <label>名称<input value={sourceForm.name} onChange={(event) => setSourceField('name', event.target.value)} required /></label>
+          <label>URL<input value={sourceForm.url} onChange={(event) => setSourceField('url', event.target.value)} /></label>
+          <label>Telegram Channel<input value={sourceForm.channel} onChange={(event) => setSourceField('channel', event.target.value)} placeholder="例如 durov 或 https://t.me/s/durov" /></label>
+          <label>Telegram Username<input value={sourceForm.username} onChange={(event) => setSourceField('username', event.target.value)} placeholder="@channel_username" /></label>
           <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId}>保存数据源</button>
         </form>
 
@@ -251,24 +243,9 @@ export function CollectionCenter({ userId }) {
               <option value="inactive">停用</option>
             </select>
           </label>
-          <label>
-            下次运行
-            <input type="datetime-local" value={taskForm.next_run} onChange={(event) => setTaskField('next_run', event.target.value)} />
-          </label>
+          <label>下次运行<input type="datetime-local" value={taskForm.next_run} onChange={(event) => setTaskField('next_run', event.target.value)} /></label>
           <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId}>保存采集任务</button>
         </form>
-
-        <article className="form-card">
-          <p className="eyebrow">Future API Slots</p>
-          <h3>后续接入位置</h3>
-          <p>Telegram 公开频道会写入 Viral Content Library。X、Reddit、YouTube 后续继续在这里接入。</p>
-          <div className="tag-row">
-            <span className="tag">X API</span>
-            <span className="tag">Reddit API</span>
-            <span className="tag">YouTube API</span>
-            <span className="tag">Telegram API</span>
-          </div>
-        </article>
       </div>
 
       {message && <div className="notice">{message}</div>}
@@ -277,15 +254,7 @@ export function CollectionCenter({ userId }) {
         <input placeholder="搜索数据源" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
         <select value={filters.platform} onChange={(event) => setFilters({ ...filters, platform: event.target.value })}>
           <option value="">全部平台</option>
-          {collectorPlatforms.map((platform) => (
-            <option key={platform} value={platform}>{platform}</option>
-          ))}
-        </select>
-        <select value={filters.sourceType} onChange={(event) => setFilters({ ...filters, sourceType: event.target.value })}>
-          <option value="">全部来源类型</option>
-          {sourceTypes.map((type) => (
-            <option key={type.value} value={type.value}>{type.label}</option>
-          ))}
+          {collectorPlatforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
         </select>
         <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
           <option value="">全部状态</option>
@@ -305,14 +274,14 @@ export function CollectionCenter({ userId }) {
               <span className="tag">{statusLabel(source.source_type)}</span>
             </div>
             <h3>{source.name}</h3>
-            <p>{source.channel || source.username || source.account || source.category || '暂无账号或分类'}</p>
+            <p>{source.social_accounts?.username || source.social_accounts?.account_name || source.channel || source.username || '未绑定账号'}</p>
             <small>最近同步：{formatDate(source.last_sync)} · Last ID：{source.last_message_id || '—'}</small>
             <div className="status-actions">
               <button type="button" onClick={() => handleSourceStatus(source, 'active')}>启用</button>
               <button type="button" onClick={() => handleSourceStatus(source, 'paused')}>暂停</button>
               <button type="button" onClick={() => handleSourceStatus(source, 'inactive')}>停用</button>
               {source.url && <a className="ghost-button" href={source.url} target="_blank" rel="noreferrer">打开来源</a>}
-              <button type="button" onClick={() => handleDeleteSource(source)}>删除</button>
+              <button type="button" onClick={() => deleteSource(source.id).then(refresh)}>删除</button>
             </div>
           </article>
         ))}
@@ -328,22 +297,14 @@ export function CollectionCenter({ userId }) {
         </select>
         <select value={taskFilters.frequency} onChange={(event) => setTaskFilters({ ...taskFilters, frequency: event.target.value })}>
           <option value="">全部频率</option>
-          {collectionFrequencies.map((frequency) => (
-            <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
-          ))}
-        </select>
-        <select value={taskFilters.sourceId} onChange={(event) => setTaskFilters({ ...taskFilters, sourceId: event.target.value })}>
-          <option value="">全部数据源</option>
-          {sources.map((source) => (
-            <option key={source.id} value={source.id}>{source.name}</option>
-          ))}
+          {collectionFrequencies.map((frequency) => <option key={frequency.value} value={frequency.value}>{frequency.label}</option>)}
         </select>
       </div>
 
       {!isSupabaseConfigured ? (
         <EmptyState title="等待 Supabase 配置" description="配置后这里会从 content_sources、collection_tasks、collection_runs 读取采集数据。" />
       ) : tasks.length === 0 ? (
-        <EmptyState title="暂无采集任务" description="先创建数据源，再创建第一条采集任务。" />
+        <EmptyState title="暂无采集任务" description="先选择账号矩阵中的账号创建数据源，再创建第一条采集任务。" />
       ) : (
         <div className="analysis-list">
           {tasks.map((task) => (
@@ -354,7 +315,7 @@ export function CollectionCenter({ userId }) {
                 <span>{statusLabel(task.frequency)}</span>
               </div>
               <h3>{task.content_sources?.platform} · {statusLabel(task.content_sources?.source_type)}</h3>
-              <p>{task.content_sources?.account || task.content_sources?.url || '暂无来源详情'}</p>
+              <p>{task.content_sources?.social_accounts?.username || task.content_sources?.account || task.content_sources?.url || '暂无来源详情'}</p>
               <div className="metric-row">
                 <span>上次运行：{formatDate(task.last_run)}</span>
                 <span>下次运行：{formatDate(task.next_run)}</span>
@@ -363,7 +324,7 @@ export function CollectionCenter({ userId }) {
                 <button type="button" onClick={() => handleRunCollection(task)}>运行采集</button>
                 <button type="button" onClick={() => handleTaskStatus(task, 'active')}>启用</button>
                 <button type="button" onClick={() => handleTaskStatus(task, 'paused')}>暂停</button>
-                <button type="button" onClick={() => handleDeleteTask(task)}>删除</button>
+                <button type="button" onClick={() => deleteTask(task.id).then(refresh)}>删除</button>
               </div>
             </article>
           ))}
@@ -398,4 +359,8 @@ export function CollectionCenter({ userId }) {
       </div>
     </section>
   );
+}
+
+function normalizeTelegramChannel(value) {
+  return String(value || '').replace('https://t.me/s/', '').replace('https://t.me/', '').replace(/^@/, '').trim();
 }

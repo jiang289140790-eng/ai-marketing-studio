@@ -2,13 +2,17 @@ import { useState } from 'react';
 import { accountCategories, apiStatuses, platforms } from '../data/navigation';
 
 export function AccountForm({ initialValue, onSubmit, onCancel }) {
+  const initialRole = initialValue?.account_role || initialValue?.account_type || initialValue?.account_category;
+  const normalizedInitialRole = initialRole === 'brand' || initialRole === 'personal' ? 'owned' : initialRole;
   const [form, setForm] = useState({
     platform: 'X',
+    username: '',
     account_name: '',
     account_url: '',
     avatar: '',
-    account_category: 'brand',
-    account_type: 'brand',
+    account_role: 'owned',
+    account_category: 'owned',
+    account_type: 'owned',
     target_audience: '',
     content_strategy: '',
     posting_frequency: '',
@@ -16,13 +20,20 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
     api_status: 'not_connected',
     ops_notes: '',
     ...(initialValue || {}),
+    ...(normalizedInitialRole ? {
+      account_role: normalizedInitialRole,
+      account_category: normalizedInitialRole,
+      account_type: normalizedInitialRole,
+    } : {}),
   });
 
   function update(field, value) {
     setForm((current) => {
       const next = { ...current, [field]: value };
-      if (field === 'account_type') next.account_category = value;
-      if (field === 'account_category') next.account_type = value;
+      if (field === 'account_role') {
+        next.account_type = value;
+        next.account_category = value;
+      }
       return next;
     });
   }
@@ -32,10 +43,14 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
       className="form-card"
       onSubmit={(event) => {
         event.preventDefault();
+        const role = form.account_role || form.account_type || form.account_category || 'owned';
         onSubmit({
           ...form,
-          account_category: form.account_type || form.account_category || 'brand',
-          account_type: form.account_type || form.account_category || 'brand',
+          username: form.username || form.account_name,
+          account_name: form.account_name || form.username,
+          account_role: role,
+          account_category: role,
+          account_type: role,
         });
       }}
     >
@@ -51,8 +66,12 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
           </select>
         </label>
         <label>
-          账号名称
-          <input value={form.account_name} onChange={(event) => update('account_name', event.target.value)} required />
+          用户名 / Handle
+          <input value={form.username || ''} onChange={(event) => update('username', event.target.value)} placeholder="@username 或 channel" required />
+        </label>
+        <label>
+          显示名称
+          <input value={form.account_name || ''} onChange={(event) => update('account_name', event.target.value)} placeholder="账号展示名" />
         </label>
         <label>
           账号链接
@@ -63,8 +82,8 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
           <input value={form.avatar || ''} onChange={(event) => update('avatar', event.target.value)} />
         </label>
         <label>
-          账号类型
-          <select value={form.account_type || form.account_category || 'brand'} onChange={(event) => update('account_type', event.target.value)}>
+          账号角色
+          <select value={form.account_role || form.account_type || 'owned'} onChange={(event) => update('account_role', event.target.value)}>
             {accountCategories.map((category) => (
               <option key={category.value} value={category.value}>
                 {category.label}
@@ -96,11 +115,11 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
         </label>
         <label className="wide-field">
           目标受众
-          <textarea value={form.target_audience || ''} onChange={(event) => update('target_audience', event.target.value)} placeholder="例如：欧美 AI 用户、独立创作者、AI 图片玩家" />
+          <textarea value={form.target_audience || ''} onChange={(event) => update('target_audience', event.target.value)} placeholder="可留空，后续由 AI 分析账号自动生成" />
         </label>
         <label className="wide-field">
           内容方向
-          <textarea value={form.content_strategy || ''} onChange={(event) => update('content_strategy', event.target.value)} placeholder="例如：AI 角色、AI 图片、AI 工具、教程、案例拆解" />
+          <textarea value={form.content_strategy || ''} onChange={(event) => update('content_strategy', event.target.value)} placeholder="可留空，例如：AI角色、AI图片、AI工具、教程、案例拆解" />
         </label>
         <label className="wide-field">
           账号运营备注

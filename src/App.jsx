@@ -21,6 +21,7 @@ import { PublishPlan } from './pages/PublishPlan';
 import { SettingsPage } from './pages/SettingsPage';
 import { SystemHealth } from './pages/SystemHealth';
 import { WorkflowRuns } from './pages/WorkflowRuns';
+import { WorkflowTestCenter } from './pages/WorkflowTestCenter';
 
 const pageTitles = {
   dashboard: 'Dashboard',
@@ -31,6 +32,7 @@ const pageTitles = {
   characters: '角色库',
   prompts: 'Prompt 库',
   workflows: 'Workflow Runs',
+  'workflow-test': 'Workflow Test Center',
   agents: 'Agent Center',
   intelligence: '内容情报',
   collection: '采集中心',
@@ -66,6 +68,8 @@ export default function App() {
         return <PromptLibrary {...props} />;
       case 'workflows':
         return <WorkflowRuns {...props} />;
+      case 'workflow-test':
+        return <WorkflowTestCenter {...props} />;
       case 'agents':
         return <AgentCenter {...props} />;
       case 'intelligence':

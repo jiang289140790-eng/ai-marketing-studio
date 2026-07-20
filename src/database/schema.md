@@ -62,7 +62,7 @@ character → prompt → assets → workflow → output → asset → content_li
 Fields:
 
 - `workflow_id` references a Workflow asset.
-- `tool_id` identifies the runtime source, such as `manual-runtime`, `runninghub`, `comfyui`, or `n8n`.
+- `tool_id` identifies the runtime source, such as `manual-runtime`, `comfyui`, or `n8n`.
 - `character_id` references `characters`.
 - `prompt_id` references `prompts`.
 - `asset_ids` stores input asset IDs.

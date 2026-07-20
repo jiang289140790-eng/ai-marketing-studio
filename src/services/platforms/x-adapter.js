@@ -1,4 +1,20 @@
+import { requireSupabase } from '../supabase-client';
 import { adapterResult, createPreparedAdapter } from './base-adapter';
+
+async function invokeXPlatform(action, payload) {
+  const client = requireSupabase();
+  const { data, error } = await client.functions.invoke('platform', {
+    body: {
+      platform: 'X',
+      action,
+      ...payload,
+    },
+  });
+
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
 
 export const xAdapter = {
   ...createPreparedAdapter('X', {
@@ -11,20 +27,26 @@ export const xAdapter = {
     ],
     docs: 'https://developer.x.com/',
   }),
-  publish: async ({ content }) => adapterResult({
-    success: false,
-    platform: 'X',
-    error: 'X 发布接口已设计，但尚未配置真实 X Developer App、OAuth token 和写入权限。',
-    raw: {
-      endpoint: 'POST /2/tweets',
-      auth: 'OAuth 2.0 user context',
-      required_scopes: ['tweet.write', 'tweet.read', 'users.read', 'offline.access'],
-      content_preview: {
-        title: content?.title || '',
-        text: content?.content_text || '',
-        media_url: content?.media_url || '',
-      },
-      credential_location: 'Supabase Edge Function secrets + platform_credentials; never frontend.',
-    },
+  connect: (payload = {}) => invokeXPlatform('connect', payload),
+  disconnect: ({ connection_id }) => invokeXPlatform('disconnect', { connection_id }),
+  reconnect: ({ connection_id }) => invokeXPlatform('reconnect', { connection_id }),
+  status: ({ connection_id } = {}) => invokeXPlatform('status', { connection_id }),
+  publish: async ({ task, connection }) => {
+    const result = await invokeXPlatform('publish', {
+      publish_task_id: task.id,
+      connection_id: task.platform_connection_id || connection?.id,
+    });
+    return adapterResult({
+      success: true,
+      platform: 'X',
+      tweet_id: result.tweet_id || result.external_id || null,
+      external_id: result.external_id || result.tweet_id || null,
+      url: result.url || null,
+      published_at: result.published_at || null,
+      raw: result,
+    });
+  },
+  getMetrics: ({ task }) => invokeXPlatform('getMetrics', {
+    publish_task_id: task.id,
   }),
 };

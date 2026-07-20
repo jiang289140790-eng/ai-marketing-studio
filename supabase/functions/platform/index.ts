@@ -1,8 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
-type PlatformAction = 'connect' | 'disconnect' | 'getAccount' | 'fetchContent' | 'publish' | 'getMetrics' | 'setWebhook' | 'notifyAdmin';
+type PlatformAction = 'connect' | 'disconnect' | 'reconnect' | 'status' | 'getAccount' | 'fetchContent' | 'publish' | 'getMetrics' | 'setWebhook' | 'notifyAdmin';
 
-const supportedActions: PlatformAction[] = ['connect', 'disconnect', 'getAccount', 'fetchContent', 'publish', 'getMetrics', 'setWebhook', 'notifyAdmin'];
+const supportedActions: PlatformAction[] = ['connect', 'disconnect', 'reconnect', 'status', 'getAccount', 'fetchContent', 'publish', 'getMetrics', 'setWebhook', 'notifyAdmin'];
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
@@ -12,6 +12,10 @@ Deno.serve(async (request) => {
   try {
     if (request.method === 'GET') {
       const { client } = createServiceClient();
+      const url = new URL(request.url);
+      if ((url.searchParams.get('platform') || '').toLowerCase() === 'x' || (url.searchParams.get('action') || '').toLowerCase() === 'x-callback' || (url.searchParams.has('code') && url.searchParams.has('state'))) {
+        return handleXOAuthCallback(client, request);
+      }
       return handleCampaignRedirect(client, request);
     }
 
@@ -40,6 +44,11 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: 'Unsupported platform action.' }, 400);
     }
 
+    if (platform === 'X') {
+      const { client, user } = await createAuthorizedClient(authHeader);
+      return jsonResponse(await handleXPlatformAction(client, user.id, action, body));
+    }
+
     if (platform !== 'Telegram') {
       return jsonResponse({
         ok: true,
@@ -62,6 +71,18 @@ Deno.serve(async (request) => {
 
     if (action === 'connect') {
       return jsonResponse(await connectTelegram(client, user.id, body));
+    }
+
+    if (action === 'reconnect') {
+      return jsonResponse(await reconnectTelegram(client, user.id, body));
+    }
+
+    if (action === 'disconnect') {
+      return jsonResponse(await disconnectTelegram(client, user.id, body));
+    }
+
+    if (action === 'status' || action === 'getAccount') {
+      return jsonResponse(await getTelegramConnectionStatus(client, user.id, body));
     }
 
     if (action === 'publish') {
@@ -117,51 +138,62 @@ function createServiceClient() {
 }
 
 async function connectTelegram(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
-  const botToken = String(body.bot_token || '').trim();
+  const botToken = getTelegramBotToken();
   const chatId = normalizeTelegramChatId(String(body.chat_id || body.account_url || '').trim());
   const accountName = String(body.account_name || chatId || 'Telegram Channel');
-  if (!botToken) throw new Error('Missing Telegram bot token.');
-  if (!chatId) throw new Error('Missing Telegram chat_id or @channel username.');
+  if (!chatId) {
+    const connectCode = await createTelegramConnectCode(userId);
+    const botInfo = await callTelegram(botToken, 'getMe', {});
+    return {
+      ok: true,
+      action: 'connect',
+      mode: 'telegram_connect_code',
+      platform: 'Telegram',
+      connect_code: connectCode.code,
+      expires_at: connectCode.expires_at,
+      instruction: `/connect ${connectCode.code}`,
+      bot: {
+        id: botInfo.id,
+        username: botInfo.username,
+        first_name: botInfo.first_name,
+      },
+      token_exposed: false,
+    };
+  }
 
   const botInfo = await callTelegram(botToken, 'getMe', {});
+  const chatInfo = await callTelegram(botToken, 'getChat', { chat_id: chatId });
+  const resolvedChatId = normalizeTelegramChatId(chatInfo.id || chatId);
+  const username = chatInfo.username ? `@${chatInfo.username}` : '';
+  const accountUrl = username || resolvedChatId;
 
-  const { data: account, error: accountError } = await client
-    .from('social_accounts')
-    .insert({
-      user_id: userId,
-      platform: 'Telegram',
-      account_name: accountName,
-      account_url: chatId,
-      avatar: null,
-      status: 'active',
-    })
-    .select('id, account_name, account_url')
-    .single();
-  if (accountError) throw accountError;
+  const account = await upsertTelegramSocialAccount(client, userId, {
+    account_name: accountName,
+    account_url: accountUrl,
+    chat_id: resolvedChatId,
+    username,
+    chat_info: chatInfo,
+  });
 
-  const { data: connection, error: connectionError } = await client
-    .from('platform_connections')
-    .insert({
-      user_id: userId,
-      platform: 'Telegram',
-      account_id: account.id,
-      status: 'connected',
-      connected_at: new Date().toISOString(),
-      last_sync: new Date().toISOString(),
-    })
-    .select('id, platform, status')
-    .single();
-  if (connectionError) throw connectionError;
+  const connection = await upsertTelegramConnection(client, userId, account.id, {
+    chat_id: resolvedChatId,
+    username,
+    chat_info: chatInfo,
+    bot: {
+      id: botInfo.id,
+      username: botInfo.username,
+      first_name: botInfo.first_name,
+    },
+  });
 
-  const { error: credentialError } = await client
-    .from('platform_credentials')
-    .insert({
-      connection_id: connection.id,
-      encrypted_token: botToken,
-      refresh_token: null,
-      expires_at: null,
-    });
-  if (credentialError) throw credentialError;
+  await saveTelegramCredentialReference(client, connection.id, {
+    bot: {
+      id: botInfo.id,
+      username: botInfo.username,
+      first_name: botInfo.first_name,
+    },
+    chat: sanitizeTelegramChat(chatInfo),
+  });
 
   const webhook = await trySetTelegramWebhook(botToken);
 
@@ -171,6 +203,7 @@ async function connectTelegram(client: ReturnType<typeof createClient>, userId: 
     platform: 'Telegram',
     connection_id: connection.id,
     account,
+    connection,
     bot: {
       id: botInfo.id,
       username: botInfo.username,
@@ -181,6 +214,216 @@ async function connectTelegram(client: ReturnType<typeof createClient>, userId: 
   };
 }
 
+async function upsertTelegramSocialAccount(client: ReturnType<typeof createClient>, userId: string, payload: Record<string, any>) {
+  const { data: existing, error: existingError } = await client
+    .from('social_accounts')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('platform', 'Telegram')
+    .eq('account_url', payload.account_url)
+    .limit(1);
+  if (existingError) throw existingError;
+
+  const accountPayload = {
+      user_id: userId,
+      platform: 'Telegram',
+      account_name: payload.account_name || payload.username || payload.chat_id || 'Telegram Channel',
+      account_url: payload.account_url || payload.chat_id,
+      avatar: null,
+      status: 'active',
+      account_type: 'brand',
+      api_status: 'connected',
+      ops_notes: `Telegram chat: ${payload.chat_id || payload.account_url || ''}`,
+    };
+
+  if (existing?.[0]?.id) {
+    const { data, error } = await client
+      .from('social_accounts')
+      .update(accountPayload)
+      .eq('id', existing[0].id)
+      .select('id, account_name, account_url, status, api_status')
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await client
+    .from('social_accounts')
+    .insert(accountPayload)
+    .select('id, account_name, account_url, status, api_status')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function upsertTelegramConnection(client: ReturnType<typeof createClient>, userId: string, accountId: string, metadata: Record<string, any>) {
+  const { data: existing, error: existingError } = await client
+    .from('platform_connections')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('platform', 'Telegram')
+    .eq('account_id', accountId)
+    .limit(1);
+  if (existingError) throw existingError;
+
+  const now = new Date().toISOString();
+  const payload = {
+      user_id: userId,
+      platform: 'Telegram',
+      account_id: accountId,
+      status: 'connected',
+      auth_type: 'bot_token',
+      permissions: ['publish', 'metrics', 'webhook'],
+      connected_at: now,
+      last_sync: now,
+      last_used_at: now,
+      disconnected_at: null,
+      error_message: null,
+      metadata: {
+        telegram: {
+          chat_id: metadata.chat_id || null,
+          username: metadata.username || null,
+          chat: sanitizeTelegramChat(metadata.chat_info || {}),
+          bot: metadata.bot || null,
+        },
+        credential_source: 'edge_function_secret',
+      },
+    };
+
+  if (existing?.[0]?.id) {
+    const { data, error } = await client
+      .from('platform_connections')
+      .update(payload)
+      .eq('id', existing[0].id)
+      .select('id, platform, status, connected_at, last_sync, metadata')
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await client
+    .from('platform_connections')
+    .insert(payload)
+    .select('id, platform, status, connected_at, last_sync, metadata')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function saveTelegramCredentialReference(client: ReturnType<typeof createClient>, connectionId: string, metadata: Record<string, any>) {
+  const payload = {
+      connection_id: connectionId,
+      encrypted_token: 'edge-secret:TELEGRAM_BOT_TOKEN_OR_ADMIN',
+      refresh_token: null,
+      expires_at: null,
+      token_type: 'telegram_bot_secret_reference',
+      scopes: ['publish', 'metrics', 'webhook'],
+      metadata: {
+        provider: 'telegram',
+        credential_source: 'edge_function_secret',
+        ...metadata,
+      },
+      updated_at: new Date().toISOString(),
+    };
+
+  const { data: existing, error: existingError } = await client
+    .from('platform_credentials')
+    .select('id')
+    .eq('connection_id', connectionId)
+    .limit(1);
+  if (existingError) throw existingError;
+
+  if (existing?.[0]?.id) {
+    const { error } = await client.from('platform_credentials').update(payload).eq('id', existing[0].id);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await client.from('platform_credentials').insert(payload);
+  if (error) throw error;
+}
+
+async function reconnectTelegram(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const connectionId = String(body.connection_id || '').trim();
+  if (!body.chat_id && connectionId) {
+    const connection = await loadTelegramConnection(client, userId, connectionId);
+    const chatId = connection.metadata?.telegram?.chat_id || connection.social_accounts?.account_url || '';
+    return connectTelegram(client, userId, {
+      ...body,
+      chat_id: chatId,
+      account_name: connection.social_accounts?.account_name || 'Telegram Channel',
+    });
+  }
+
+  return connectTelegram(client, userId, body);
+}
+
+async function disconnectTelegram(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const connectionId = String(body.connection_id || '').trim();
+  if (!connectionId) throw new Error('Missing connection_id.');
+
+  const connection = await loadTelegramConnection(client, userId, connectionId);
+  const now = new Date().toISOString();
+  const { data, error } = await client
+    .from('platform_connections')
+    .update({
+      status: 'disconnected',
+      disconnected_at: now,
+      last_sync: now,
+      error_message: null,
+      metadata: {
+        ...(connection.metadata || {}),
+        disconnected_by: 'user',
+        disconnected_at: now,
+      },
+    })
+    .eq('id', connectionId)
+    .eq('user_id', userId)
+    .select('id, platform, status, disconnected_at, last_sync')
+    .single();
+  if (error) throw error;
+
+  if (connection.account_id) {
+    await client
+      .from('social_accounts')
+      .update({ api_status: 'not_connected' })
+      .eq('id', connection.account_id)
+      .eq('user_id', userId);
+  }
+
+  return {
+    ok: true,
+    action: 'disconnect',
+    platform: 'Telegram',
+    connection: data,
+    token_exposed: false,
+  };
+}
+
+async function getTelegramConnectionStatus(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const connectionId = String(body.connection_id || '').trim();
+  let query = client
+    .from('platform_connections')
+    .select('id, platform, account_id, status, auth_type, permissions, connected_at, disconnected_at, last_sync, last_used_at, expires_at, error_message, metadata, social_accounts(account_name, account_url, avatar, status, api_status)')
+    .eq('user_id', userId)
+    .eq('platform', 'Telegram');
+
+  if (connectionId) query = query.eq('id', connectionId);
+  const { data, error } = await query.order('created_at', { ascending: false });
+  if (error) throw error;
+
+  return {
+    ok: true,
+    action: 'status',
+    platform: 'Telegram',
+    connections: (data || []).map((connection: Record<string, any>) => ({
+      ...connection,
+      token_exposed: false,
+      credential_status: connection.status === 'connected' ? 'edge_secret_or_secure_storage' : 'not_active',
+    })),
+  };
+}
+
 async function publishTelegram(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
   const task = await loadPublishTask(client, userId, body);
   const connectionId = task.platform_connection_id || body.connection_id;
@@ -188,7 +431,7 @@ async function publishTelegram(client: ReturnType<typeof createClient>, userId: 
 
   const connection = await loadTelegramConnection(client, userId, String(connectionId));
   const token = await loadTelegramToken(client, String(connectionId));
-  const chatId = normalizeTelegramChatId(connection.social_accounts?.account_url || connection.social_accounts?.account_name || body.chat_id);
+  const chatId = normalizeTelegramChatId(connection.metadata?.telegram?.chat_id || connection.social_accounts?.account_url || connection.social_accounts?.account_name || body.chat_id);
   if (!chatId) throw new Error('Telegram connection is missing chat_id or @channel username.');
 
   const content = task.content_library || body.content || {};
@@ -210,12 +453,16 @@ async function publishTelegram(client: ReturnType<typeof createClient>, userId: 
   const externalId = String(telegramMessage.message_id);
   const metrics = normalizeTelegramMetrics(telegramMessage);
   await writeMetricsSnapshot(client, userId, task, metrics, telegramMessage);
+  const messageUrl = buildTelegramMessageUrl(telegramMessage);
 
   return {
     ok: true,
     action: 'publish',
     platform: 'Telegram',
+    message_id: externalId,
+    channel_id: telegramMessage.chat?.id ? String(telegramMessage.chat.id) : null,
     external_id: externalId,
+    url: messageUrl,
     published_at: new Date((telegramMessage.date || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
     telegram_message: sanitizeTelegramMessage(telegramMessage),
     metrics,
@@ -285,14 +532,530 @@ async function loadTelegramConnection(client: ReturnType<typeof createClient>, u
 }
 
 async function loadTelegramToken(client: ReturnType<typeof createClient>, connectionId: string) {
+  const secretToken = getTelegramBotToken(false);
+  if (secretToken) return secretToken;
+
   const { data, error } = await client
     .from('platform_credentials')
-    .select('encrypted_token')
+    .select('encrypted_token, token_type')
     .eq('connection_id', connectionId)
     .single();
   if (error) throw error;
   if (!data?.encrypted_token) throw new Error('Telegram credential is missing.');
+  if (String(data.encrypted_token).startsWith('edge-secret:')) {
+    throw new Error('Telegram bot token secret is not configured in Edge Function.');
+  }
   return data.encrypted_token;
+}
+
+function getTelegramBotToken(required = true) {
+  const token = Deno.env.get('TELEGRAM_BOT_TOKEN') || Deno.env.get('TELEGRAM_ADMIN_BOT_TOKEN') || '';
+  if (required && !token) throw new Error('Missing TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_BOT_TOKEN in Edge Function secrets.');
+  return token;
+}
+
+async function handleXPlatformAction(client: ReturnType<typeof createClient>, userId: string, action: PlatformAction, body: Record<string, unknown>) {
+  if (action === 'connect') return startXOAuth(client, userId, body);
+  if (action === 'reconnect') return startXOAuth(client, userId, { ...body, reconnect: true });
+  if (action === 'disconnect') return disconnectX(client, userId, body);
+  if (action === 'status' || action === 'getAccount') return getXConnectionStatus(client, userId, body);
+  if (action === 'publish') return publishX(client, userId, body);
+  if (action === 'getMetrics') return getXMetrics(client, userId, body);
+
+  return {
+    ok: true,
+    platform: 'X',
+    action,
+    mode: 'placeholder',
+    message: 'X Platform Layer is ready for OAuth/status/publish in this phase.',
+    token_exposed: false,
+  };
+}
+
+async function startXOAuth(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const config = getXConfig();
+  const state = crypto.randomUUID();
+  const codeVerifier = base64UrlEncode(crypto.randomUUID() + crypto.randomUUID());
+  const codeChallenge = await sha256Base64Url(codeVerifier);
+  const scopes = ['tweet.read', 'tweet.write', 'media.write', 'users.read', 'offline.access'];
+  const now = new Date().toISOString();
+
+  const { data: pending, error } = await client
+    .from('platform_connections')
+    .insert({
+      user_id: userId,
+      platform: 'X',
+      account_id: body.account_id || null,
+      status: 'pending',
+      auth_type: 'oauth2_pkce',
+      permissions: scopes,
+      connected_at: null,
+      last_sync: now,
+      metadata: {
+        x: {
+          oauth_state: state,
+          code_verifier: codeVerifier,
+          redirect_uri: config.redirectUri,
+          reconnect: Boolean(body.reconnect),
+          started_at: now,
+        },
+      },
+    })
+    .select('id, platform, status, auth_type, permissions, metadata')
+    .single();
+  if (error) throw error;
+
+  const authUrl = new URL(`${config.oauthBaseUrl}/authorize`);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', config.clientId);
+  authUrl.searchParams.set('redirect_uri', config.redirectUri);
+  authUrl.searchParams.set('scope', scopes.join(' '));
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+
+  return {
+    ok: true,
+    action: 'connect',
+    platform: 'X',
+    connection_id: pending.id,
+    auth_url: authUrl.toString(),
+    status: 'pending',
+    required_scopes: scopes,
+    token_exposed: false,
+  };
+}
+
+async function handleXOAuthCallback(client: ReturnType<typeof createClient>, request: Request) {
+  const url = new URL(request.url);
+  const code = url.searchParams.get('code') || '';
+  const state = url.searchParams.get('state') || '';
+  const error = url.searchParams.get('error') || '';
+  if (error) return htmlResponse('X connection failed', `X returned error: ${escapeHtml(error)}`, false);
+  if (!code || !state) return htmlResponse('X connection failed', 'Missing OAuth code or state.', false);
+
+  const { data: candidates, error: lookupError } = await client
+    .from('platform_connections')
+    .select('id, user_id, metadata')
+    .eq('platform', 'X')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(25);
+  if (lookupError) throw lookupError;
+
+  const connection = (candidates || []).find((item: Record<string, any>) => item.metadata?.x?.oauth_state === state);
+  if (!connection) return htmlResponse('X connection failed', 'OAuth state expired or not found.', false);
+
+  const config = getXConfig();
+  const codeVerifier = String(connection.metadata?.x?.code_verifier || '');
+  const token = await exchangeXCodeForToken(config, code, codeVerifier);
+  const profile = await fetchXProfile(token.access_token);
+  const expiresAt = token.expires_in ? new Date(Date.now() + Number(token.expires_in) * 1000).toISOString() : null;
+
+  const account = await upsertXSocialAccount(client, connection.user_id, profile);
+  await updateXConnectionConnected(client, connection.id, account.id, profile, token, expiresAt);
+  await saveXCredentials(client, connection.id, token, expiresAt);
+
+  return htmlResponse('X connected', `X account @${escapeHtml(profile.username || 'unknown')} is connected. You can close this window.`, true);
+}
+
+async function disconnectX(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const connectionId = String(body.connection_id || '').trim();
+  if (!connectionId) throw new Error('Missing connection_id.');
+
+  const connection = await loadXConnection(client, userId, connectionId);
+  const now = new Date().toISOString();
+  const { data, error } = await client
+    .from('platform_connections')
+    .update({
+      status: 'disconnected',
+      disconnected_at: now,
+      last_sync: now,
+      error_message: null,
+      metadata: {
+        ...(connection.metadata || {}),
+        disconnected_by: 'user',
+        disconnected_at: now,
+      },
+    })
+    .eq('id', connectionId)
+    .eq('user_id', userId)
+    .select('id, platform, status, disconnected_at, last_sync')
+    .single();
+  if (error) throw error;
+
+  if (connection.account_id) {
+    await client.from('social_accounts').update({ api_status: 'not_connected' }).eq('id', connection.account_id).eq('user_id', userId);
+  }
+
+  return { ok: true, action: 'disconnect', platform: 'X', connection: data, token_exposed: false };
+}
+
+async function getXConnectionStatus(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const connectionId = String(body.connection_id || '').trim();
+  let query = client
+    .from('platform_connections')
+    .select('id, platform, account_id, status, auth_type, permissions, connected_at, disconnected_at, last_sync, last_used_at, expires_at, error_message, metadata, social_accounts(account_name, account_url, avatar, status, api_status)')
+    .eq('user_id', userId)
+    .eq('platform', 'X');
+
+  if (connectionId) query = query.eq('id', connectionId);
+  const { data, error } = await query.order('created_at', { ascending: false });
+  if (error) throw error;
+
+  return {
+    ok: true,
+    action: 'status',
+    platform: 'X',
+    connections: (data || []).map((connection: Record<string, any>) => ({
+      ...connection,
+      token_exposed: false,
+      credential_status: connection.status === 'connected' ? 'secure_storage' : 'not_active',
+    })),
+  };
+}
+
+async function publishX(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const task = await loadXPublishTask(client, userId, body);
+  const connectionId = task.platform_connection_id || body.connection_id;
+  if (!connectionId) throw new Error('X publish requires platform_connection_id.');
+
+  const connection = await loadXConnection(client, userId, String(connectionId));
+  const credential = await loadXCredential(client, String(connectionId));
+  const accessToken = await ensureFreshXAccessToken(client, String(connectionId), connection, credential);
+  const content = task.content_library || body.content || {};
+  const text = String(content.content_text || content.title || body.text || '').trim();
+  if (!text) throw new Error('X posts require text content in this phase.');
+  if (text.length > 280) throw new Error('X text-only posts are limited to 280 characters in this MVP.');
+
+  const result = await callXApi(accessToken, '/tweets', {
+    method: 'POST',
+    body: { text },
+  });
+
+  const tweetId = result.data?.id || result.id || null;
+  if (!tweetId) throw new Error('X publish succeeded but no tweet id was returned.');
+  const username = connection.metadata?.x?.username || connection.social_accounts?.account_name || '';
+  const tweetUrl = username ? `https://x.com/${String(username).replace(/^@/, '')}/status/${tweetId}` : `https://x.com/i/web/status/${tweetId}`;
+  const metrics = { views: 0, likes: 0, comments: 0, shares: 0, clicks: 0, registrations: 0, revenue: 0, engagement: 0 };
+  await writeXMetricsSnapshot(client, userId, task, metrics, {
+    tweet_id: tweetId,
+    url: tweetUrl,
+    raw: result,
+  });
+
+  await client
+    .from('platform_connections')
+    .update({ last_used_at: new Date().toISOString(), last_sync: new Date().toISOString(), error_message: null })
+    .eq('id', String(connectionId));
+
+  return {
+    ok: true,
+    action: 'publish',
+    platform: 'X',
+    tweet_id: String(tweetId),
+    external_id: String(tweetId),
+    url: tweetUrl,
+    published_at: new Date().toISOString(),
+    metrics,
+    token_exposed: false,
+  };
+}
+
+async function getXMetrics(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const task = await loadXPublishTask(client, userId, body);
+  const metrics = task.result?.metrics || { views: 0, likes: 0, comments: 0, shares: 0, clicks: 0, registrations: 0, revenue: 0, engagement: 0 };
+  await writeXMetricsSnapshot(client, userId, task, metrics, {
+    tweet_id: task.external_id || null,
+    url: task.result?.url || null,
+  });
+
+  return {
+    ok: true,
+    action: 'getMetrics',
+    platform: 'X',
+    publish_task_id: task.id,
+    external_id: task.external_id,
+    metrics,
+    note: 'X metrics pull is prepared; full analytics expansion requires approved X API access.',
+    token_exposed: false,
+  };
+}
+
+function getXConfig() {
+  const clientId = Deno.env.get('X_CLIENT_ID') || '';
+  const clientSecret = Deno.env.get('X_CLIENT_SECRET') || '';
+  const redirectUri = Deno.env.get('X_REDIRECT_URI') || '';
+  if (!clientId || !clientSecret || !redirectUri) {
+    throw new Error('Missing X_CLIENT_ID, X_CLIENT_SECRET, or X_REDIRECT_URI in Edge Function secrets.');
+  }
+
+  return {
+    clientId,
+    clientSecret,
+    redirectUri,
+    apiBaseUrl: (Deno.env.get('X_API_BASE_URL') || 'https://api.x.com/2').replace(/\/$/, ''),
+    oauthBaseUrl: (Deno.env.get('X_OAUTH_BASE_URL') || 'https://twitter.com/i/oauth2').replace(/\/$/, ''),
+    tokenUrl: Deno.env.get('X_OAUTH_TOKEN_URL') || 'https://api.x.com/2/oauth2/token',
+  };
+}
+
+async function exchangeXCodeForToken(config: ReturnType<typeof getXConfig>, code: string, codeVerifier: string) {
+  if (!codeVerifier) throw new Error('Missing X OAuth code verifier.');
+
+  const response = await fetch(config.tokenUrl, {
+    method: 'POST',
+    headers: {
+      authorization: `Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`,
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: config.redirectUri,
+      code_verifier: codeVerifier,
+    }),
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.error) {
+    throw new Error(json.error_description || json.error || `X OAuth token exchange failed with ${response.status}.`);
+  }
+  return json;
+}
+
+async function refreshXToken(refreshToken: string) {
+  if (!refreshToken) throw new Error('No refresh token available for X account.');
+  const config = getXConfig();
+  const response = await fetch(config.tokenUrl, {
+    method: 'POST',
+    headers: {
+      authorization: `Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`,
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }),
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.error) {
+    throw new Error(json.error_description || json.error || `X token refresh failed with ${response.status}.`);
+  }
+  return json;
+}
+
+async function fetchXProfile(accessToken: string) {
+  const result = await callXApi(accessToken, '/users/me?user.fields=profile_image_url', { method: 'GET' });
+  return result.data || result;
+}
+
+async function callXApi(accessToken: string, path: string, options: { method?: string; body?: Record<string, unknown> } = {}) {
+  const config = getXConfig();
+  const response = await fetch(`${config.apiBaseUrl}${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: 'application/json',
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.errors || json.error) {
+    const message = json.detail || json.title || json.error_description || json.error || json.errors?.[0]?.message || `X API failed with ${response.status}.`;
+    throw new Error(message);
+  }
+  return json;
+}
+
+async function upsertXSocialAccount(client: ReturnType<typeof createClient>, userId: string, profile: Record<string, any>) {
+  const platformUserId = String(profile.id || '');
+  if (!platformUserId) throw new Error('X profile is missing user id.');
+  const username = String(profile.username || '').replace(/^@/, '');
+  const accountUrl = username ? `https://x.com/${username}` : `https://x.com/i/user/${platformUserId}`;
+
+  const { data: existing, error: existingError } = await client
+    .from('social_accounts')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('platform', 'X')
+    .eq('account_url', accountUrl)
+    .limit(1);
+  if (existingError) throw existingError;
+
+  const payload = {
+    user_id: userId,
+    platform: 'X',
+    account_name: username || profile.name || platformUserId,
+    account_url: accountUrl,
+    avatar: profile.profile_image_url || null,
+    status: 'active',
+    account_type: 'brand',
+    api_status: 'connected',
+    ops_notes: `X user id: ${platformUserId}`,
+  };
+
+  if (existing?.[0]?.id) {
+    const { data, error } = await client.from('social_accounts').update(payload).eq('id', existing[0].id).select('id, account_name, account_url, avatar, status, api_status').single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await client.from('social_accounts').insert(payload).select('id, account_name, account_url, avatar, status, api_status').single();
+  if (error) throw error;
+  return data;
+}
+
+async function updateXConnectionConnected(client: ReturnType<typeof createClient>, connectionId: string, accountId: string, profile: Record<string, any>, token: Record<string, any>, expiresAt: string | null) {
+  const now = new Date().toISOString();
+  const scopes = String(token.scope || '').split(/\s+/).filter(Boolean);
+  const { error } = await client
+    .from('platform_connections')
+    .update({
+      account_id: accountId,
+      status: 'connected',
+      auth_type: 'oauth2_pkce',
+      permissions: scopes.length ? scopes : ['tweet.read', 'tweet.write', 'media.write', 'users.read', 'offline.access'],
+      connected_at: now,
+      last_sync: now,
+      last_used_at: now,
+      expires_at: expiresAt,
+      disconnected_at: null,
+      error_message: null,
+      metadata: {
+        x: {
+          user_id: profile.id || null,
+          username: profile.username || null,
+          name: profile.name || null,
+          profile_image_url: profile.profile_image_url || null,
+        },
+      },
+    })
+    .eq('id', connectionId);
+  if (error) throw error;
+}
+
+async function saveXCredentials(client: ReturnType<typeof createClient>, connectionId: string, token: Record<string, any>, expiresAt: string | null) {
+  const scopes = String(token.scope || '').split(/\s+/).filter(Boolean);
+  const payload = {
+    connection_id: connectionId,
+    encrypted_token: token.access_token || null,
+    refresh_token: token.refresh_token || null,
+    expires_at: expiresAt,
+    token_type: token.token_type || 'bearer',
+    scopes,
+    metadata: {
+      provider: 'x',
+      credential_source: 'oauth2_pkce',
+    },
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: existing, error: existingError } = await client.from('platform_credentials').select('id').eq('connection_id', connectionId).limit(1);
+  if (existingError) throw existingError;
+
+  if (existing?.[0]?.id) {
+    const { error } = await client.from('platform_credentials').update(payload).eq('id', existing[0].id);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await client.from('platform_credentials').insert(payload);
+  if (error) throw error;
+}
+
+async function loadXConnection(client: ReturnType<typeof createClient>, userId: string, connectionId: string) {
+  const { data, error } = await client
+    .from('platform_connections')
+    .select('*, social_accounts(account_name, account_url, avatar, status, api_status)')
+    .eq('id', connectionId)
+    .eq('user_id', userId)
+    .eq('platform', 'X')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function loadXCredential(client: ReturnType<typeof createClient>, connectionId: string) {
+  const { data, error } = await client
+    .from('platform_credentials')
+    .select('encrypted_token, refresh_token, expires_at, scopes, token_type, metadata')
+    .eq('connection_id', connectionId)
+    .single();
+  if (error) throw error;
+  if (!data?.encrypted_token) throw new Error('X access token is missing. Reconnect the X account.');
+  return data;
+}
+
+async function ensureFreshXAccessToken(client: ReturnType<typeof createClient>, connectionId: string, connection: Record<string, any>, credential: Record<string, any>) {
+  const expiresAt = credential.expires_at || connection.expires_at;
+  const shouldRefresh = expiresAt ? new Date(expiresAt).getTime() - Date.now() < 5 * 60 * 1000 : false;
+  if (!shouldRefresh) return credential.encrypted_token;
+
+  const refreshed = await refreshXToken(credential.refresh_token);
+  const nextExpiresAt = refreshed.expires_in ? new Date(Date.now() + Number(refreshed.expires_in) * 1000).toISOString() : expiresAt || null;
+  await saveXCredentials(client, connectionId, {
+    ...refreshed,
+    refresh_token: refreshed.refresh_token || credential.refresh_token,
+  }, nextExpiresAt);
+  await client.from('platform_connections').update({ expires_at: nextExpiresAt, last_sync: new Date().toISOString(), error_message: null }).eq('id', connectionId);
+
+  return refreshed.access_token;
+}
+
+async function loadXPublishTask(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
+  const taskId = body.publish_task_id || body.task_id || (body.task as Record<string, unknown> | undefined)?.id;
+  if (!taskId) throw new Error('Missing publish_task_id.');
+
+  const { data, error } = await client
+    .from('publish_tasks')
+    .select('*, content_library(title, content_text, media_url, content_type, platform), campaign_links(id, url, clicks, registrations, revenue)')
+    .eq('id', taskId)
+    .eq('user_id', userId)
+    .single();
+  if (error) throw error;
+  if (!data || data.platform !== 'X') throw new Error('Publish task is not an X task.');
+  return data;
+}
+
+async function writeXMetricsSnapshot(client: ReturnType<typeof createClient>, userId: string, task: Record<string, any>, metrics: Record<string, number>, tweet: Record<string, unknown>) {
+  await client.from('publish_metrics').upsert({
+    user_id: userId,
+    publish_task_id: task.id,
+    metrics_json: {
+      provider: 'x',
+      external_id: task.external_id || tweet.tweet_id || null,
+      tweet,
+      metrics,
+    },
+    last_sync: new Date().toISOString(),
+  });
+
+  if (task.content_id) {
+    await client.from('content_metrics').insert({
+      user_id: userId,
+      content_id: task.content_id,
+      platform: 'X',
+      views: metrics.views,
+      likes: metrics.likes,
+      comments: metrics.comments,
+      shares: metrics.shares,
+      clicks: metrics.clicks,
+      registrations: metrics.registrations,
+      revenue: metrics.revenue,
+      collected_at: new Date().toISOString(),
+    });
+  }
+}
+
+async function sha256Base64Url(value: string) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return base64UrlEncode(String.fromCharCode(...new Uint8Array(hash)));
 }
 
 async function sendTelegramMessage(token: string, payload: { chatId: string; text: string; mediaUrl: string; contentType: string }) {
@@ -468,6 +1231,9 @@ async function handleTelegramWebhook(client: ReturnType<typeof createClient>, re
     return { ok: false, error: 'Invalid Telegram webhook secret.' };
   }
 
+  const connectResult = await handleTelegramConnectMessage(client, update);
+  if (connectResult) return connectResult;
+
   const event = extractTelegramInteraction(update);
   if (!event.messageId) {
     return {
@@ -499,6 +1265,52 @@ async function handleTelegramWebhook(client: ReturnType<typeof createClient>, re
     event_type: event.type,
     matched_tasks: results.length,
     results,
+  };
+}
+
+async function handleTelegramConnectMessage(client: ReturnType<typeof createClient>, update: Record<string, any>) {
+  const message = update.channel_post || update.message || {};
+  const text = String(message.text || '').trim();
+  if (!text.toLowerCase().startsWith('/connect ')) return null;
+
+  const code = text.split(/\s+/)[1] || '';
+  const decoded = await verifyTelegramConnectCode(code);
+  if (!decoded?.user_id) {
+    return {
+      ok: false,
+      action: 'connect',
+      platform: 'Telegram',
+      error: 'Invalid or expired Telegram connect code.',
+      update_id: update.update_id || null,
+    };
+  }
+
+  const chat = message.chat || {};
+  const chatId = normalizeTelegramChatId(chat.id || chat.username || '');
+  const accountName = chat.title || chat.username || chatId || 'Telegram Channel';
+  if (!chatId) {
+    return {
+      ok: false,
+      action: 'connect',
+      platform: 'Telegram',
+      error: 'Unable to resolve Telegram chat id from webhook message.',
+      update_id: update.update_id || null,
+    };
+  }
+
+  const result = await connectTelegram(client, decoded.user_id, {
+    chat_id: chatId,
+    account_name: accountName,
+  });
+
+  return {
+    ok: true,
+    action: 'connect',
+    platform: 'Telegram',
+    update_id: update.update_id || null,
+    connection_id: result.connection_id,
+    account: result.account,
+    token_exposed: false,
   };
 }
 
@@ -656,6 +1468,16 @@ function buildCampaignPublishUrl(task: Record<string, any>) {
   return String(task.campaign_links?.url || '').trim();
 }
 
+function buildTelegramMessageUrl(message: Record<string, any>) {
+  const messageId = message.message_id;
+  const chat = message.chat || {};
+  if (!messageId || !chat) return null;
+  if (chat.username) return `https://t.me/${chat.username}/${messageId}`;
+  const chatId = String(chat.id || '');
+  if (chatId.startsWith('-100')) return `https://t.me/c/${chatId.slice(4)}/${messageId}`;
+  return null;
+}
+
 function sanitizeTelegramMessage(message: Record<string, any>) {
   return {
     message_id: message.message_id || null,
@@ -665,6 +1487,69 @@ function sanitizeTelegramMessage(message: Record<string, any>) {
     forwards: message.forwards || 0,
     reactions: message.reactions || null,
   };
+}
+
+function sanitizeTelegramChat(chat: Record<string, any>) {
+  return {
+    id: chat.id || null,
+    title: chat.title || null,
+    username: chat.username || null,
+    type: chat.type || null,
+  };
+}
+
+async function createTelegramConnectCode(userId: string) {
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  const payload = base64UrlEncode(JSON.stringify({
+    user_id: userId,
+    nonce: crypto.randomUUID(),
+    expires_at: expiresAt,
+  }));
+  const signature = await hmacSha256(payload, getTelegramConnectSecret());
+  return {
+    code: `${payload}.${signature}`,
+    expires_at: expiresAt,
+  };
+}
+
+async function verifyTelegramConnectCode(code: string) {
+  const [payload, signature] = String(code || '').split('.');
+  if (!payload || !signature) return null;
+  const expected = await hmacSha256(payload, getTelegramConnectSecret());
+  if (signature !== expected) return null;
+
+  const decoded = JSON.parse(base64UrlDecode(payload));
+  if (!decoded?.expires_at || new Date(decoded.expires_at).getTime() < Date.now()) return null;
+  return decoded;
+}
+
+function getTelegramConnectSecret() {
+  const secret = Deno.env.get('TELEGRAM_CONNECT_SECRET') || Deno.env.get('TELEGRAM_WEBHOOK_SECRET') || '';
+  if (!secret) throw new Error('Missing TELEGRAM_CONNECT_SECRET or TELEGRAM_WEBHOOK_SECRET in Edge Function secrets.');
+  return secret;
+}
+
+async function hmacSha256(payload: string, secret: string) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  return base64UrlEncode(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+function base64UrlEncode(value: string) {
+  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  return atob(padded);
 }
 
 function normalizeTelegramChatId(value: unknown) {

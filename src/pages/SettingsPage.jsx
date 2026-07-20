@@ -2,14 +2,24 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StatusBadge } from '../components/StatusBadge';
 import { StatCard } from '../components/StatCard';
 import { platforms } from '../data/navigation';
-import { connectTelegramPlatform, listPlatformConnections, summarizeConnections } from '../services/platform-connection-service';
+import {
+  connectTelegramPlatform,
+  connectXPlatform,
+  disconnectTelegramPlatform,
+  disconnectXPlatform,
+  getTelegramPlatformStatus,
+  getXPlatformStatus,
+  listPlatformConnections,
+  reconnectTelegramPlatform,
+  reconnectXPlatform,
+  summarizeConnections,
+} from '../services/platform-connection-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 
 const initialTelegramForm = {
   account_name: '',
   chat_id: '',
-  bot_token: '',
 };
 
 export function SettingsPage({ userId }) {
@@ -45,7 +55,81 @@ export function SettingsPage({ userId }) {
     try {
       const result = await connectTelegramPlatform(telegramForm);
       setTelegramForm(initialTelegramForm);
-      setMessage(`Telegram 已连接：${result.bot?.username ? `@${result.bot.username}` : result.account?.account_name}`);
+      if (result.mode === 'telegram_connect_code') {
+        setMessage(`请在 Telegram 频道/群里发送：${result.instruction}`);
+      } else {
+        setMessage(`Telegram 已连接：${result.bot?.username ? `@${result.bot.username}` : result.account?.account_name}`);
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleConnectionAction(action, connection) {
+    setMessage('');
+    setLoading(true);
+    try {
+      if (action === 'disconnect') {
+        await disconnectTelegramPlatform(connection.id);
+        setMessage('Telegram 连接已断开。');
+      }
+      if (action === 'reconnect') {
+        await reconnectTelegramPlatform(connection.id);
+        setMessage('Telegram 已重新连接。');
+      }
+      if (action === 'status') {
+        const result = await getTelegramPlatformStatus(connection.id);
+        const status = result.connections?.[0]?.status || connection.status;
+        setMessage(`Telegram 当前状态：${status}`);
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleXConnect() {
+    setMessage('');
+    setLoading(true);
+    try {
+      const result = await connectXPlatform();
+      if (result.auth_url) {
+        window.open(result.auth_url, 'ai-marketing-studio-x-oauth', 'width=760,height=820');
+        setMessage('已打开 X 授权窗口。授权完成后请刷新平台连接状态。');
+      } else {
+        setMessage('X OAuth 初始化完成，但没有返回授权地址。');
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleXConnectionAction(action, connection) {
+    setMessage('');
+    setLoading(true);
+    try {
+      if (action === 'disconnect') {
+        await disconnectXPlatform(connection.id);
+        setMessage('X 连接已断开。');
+      }
+      if (action === 'reconnect') {
+        const result = await reconnectXPlatform(connection.id);
+        if (result.auth_url) window.open(result.auth_url, 'ai-marketing-studio-x-oauth', 'width=760,height=820');
+        setMessage('已打开 X 重新授权窗口。');
+      }
+      if (action === 'status') {
+        const result = await getXPlatformStatus(connection.id);
+        const status = result.connections?.[0]?.status || connection.status;
+        setMessage(`X 当前状态：${status}`);
+      }
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -60,7 +144,7 @@ export function SettingsPage({ userId }) {
         <div>
           <p className="eyebrow">Settings</p>
           <h2>设置</h2>
-          <p>集中管理基础配置和平台连接状态。敏感 token 不读取、不展示；Telegram Bot Token 只提交给 Supabase Edge Function 写入凭证表。</p>
+          <p>集中管理基础配置和平台连接状态。敏感 Token 不进入前端；Telegram Bot Token 只保存在 Supabase Edge Function Secrets。</p>
         </div>
       </div>
 
@@ -82,7 +166,7 @@ export function SettingsPage({ userId }) {
       <form className="form-card" onSubmit={handleTelegramConnect}>
         <p className="eyebrow">Telegram Bot</p>
         <h3>连接 Telegram 发布账号</h3>
-        <p className="muted-text">需要先把 Bot 加为频道/群管理员。chat_id 可填频道用户名，例如 @your_channel；也可填 -100 开头的频道 ID。</p>
+        <p className="muted-text">需要先把 Bot 加为频道/群管理员。chat_id 可填频道用户名，例如 @your_channel；也可填 -100 开头的频道 ID。Bot Token 不在页面输入，由 Edge Function Secret 读取。</p>
         <div className="form-grid">
           <label>
             显示名称
@@ -91,10 +175,6 @@ export function SettingsPage({ userId }) {
           <label>
             Chat ID / 频道用户名
             <input value={telegramForm.chat_id} onChange={(event) => updateTelegramForm('chat_id', event.target.value)} placeholder="@your_channel 或 -100..." required />
-          </label>
-          <label className="wide-field">
-            Bot Token
-            <input type="password" value={telegramForm.bot_token} onChange={(event) => updateTelegramForm('bot_token', event.target.value)} placeholder="123456:ABC..." required />
           </label>
         </div>
         <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId || loading}>
@@ -138,6 +218,39 @@ export function SettingsPage({ userId }) {
                 <span>最后同步</span>
                 <strong>{formatDate(connection?.last_sync)}</strong>
               </div>
+              {platform === 'Telegram' && connection && (
+                <div className="card-actions">
+                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleConnectionAction('status', connection)}>
+                    检查状态
+                  </button>
+                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleConnectionAction('reconnect', connection)}>
+                    重连
+                  </button>
+                  <button type="button" className="ghost-button danger" disabled={loading} onClick={() => handleConnectionAction('disconnect', connection)}>
+                    断开
+                  </button>
+                </div>
+              )}
+              {platform === 'X' && !connection && (
+                <div className="card-actions">
+                  <button type="button" className="ghost-button" disabled={loading || !userId || !isSupabaseConfigured} onClick={handleXConnect}>
+                    连接 X
+                  </button>
+                </div>
+              )}
+              {platform === 'X' && connection && (
+                <div className="card-actions">
+                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleXConnectionAction('status', connection)}>
+                    检查状态
+                  </button>
+                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleXConnectionAction('reconnect', connection)}>
+                    重连
+                  </button>
+                  <button type="button" className="ghost-button danger" disabled={loading} onClick={() => handleXConnectionAction('disconnect', connection)}>
+                    断开
+                  </button>
+                </div>
+              )}
             </article>
           );
         })}

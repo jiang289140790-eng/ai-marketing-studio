@@ -7,10 +7,11 @@ export const navigationItems = [
   { id: 'characters', label: '角色库', icon: '●' },
   { id: 'prompts', label: 'Prompt库', icon: '◇' },
   { id: 'workflows', label: 'Workflow Center', icon: '⚙' },
-  { id: 'agents', label: 'Agent Center', icon: '✧' },
+  { id: 'workflow-test', label: 'Workflow Test', icon: '🧪' },
+  { id: 'agents', label: 'Agent Center', icon: '✦' },
   { id: 'intelligence', label: '内容情报', icon: '●' },
   { id: 'collection', label: '采集中心', icon: '●' },
-  { id: 'automation', label: '自动化中心', icon: '✧' },
+  { id: 'automation', label: '自动化中心', icon: '✦' },
   { id: 'publish', label: '发布中心', icon: '↗' },
   { id: 'performance', label: '效果分析', icon: '↗' },
   { id: 'health', label: '系统健康', icon: '▦' },
@@ -36,6 +37,7 @@ export const agentTypes = [
   { value: 'content_generator', label: '内容生成 Agent' },
   { value: 'asset_generator', label: '素材生成 Agent' },
   { value: 'analysis', label: '分析 Agent' },
+  { value: 'strategy', label: '策略 Agent' },
 ];
 
 export const agentStatuses = [
@@ -48,7 +50,7 @@ export const agentTaskStatuses = ['pending', 'running', 'success', 'failed'];
 
 export const sourceTypes = [
   { value: 'telegram', label: 'Telegram频道' },
-  { value: 'competitor_account', label: '竞争账号' },
+  { value: 'competitor_account', label: '竞品账号' },
   { value: 'channel', label: '频道' },
   { value: 'keyword', label: '关键词' },
   { value: 'hashtag', label: '标签' },
@@ -71,8 +73,7 @@ export const automationJobTypes = [
 ];
 
 export const accountCategories = [
-  { value: 'brand', label: '品牌账号' },
-  { value: 'personal', label: '个人账号' },
+  { value: 'owned', label: '自有账号' },
   { value: 'competitor', label: '竞品账号' },
   { value: 'inspiration', label: '灵感账号' },
 ];

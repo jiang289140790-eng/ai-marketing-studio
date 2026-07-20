@@ -235,6 +235,17 @@ a {
   background: white;
 }
 
+.ghost-button.danger {
+  color: var(--danger);
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 .config-pill,
 .status-badge {
   border-radius: 999px;
@@ -276,6 +287,34 @@ a {
 .status-badge.inactive {
   background: #f8fafc;
   color: #667085;
+}
+
+.connection-cell {
+  display: grid;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.connection-cell small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.connection-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.success-pill {
+  border-radius: 999px;
+  background: #ecfdf3;
+  color: #027a48;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
 }
 
 .page-stack {
@@ -674,6 +713,34 @@ th {
   font-weight: 800;
 }
 
+.account-detail-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.profile-grid section {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--soft);
+  padding: 14px;
+}
+
+.profile-grid h4 {
+  margin: 0 0 8px;
+}
+
+.profile-grid p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .compact-detail {
   margin-top: 12px;
   padding: 14px;
@@ -732,7 +799,8 @@ th {
   .asset-grid,
   .studio-grid,
   .analysis-list,
-  .settings-grid {
+  .settings-grid,
+  .profile-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -757,6 +825,7 @@ th {
   .studio-grid,
   .analysis-list,
   .settings-grid,
+  .profile-grid,
   .timeline-item {
     grid-template-columns: 1fr;
   }

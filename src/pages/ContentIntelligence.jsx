@@ -3,11 +3,10 @@ import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
 import { contentTypes, platforms } from '../data/navigation';
 import {
-  analyzeViralContent,
-  createCompetitorAccount,
+  analyzeViralContentWithAI,
   createViralContent,
-  deleteCompetitorAccount,
   deleteViralContent,
+  generateContentFromAnalysis,
   listCompetitorAccounts,
   listContentAnalysis,
   listViralContents,
@@ -15,20 +14,8 @@ import {
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { compactNumber, formatDate } from '../utils/formatters';
 
-const defaultAccount = {
-  platform: 'Instagram',
-  username: '',
-  url: '',
-  category: '',
-  audience: '',
-  followers: '',
-  content_strategy: '',
-  posting_frequency: '',
-  notes: '',
-};
-
 const defaultViral = {
-  account_id: '',
+  social_account_id: '',
   platform: 'Instagram',
   url: '',
   title: '',
@@ -43,15 +30,25 @@ const defaultViral = {
   published_at: '',
 };
 
+function getAnalysisValue(analysis, key, fallback = '—') {
+  return analysis.analysis_result?.[key] || analysis[key] || fallback;
+}
+
+function getAnalysisScore(analysis) {
+  return Number(analysis.analysis_result?.ai_score || analysis.fit_score || 0).toFixed(0);
+}
+
 export function ContentIntelligence({ userId }) {
   const [accounts, setAccounts] = useState([]);
   const [viralContents, setViralContents] = useState([]);
   const [analyses, setAnalyses] = useState([]);
-  const [accountForm, setAccountForm] = useState(defaultAccount);
   const [viralForm, setViralForm] = useState(defaultViral);
   const [filters, setFilters] = useState({ search: '', platform: '', category: '', accountId: '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [analyzingId, setAnalyzingId] = useState('');
+  const [generatingAnalysisId, setGeneratingAnalysisId] = useState('');
+  const [generatedDraft, setGeneratedDraft] = useState(null);
 
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
@@ -88,24 +85,15 @@ export function ContentIntelligence({ userId }) {
     };
   }, [accounts, viralContents, analyses]);
 
-  function setAccountField(field, value) {
-    setAccountForm((current) => ({ ...current, [field]: value }));
-  }
-
   function setViralField(field, value) {
-    setViralForm((current) => ({ ...current, [field]: value }));
-  }
-
-  async function handleCreateAccount(event) {
-    event.preventDefault();
-    try {
-      await createCompetitorAccount(userId, accountForm);
-      setAccountForm(defaultAccount);
-      setMessage('竞争/灵感账号已保存。');
-      await refresh();
-    } catch (error) {
-      setMessage(error.message);
-    }
+    setViralForm((current) => {
+      const next = { ...current, [field]: value };
+      if (field === 'social_account_id') {
+        const account = accounts.find((item) => item.id === value);
+        if (account?.platform) next.platform = account.platform;
+      }
+      return next;
+    });
   }
 
   async function handleCreateViralContent(event) {
@@ -113,7 +101,7 @@ export function ContentIntelligence({ userId }) {
     try {
       await createViralContent(userId, viralForm);
       setViralForm(defaultViral);
-      setMessage('内容机会已保存。');
+      setMessage('内容机会已保存，并已关联账号矩阵中的账号。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -121,12 +109,30 @@ export function ContentIntelligence({ userId }) {
   }
 
   async function handleAnalyze(item) {
+    setAnalyzingId(item.id);
     try {
-      await analyzeViralContent(userId, item);
-      setMessage('已生成分析：为什么爆、如何复刻、是否适合你的账号。');
+      await analyzeViralContentWithAI(userId, item);
+      setMessage('AI 分析已完成：结果已写入 content_analysis，并关联到账号画像链路。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
+    } finally {
+      setAnalyzingId('');
+    }
+  }
+
+  async function handleGenerateContent(analysis) {
+    setGeneratingAnalysisId(analysis.id);
+    setGeneratedDraft(null);
+    try {
+      const result = await generateContentFromAnalysis(userId, analysis);
+      setGeneratedDraft(result);
+      setMessage('内容生成完成：已写入 content_library，状态为 draft。');
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setGeneratingAnalysisId('');
     }
   }
 
@@ -136,12 +142,12 @@ export function ContentIntelligence({ userId }) {
         <div>
           <p className="eyebrow">Content Intelligence</p>
           <h2>内容情报中心</h2>
-          <p>每天沉淀竞品/灵感账号和高表现内容，让 Analysis Agent 发现内容机会，再进入内容生成。</p>
+          <p>这里不再创建账号。请先在账号矩阵添加竞品/灵感账号，然后在这里选择账号、保存爆款内容、触发 Analysis Agent。</p>
         </div>
       </div>
 
       <div className="stat-grid">
-        <StatCard label="参考账号" value={loading ? '—' : stats.accounts} hint="competitor_accounts" />
+        <StatCard label="情报账号" value={loading ? '—' : stats.accounts} hint="social_accounts: competitor / inspiration" />
         <StatCard label="内容机会" value={loading ? '—' : stats.viral} hint="viral_contents" />
         <StatCard label="AI分析" value={loading ? '—' : stats.analyses} hint="content_analysis" />
         <StatCard label="热门平台" value={loading ? '—' : stats.topPlatform} hint="机会来源" />
@@ -154,33 +160,23 @@ export function ContentIntelligence({ userId }) {
           <option value="">全部平台</option>
           {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
         </select>
-        <input placeholder="分类" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })} />
         <select value={filters.accountId} onChange={(event) => setFilters({ ...filters, accountId: event.target.value })}>
           <option value="">全部账号</option>
-          {accounts.map((account) => <option key={account.id} value={account.id}>{account.username}</option>)}
+          {accounts.map((account) => <option key={account.id} value={account.id}>{account.username || account.account_name} · {account.platform}</option>)}
         </select>
       </div>
 
       <div className="studio-grid">
-        <form className="form-card" onSubmit={handleCreateAccount}>
-          <p className="eyebrow">Competitor / Inspiration</p>
-          <h3>添加参考账号</h3>
-          <label>平台<select value={accountForm.platform} onChange={(event) => setAccountField('platform', event.target.value)}>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
-          <label>用户名<input value={accountForm.username} onChange={(event) => setAccountField('username', event.target.value)} required /></label>
-          <label>URL<input value={accountForm.url} onChange={(event) => setAccountField('url', event.target.value)} /></label>
-          <label>分类<input value={accountForm.category} onChange={(event) => setAccountField('category', event.target.value)} placeholder="竞品 / 灵感 / 同赛道" /></label>
-          <label>受众<input value={accountForm.audience} onChange={(event) => setAccountField('audience', event.target.value)} /></label>
-          <label>粉丝数<input type="number" value={accountForm.followers} onChange={(event) => setAccountField('followers', event.target.value)} /></label>
-          <label>内容策略<textarea value={accountForm.content_strategy} onChange={(event) => setAccountField('content_strategy', event.target.value)} /></label>
-          <label>发布频率<input value={accountForm.posting_frequency} onChange={(event) => setAccountField('posting_frequency', event.target.value)} /></label>
-          <label>备注<textarea value={accountForm.notes} onChange={(event) => setAccountField('notes', event.target.value)} /></label>
-          <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId}>保存账号</button>
-        </form>
-
         <form className="form-card" onSubmit={handleCreateViralContent}>
           <p className="eyebrow">Content Opportunity</p>
           <h3>保存内容机会</h3>
-          <label>参考账号<select value={viralForm.account_id} onChange={(event) => setViralField('account_id', event.target.value)}><option value="">不关联账号</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.username} · {account.platform}</option>)}</select></label>
+          <label>
+            来源账号
+            <select value={viralForm.social_account_id} onChange={(event) => setViralField('social_account_id', event.target.value)} required>
+              <option value="">从账号矩阵选择账号</option>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.username || account.account_name} · {account.platform}</option>)}
+            </select>
+          </label>
           <label>平台<select value={viralForm.platform} onChange={(event) => setViralField('platform', event.target.value)}>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
           <label>内容类型<select value={viralForm.content_type} onChange={(event) => setViralField('content_type', event.target.value)}>{contentTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
           <label>标题<input value={viralForm.title} onChange={(event) => setViralField('title', event.target.value)} required /></label>
@@ -197,21 +193,46 @@ export function ContentIntelligence({ userId }) {
           <label>正文<textarea value={viralForm.content_text} onChange={(event) => setViralField('content_text', event.target.value)} /></label>
           <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId}>保存内容机会</button>
         </form>
+
+        <article className="form-card">
+          <p className="eyebrow">Account Source of Truth</p>
+          <h3>账号从哪里来？</h3>
+          <p>内容情报只消费账号矩阵中的 social_accounts。新增竞品号、灵感号，请回到“账号矩阵”添加，避免重复账号和分析数据分裂。</p>
+          <div className="tag-row">
+            <span className="tag">social_accounts</span>
+            <span className="tag">account_profiles</span>
+            <span className="tag">Analysis Agent</span>
+          </div>
+        </article>
       </div>
 
       {message && <div className="notice">{message}</div>}
 
+      {generatedDraft && (
+        <article className="analysis-card">
+          <div className="card-meta">
+            <span className="tag">Content Generation Agent</span>
+            <span>{generatedDraft.model || 'deepseek-chat'}</span>
+            <span>成本 {Number(generatedDraft.cost || 0).toFixed(6)}</span>
+            <span>耗时 {Number(generatedDraft.duration || 0)}ms</span>
+          </div>
+          <h3>{generatedDraft.content?.title || generatedDraft.generated?.title || 'AI 内容草稿'}</h3>
+          <p>{generatedDraft.generated?.body || generatedDraft.content?.content_text || ''}</p>
+          {generatedDraft.generated?.cta && <p><strong>CTA：</strong>{generatedDraft.generated.cta}</p>}
+        </article>
+      )}
+
       {!isSupabaseConfigured ? (
         <EmptyState title="等待 Supabase 配置" description="配置后这里会读取内容情报数据。" />
       ) : viralContents.length === 0 ? (
-        <EmptyState title="暂无内容机会" description="先保存一个参考账号，再把值得学习的内容放进内容机会库。" />
+        <EmptyState title="暂无内容机会" description="先在账号矩阵添加竞品/灵感账号，再保存值得学习的内容。" />
       ) : (
         <div className="analysis-list">
           {viralContents.map((item) => (
             <article className="analysis-card" key={item.id}>
               <div className="card-meta">
                 <span className="tag">{item.platform}</span>
-                <span>{item.competitor_accounts?.username || '未关联账号'}</span>
+                <span>{item.social_accounts?.username || item.social_accounts?.account_name || '未关联账号'}</span>
                 <span>{formatDate(item.published_at)}</span>
               </div>
               <h3>{item.title}</h3>
@@ -224,59 +245,42 @@ export function ContentIntelligence({ userId }) {
                 <span>Comments {compactNumber(item.comments)}</span>
               </div>
               <p><strong>为什么爆：</strong>{item.viral_reason || '待分析'}</p>
-              <p><strong>AI建议：</strong>{item.ai_recommendation || '点击生成分析后补全'}</p>
+              <p><strong>AI建议：</strong>{item.ai_recommendation || '点击 AI分析 后补全'}</p>
               <div className="status-actions">
                 {item.url && <a className="ghost-button" href={item.url} target="_blank" rel="noreferrer">打开内容</a>}
-                <button type="button" onClick={() => handleAnalyze(item)}>生成分析</button>
-                <button type="button" onClick={() => deleteViralContent(item.id).then(refresh)}>删除</button>
+                <button type="button" onClick={() => handleAnalyze(item)} disabled={analyzingId === item.id}>
+                  {analyzingId === item.id ? 'AI分析中...' : 'AI分析'}
+                </button>
+                <button type="button" onClick={() => deleteViralContent(item.id).then(refresh)}>删除内容</button>
               </div>
             </article>
           ))}
         </div>
       )}
 
-      <div className="table-card">
-        <table>
-          <thead>
-            <tr>
-              <th>分析对象</th>
-              <th>为什么爆</th>
-              <th>是否适合我</th>
-              <th>适合度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {analyses.slice(0, 10).map((analysis) => (
-              <tr key={analysis.id}>
-                <td>{analysis.viral_contents?.title || '未关联内容'}</td>
-                <td>{analysis.viral_reason || analysis.hook || '—'}</td>
-                <td>{analysis.ai_recommendation || '—'}</td>
-                <td>{Number(analysis.fit_score || 0).toFixed(0)}</td>
-              </tr>
-            ))}
-            {analyses.length === 0 && <tr><td colSpan="4">暂无 AI 分析</td></tr>}
-          </tbody>
-        </table>
-      </div>
-
-      {accounts.length > 0 && (
-        <div className="content-grid">
-          {accounts.map((account) => (
-            <article className="content-card" key={account.id}>
+      {analyses.length > 0 && (
+        <div className="analysis-list">
+          {analyses.slice(0, 6).map((analysis) => (
+            <article className="analysis-card" key={analysis.id}>
               <div className="card-meta">
-                <span className="tag">{account.platform}</span>
-                <span className="tag">{account.category || '未分类'}</span>
+                <span className="tag">{analysis.provider || 'AI Gateway'}</span>
+                <span>{analysis.model || 'deepseek-chat'}</span>
+                <span>成本 {Number(analysis.cost || 0).toFixed(6)}</span>
+                <span>耗时 {Number(analysis.duration_ms || 0)}ms</span>
               </div>
-              <h3>{account.username}</h3>
-              <p>{account.audience || account.notes || '暂无受众与备注'}</p>
-              <p>{account.content_strategy || '暂无内容策略'}</p>
+              <h3>{analysis.viral_contents?.title || 'AI 内容分析'}</h3>
+              <p><strong>爆款原因：</strong>{getAnalysisValue(analysis, 'viral_reason')}</p>
+              <p><strong>内容结构：</strong>{getAnalysisValue(analysis, 'structure')}</p>
+              <p><strong>用户心理：</strong>{getAnalysisValue(analysis, 'user_psychology')}</p>
+              <p><strong>复刻建议：</strong>{getAnalysisValue(analysis, 'replication_notes', analysis.recommendation || analysis.ai_recommendation || '—')}</p>
               <div className="metric-row">
-                <span>粉丝</span>
-                <strong>{compactNumber(account.followers)}</strong>
+                <span>AI评分</span>
+                <strong>{getAnalysisScore(analysis)}</strong>
               </div>
               <div className="status-actions">
-                {account.url && <a className="ghost-button" href={account.url} target="_blank" rel="noreferrer">打开账号</a>}
-                <button type="button" onClick={() => deleteCompetitorAccount(account.id).then(refresh)}>删除</button>
+                <button type="button" onClick={() => handleGenerateContent(analysis)} disabled={generatingAnalysisId === analysis.id}>
+                  {generatingAnalysisId === analysis.id ? '内容生成中...' : '根据分析生成内容'}
+                </button>
               </div>
             </article>
           ))}

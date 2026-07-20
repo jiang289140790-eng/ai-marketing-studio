@@ -1,6 +1,6 @@
 import { requireSupabase } from './supabase-client';
 
-const connectionSelect = '*, social_accounts(account_name,account_url,avatar,status)';
+const connectionSelect = '*, social_accounts(account_name,account_url,avatar,status,api_status)';
 
 export async function listPlatformConnections(userId, filters = {}) {
   const client = requireSupabase();
@@ -51,14 +51,65 @@ export async function updatePlatformConnection(id, payload) {
 }
 
 export async function connectTelegramPlatform(payload) {
+  return invokeTelegramConnectionAction('connect', {
+    chat_id: payload.chat_id,
+    account_name: payload.account_name,
+  });
+}
+
+export async function reconnectTelegramPlatform(connectionId, payload = {}) {
+  return invokeTelegramConnectionAction('reconnect', {
+    connection_id: connectionId,
+    chat_id: payload.chat_id,
+    account_name: payload.account_name,
+  });
+}
+
+export async function disconnectTelegramPlatform(connectionId) {
+  return invokeTelegramConnectionAction('disconnect', {
+    connection_id: connectionId,
+  });
+}
+
+export async function getTelegramPlatformStatus(connectionId) {
+  return invokeTelegramConnectionAction('status', {
+    connection_id: connectionId,
+  });
+}
+
+export async function connectXPlatform(payload = {}) {
+  return invokePlatformConnectionAction('X', 'connect', payload);
+}
+
+export async function reconnectXPlatform(connectionId) {
+  return invokePlatformConnectionAction('X', 'reconnect', {
+    connection_id: connectionId,
+  });
+}
+
+export async function disconnectXPlatform(connectionId) {
+  return invokePlatformConnectionAction('X', 'disconnect', {
+    connection_id: connectionId,
+  });
+}
+
+export async function getXPlatformStatus(connectionId) {
+  return invokePlatformConnectionAction('X', 'status', {
+    connection_id: connectionId,
+  });
+}
+
+async function invokeTelegramConnectionAction(action, payload = {}) {
+  return invokePlatformConnectionAction('Telegram', action, payload);
+}
+
+async function invokePlatformConnectionAction(platform, action, payload = {}) {
   const client = requireSupabase();
   const { data, error } = await client.functions.invoke('platform', {
     body: {
-      platform: 'Telegram',
-      action: 'connect',
-      bot_token: payload.bot_token,
-      chat_id: payload.chat_id,
-      account_name: payload.account_name,
+      platform,
+      action,
+      ...Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined && value !== '')),
     },
   });
 

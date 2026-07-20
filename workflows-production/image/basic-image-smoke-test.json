@@ -1,0 +1,140 @@
+{
+  "_registry": {
+    "name": "Basic Image Smoke Test",
+    "version": "1.0.0",
+    "category": "character_generation",
+    "mode": "image",
+    "checkpoint": "sd_xl_base_1.0.safetensors",
+    "lora": [],
+    "controlnet": [],
+    "required_inputs": [
+      "positive_prompt",
+      "negative_prompt",
+      "seed",
+      "width",
+      "height"
+    ],
+    "node_mapping": {
+      "positive_prompt": { "node_id": "6", "input": "text" },
+      "negative_prompt": { "node_id": "7", "input": "text" },
+      "seed": { "node_id": "3", "input": "seed" },
+      "steps": { "node_id": "3", "input": "steps" },
+      "cfg": { "node_id": "3", "input": "cfg" },
+      "width": { "node_id": "5", "input": "width" },
+      "height": { "node_id": "5", "input": "height" },
+      "checkpoint": { "node_id": "4", "input": "ckpt_name" }
+    },
+    "status": "active",
+    "priority": 20,
+    "tags": [
+      "image",
+      "smoke-test",
+      "sdxl"
+    ]
+  },
+  "3": {
+    "inputs": {
+      "seed": 123456789,
+      "steps": 24,
+      "cfg": 7,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "5": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "portrait photo of an AI creator character, cinematic lighting, highly detailed",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "low quality, blurry, distorted, extra fingers, bad anatomy",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ai-marketing-studio/basic-image-smoke-test",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

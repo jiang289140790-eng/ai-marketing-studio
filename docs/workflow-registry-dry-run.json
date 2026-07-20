@@ -1,0 +1,267 @@
+{
+  "scanned_directories": [
+    "workflows-production"
+  ],
+  "scanned_files": 1,
+  "parsed_workflows": 1,
+  "recommended_workflows": 1,
+  "categories": {
+    "character_generation": 1
+  },
+  "workflows": [
+    {
+      "source_file": "workflows-production/image/basic-image-smoke-test.json",
+      "name": "Basic Image Smoke Test",
+      "version": "1.0.0",
+      "description": "Imported from basic-image-smoke-test.json by ComfyUI Workflow Registry.",
+      "category": "character_generation",
+      "mode": "image",
+      "model": "SDXL",
+      "checkpoint": "sd_xl_base_1.0.safetensors",
+      "loras": [],
+      "controlnets": [],
+      "workflow_json": {
+        "3": {
+          "inputs": {
+            "seed": 123456789,
+            "steps": 24,
+            "cfg": 7,
+            "sampler_name": "dpmpp_2m",
+            "scheduler": "karras",
+            "denoise": 1,
+            "model": [
+              "4",
+              0
+            ],
+            "positive": [
+              "6",
+              0
+            ],
+            "negative": [
+              "7",
+              0
+            ],
+            "latent_image": [
+              "5",
+              0
+            ]
+          },
+          "class_type": "KSampler",
+          "_meta": {
+            "title": "KSampler"
+          }
+        },
+        "4": {
+          "inputs": {
+            "ckpt_name": "sd_xl_base_1.0.safetensors"
+          },
+          "class_type": "CheckpointLoaderSimple",
+          "_meta": {
+            "title": "Load Checkpoint"
+          }
+        },
+        "5": {
+          "inputs": {
+            "width": 1024,
+            "height": 1024,
+            "batch_size": 1
+          },
+          "class_type": "EmptyLatentImage",
+          "_meta": {
+            "title": "Empty Latent Image"
+          }
+        },
+        "6": {
+          "inputs": {
+            "text": "portrait photo of an AI creator character, cinematic lighting, highly detailed",
+            "clip": [
+              "4",
+              1
+            ]
+          },
+          "class_type": "CLIPTextEncode",
+          "_meta": {
+            "title": "Positive Prompt"
+          }
+        },
+        "7": {
+          "inputs": {
+            "text": "low quality, blurry, distorted, extra fingers, bad anatomy",
+            "clip": [
+              "4",
+              1
+            ]
+          },
+          "class_type": "CLIPTextEncode",
+          "_meta": {
+            "title": "Negative Prompt"
+          }
+        },
+        "8": {
+          "inputs": {
+            "samples": [
+              "3",
+              0
+            ],
+            "vae": [
+              "4",
+              2
+            ]
+          },
+          "class_type": "VAEDecode",
+          "_meta": {
+            "title": "VAE Decode"
+          }
+        },
+        "9": {
+          "inputs": {
+            "filename_prefix": "ai-marketing-studio/basic-image-smoke-test",
+            "images": [
+              "8",
+              0
+            ]
+          },
+          "class_type": "SaveImage",
+          "_meta": {
+            "title": "Save Image"
+          }
+        }
+      },
+      "input_schema": {
+        "category": "character_generation",
+        "schema_version": "1.0",
+        "properties": {
+          "positive_prompt": {
+            "type": "string",
+            "required": true
+          },
+          "negative_prompt": {
+            "type": "string",
+            "required": true
+          },
+          "seed": {
+            "type": "number",
+            "required": true
+          },
+          "width": {
+            "type": "number",
+            "required": true
+          },
+          "height": {
+            "type": "number",
+            "required": true
+          },
+          "steps": {
+            "type": "number",
+            "required": false
+          },
+          "cfg": {
+            "type": "number",
+            "required": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "image"
+      },
+      "node_mappings": {
+        "positive_prompt": {
+          "node_id": "6",
+          "input": "text"
+        },
+        "negative_prompt": {
+          "node_id": "7",
+          "input": "text"
+        },
+        "seed": {
+          "node_id": "3",
+          "input": "seed"
+        },
+        "steps": {
+          "node_id": "3",
+          "input": "steps"
+        },
+        "cfg": {
+          "node_id": "3",
+          "input": "cfg"
+        },
+        "width": {
+          "node_id": "5",
+          "input": "width"
+        },
+        "height": {
+          "node_id": "5",
+          "input": "height"
+        },
+        "checkpoint": {
+          "node_id": "4",
+          "input": "ckpt_name"
+        }
+      },
+      "detected_nodes": {
+        "total": 7,
+        "class_counts": {
+          "KSampler": 1,
+          "CheckpointLoaderSimple": 1,
+          "EmptyLatentImage": 1,
+          "CLIPTextEncode": 2,
+          "VAEDecode": 1,
+          "SaveImage": 1
+        },
+        "key_nodes": [
+          {
+            "id": "3",
+            "class_type": "KSampler",
+            "title": "KSampler"
+          },
+          {
+            "id": "4",
+            "class_type": "CheckpointLoaderSimple",
+            "title": "Load Checkpoint"
+          },
+          {
+            "id": "6",
+            "class_type": "CLIPTextEncode",
+            "title": "Positive Prompt"
+          },
+          {
+            "id": "7",
+            "class_type": "CLIPTextEncode",
+            "title": "Negative Prompt"
+          },
+          {
+            "id": "8",
+            "class_type": "VAEDecode",
+            "title": "VAE Decode"
+          },
+          {
+            "id": "9",
+            "class_type": "SaveImage",
+            "title": "Save Image"
+          }
+        ]
+      },
+      "detected_models": {
+        "model": "SDXL",
+        "checkpoint": "sd_xl_base_1.0.safetensors",
+        "checkpoints": [
+          "sd_xl_base_1.0.safetensors"
+        ],
+        "unets": [],
+        "loras": [],
+        "controlnets": []
+      },
+      "tags": [
+        "image",
+        "smoke-test",
+        "sdxl",
+        "character_generation",
+        "portrait"
+      ],
+      "priority": 20,
+      "status": "active",
+      "recommended": true
+    }
+  ],
+  "errors": []
+}

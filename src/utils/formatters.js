@@ -72,6 +72,8 @@ export function statusLabel(status) {
     workflow: 'Workflow',
     platform: '平台任务',
     publish: '发布任务',
+    strategy: '策略 Agent',
+    owned: '自有账号',
     brand: '品牌账号',
     personal: '个人账号',
     competitor: '竞品账号',

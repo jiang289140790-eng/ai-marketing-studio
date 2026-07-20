@@ -4,7 +4,7 @@ This function is the server-side boundary for social platform operations.
 
 It is responsible for:
 
-- reading provider credentials from `platform_credentials`;
+- reading provider credentials from Edge Function secrets and private `platform_credentials` references;
 - calling provider APIs;
 - returning sanitized results to the app;
 - never returning access tokens or refresh tokens to the frontend.
@@ -12,6 +12,9 @@ It is responsible for:
 ## Implemented now
 
 - Telegram `connect`
+- Telegram `disconnect`
+- Telegram `reconnect`
+- Telegram `status`
 - Telegram `publish`
 - Telegram `getMetrics`
 
@@ -21,12 +24,15 @@ Telegram publishing uses Bot API methods such as `sendMessage`, `sendPhoto`, and
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `TELEGRAM_BOT_TOKEN` or `TELEGRAM_ADMIN_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_URL`
 - `TELEGRAM_WEBHOOK_SECRET`
+- `TELEGRAM_CONNECT_SECRET` optional; falls back to `TELEGRAM_WEBHOOK_SECRET`
 - `TELEGRAM_TRACKING_BASE_URL` or `PLATFORM_FUNCTION_URL`
 - `TRACKING_EVENT_SECRET`
 
 Do not put the service role key into frontend `.env` files or GitHub Pages client builds.
+Do not put the Telegram bot token into frontend `.env` files, GitHub Pages secrets, or browser requests.
 
 ## Current metrics limitation
 

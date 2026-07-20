@@ -6,8 +6,8 @@ import {
   sanitizeHttpHeaderValue,
 } from '../utils/safe-headers';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+export const supabaseUrl = cleanEnvValue(import.meta.env.VITE_SUPABASE_URL);
+export const supabaseAnonKey = cleanEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY);
 const authStorageKey = 'ai-marketing-studio-auth-session';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
@@ -75,4 +75,11 @@ export function requireSupabase() {
   }
 
   return supabase;
+}
+
+function cleanEnvValue(value) {
+  return String(value ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u200B-\u200D\u2060]/g, '')
+    .trim();
 }

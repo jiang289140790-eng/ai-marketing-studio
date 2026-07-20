@@ -1,9 +1,13 @@
 import { createAuditLog } from './stability-service';
-import { fetchWithSafeHeaders, requireSupabase, sanitizeHttpHeaderValue } from './supabase-client';
+import {
+  fetchWithSafeHeaders,
+  requireSupabase,
+  sanitizeHttpHeaderValue,
+  supabaseAnonKey,
+  supabaseUrl,
+} from './supabase-client';
 
 const BUCKET = 'marketing-assets';
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export async function listAssets(userId) {
   const client = requireSupabase();

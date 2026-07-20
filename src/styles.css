@@ -208,14 +208,19 @@ a {
 }
 
 .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--dark);
   color: white;
 }
 
 .primary-button:disabled,
-.upload-box:has(input:disabled) {
+.upload-box:has(input:disabled),
+.disabled-link {
   cursor: not-allowed;
   opacity: 0.45;
+  pointer-events: none;
 }
 
 .ghost-button {

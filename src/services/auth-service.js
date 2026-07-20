@@ -1,4 +1,4 @@
-import { requireSupabase } from './supabase-client';
+import { requireSupabase, supabaseProjectUrl } from './supabase-client';
 
 export async function getCurrentSession() {
   const client = requireSupabase();
@@ -107,7 +107,23 @@ export function onAuthStateChange(callback) {
   return () => data.subscription.unsubscribe();
 }
 
+export function getGitHubLoginUrl() {
+  if (!supabaseProjectUrl) return '';
+
+  const redirectTo = `${window.location.origin}${window.location.pathname}`;
+  const url = new window.URL('/auth/v1/authorize', supabaseProjectUrl);
+  url.searchParams.set('provider', 'github');
+  url.searchParams.set('redirect_to', redirectTo);
+  return url.toString();
+}
+
 export async function signInWithGitHub() {
+  const loginUrl = getGitHubLoginUrl();
+  if (loginUrl) {
+    window.location.assign(loginUrl);
+    return;
+  }
+
   const client = requireSupabase();
   const { data, error } = await client.auth.signInWithOAuth({
     provider: 'github',

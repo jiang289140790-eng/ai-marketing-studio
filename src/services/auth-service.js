@@ -107,7 +107,7 @@ export function onAuthStateChange(callback) {
   return () => data.subscription.unsubscribe();
 }
 
-export async function signInWithGitHub() {
+export async function createGitHubSignInUrl() {
   const client = requireSupabase();
   const { data, error } = await client.auth.signInWithOAuth({
     provider: 'github',
@@ -119,7 +119,13 @@ export async function signInWithGitHub() {
   if (error) throw error;
   if (!data?.url) throw new Error('GitHub 登录地址生成失败，请检查 Supabase GitHub Provider 配置。');
 
-  window.location.assign(data.url);
+  return data.url;
+}
+
+export async function signInWithGitHub() {
+  const url = await createGitHubSignInUrl();
+  window.location.assign(url);
+  return url;
 }
 
 export async function signOut() {

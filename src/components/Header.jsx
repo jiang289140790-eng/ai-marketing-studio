@@ -1,20 +1,29 @@
 import { useState } from 'react';
-import { signInWithGitHub, signOut } from '../services/auth-service';
+import { createGitHubSignInUrl, signOut } from '../services/auth-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
 export function Header({ session, profile, title }) {
   const user = session?.user;
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState('');
+  const [authUrl, setAuthUrl] = useState('');
   const displayName = profile?.username || user?.user_metadata?.user_name || user?.user_metadata?.preferred_username || user?.email;
   const avatarUrl = profile?.avatar_url || user?.user_metadata?.avatar_url;
 
   async function handleGitHubSignIn() {
     setSignInError('');
+    setAuthUrl('');
     setIsSigningIn(true);
 
     try {
-      await signInWithGitHub();
+      const nextUrl = await createGitHubSignInUrl();
+      setAuthUrl(nextUrl);
+      window.location.assign(nextUrl);
+
+      window.setTimeout(() => {
+        setIsSigningIn(false);
+        setSignInError('如果页面没有自动跳转，请点击下面的“继续 GitHub 授权”。');
+      }, 1800);
     } catch (error) {
       setIsSigningIn(false);
       setSignInError(error.message || 'GitHub 登录启动失败，请稍后重试。');
@@ -49,6 +58,11 @@ export function Header({ session, profile, title }) {
             <button className="primary-button" type="button" onClick={handleGitHubSignIn} disabled={!isSupabaseConfigured || isSigningIn}>
               {isSigningIn ? '正在跳转…' : 'GitHub 登录'}
             </button>
+            {authUrl && (
+              <a className="auth-fallback-link" href={authUrl}>
+                继续 GitHub 授权
+              </a>
+            )}
             {signInError && <span className="inline-error">{signInError}</span>}
           </div>
         )}

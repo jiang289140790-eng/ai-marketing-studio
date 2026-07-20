@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { createGitHubSignInUrl, initializeAuthSession, signOut, upsertProfile } from '../services/auth-service';
+import { createGitHubSignInUrl, signOut, upsertProfile } from '../services/auth-service';
 import { isSupabaseConfigured, supabase } from '../services/supabase-client';
 import { AuthContext } from './auth-context';
 
@@ -9,25 +9,6 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [error, setError] = useState('');
   const [authUrl, setAuthUrl] = useState('');
-
-  const syncProfile = useCallback(async (user) => {
-    if (!user) {
-      setProfile(null);
-      return;
-    }
-
-    try {
-      setProfile(await upsertProfile(user));
-    } catch (profileError) {
-      console.warn('Profile sync failed; continuing with auth session.', profileError);
-      setProfile(null);
-    }
-  }, []);
-
-  const applySession = useCallback(async (nextSession) => {
-    setSession(nextSession);
-    await syncProfile(nextSession?.user);
-  }, [syncProfile]);
 
   const loginWithGitHub = useCallback(async () => {
     setError('');
@@ -41,8 +22,9 @@ export function AuthProvider({ children }) {
     setError('');
     setAuthUrl('');
     await signOut();
-    await applySession(null);
-  }, [applySession]);
+    setSession(null);
+    setProfile(null);
+  }, []);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
@@ -52,41 +34,65 @@ export function AuthProvider({ children }) {
 
     let mounted = true;
 
-    async function bootAuth() {
+    async function restoreSession() {
       setLoading(true);
       setError('');
 
       try {
-        const callbackSession = await initializeAuthSession();
         const { data, error: sessionError } = await supabase.auth.getSession();
         if (sessionError) throw sessionError;
-
-        if (!mounted) return;
-        await applySession(callbackSession || data.session);
+        if (mounted) setSession(data.session);
       } catch (authError) {
-        if (!mounted) return;
-        setError(authError.message || '登录状态初始化失败。');
-        await applySession(null);
+        if (mounted) {
+          setError(authError.message || '登录状态恢复失败。');
+          setSession(null);
+        }
       } finally {
         if (mounted) setLoading(false);
       }
     }
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
       setError('');
       setAuthUrl('');
-      await applySession(nextSession);
+      setSession(nextSession);
       setLoading(false);
+
+      if (event === 'SIGNED_OUT') {
+        setProfile(null);
+      }
     });
 
-    bootAuth();
+    restoreSession();
 
     return () => {
       mounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [applySession]);
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user) {
+      setProfile(null);
+      return undefined;
+    }
+
+    let mounted = true;
+
+    upsertProfile(session.user)
+      .then((nextProfile) => {
+        if (mounted) setProfile(nextProfile);
+      })
+      .catch((profileError) => {
+        console.warn('Profile sync failed; continuing with auth session.', profileError);
+        if (mounted) setProfile(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [session]);
 
   const value = useMemo(
     () => ({

@@ -7,32 +7,6 @@ export async function getCurrentSession() {
   return data.session;
 }
 
-function isCorruptedAuthStorageError(error) {
-  return String(error?.message || error).includes('non ISO-8859-1 code point');
-}
-
-function isRecoverableAuthCallbackError(error) {
-  const message = String(error?.message || error);
-  return message.includes('PKCE code verifier not found') || message.includes('invalid request: both auth code and code verifier should be non-empty');
-}
-
-export function resetStoredAuthSession() {
-  if (typeof window === 'undefined') return;
-
-  const storageKeys = [];
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
-    if (!key) continue;
-    if (key.includes('supabase') || key.includes('sb-') || key.includes('qtrlymiqohbjvklwegsw')) {
-      storageKeys.push(key);
-    }
-  }
-
-  storageKeys.forEach((key) => window.localStorage.removeItem(key));
-  window.sessionStorage.clear();
-  cleanAuthParamsFromUrl();
-}
-
 function cleanAuthParamsFromUrl() {
   const cleanUrl = new window.URL(window.location.href);
   [
@@ -52,59 +26,47 @@ function cleanAuthParamsFromUrl() {
   window.history.replaceState({}, document.title, cleanUrl.toString());
 }
 
-export async function initializeAuthSession() {
-  try {
-    const client = requireSupabase();
-    const url = new window.URL(window.location.href);
-    const code = url.searchParams.get('code');
-    const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
-    const accessToken = hashParams.get('access_token');
-    const refreshToken = hashParams.get('refresh_token');
+export function resetStoredAuthSession() {
+  if (typeof window === 'undefined') return;
 
-    if (code) {
-      const { data, error } = await client.auth.exchangeCodeForSession(code);
-      cleanAuthParamsFromUrl();
-      if (error) {
-        if (isRecoverableAuthCallbackError(error)) {
-          try {
-            const currentSession = await getCurrentSession();
-            if (currentSession) return currentSession;
-          } catch (sessionError) {
-            if (!isRecoverableAuthCallbackError(sessionError) && !isCorruptedAuthStorageError(sessionError)) {
-              throw sessionError;
-            }
-          }
-          return null;
-        }
-        throw error;
-      }
-      return data.session;
+  const storageKeys = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key) continue;
+    if (key.includes('supabase') || key.includes('sb-') || key.includes('qtrlymiqohbjvklwegsw') || key.includes('ai-marketing-studio-auth-session')) {
+      storageKeys.push(key);
     }
-
-    if (accessToken && refreshToken) {
-      const { data, error } = await client.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-      cleanAuthParamsFromUrl();
-      if (error) throw error;
-      return data.session;
-    }
-
-    return await getCurrentSession();
-  } catch (error) {
-    if (isCorruptedAuthStorageError(error) || isRecoverableAuthCallbackError(error)) {
-      resetStoredAuthSession();
-      return null;
-    }
-    throw error;
   }
+
+  storageKeys.forEach((key) => window.localStorage.removeItem(key));
+  window.sessionStorage.clear();
+  cleanAuthParamsFromUrl();
 }
 
-export function onAuthStateChange(callback) {
+export async function initializeAuthSession() {
   const client = requireSupabase();
-  const { data } = client.auth.onAuthStateChange((_event, session) => callback(session));
-  return () => data.subscription.unsubscribe();
+  const url = new window.URL(window.location.href);
+  const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const accessToken = hashParams.get('access_token');
+  const refreshToken = hashParams.get('refresh_token');
+
+  if (url.searchParams.has('error') || url.searchParams.has('error_description')) {
+    const message = url.searchParams.get('error_description') || url.searchParams.get('error') || 'GitHub 登录失败。';
+    cleanAuthParamsFromUrl();
+    throw new Error(decodeURIComponent(message.replace(/\+/g, ' ')));
+  }
+
+  if (accessToken && refreshToken) {
+    const { data, error } = await client.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    cleanAuthParamsFromUrl();
+    if (error) throw error;
+    return data.session;
+  }
+
+  return getCurrentSession();
 }
 
 export async function createGitHubSignInUrl() {
@@ -122,12 +84,6 @@ export async function createGitHubSignInUrl() {
   return data.url;
 }
 
-export async function signInWithGitHub() {
-  const url = await createGitHubSignInUrl();
-  window.location.assign(url);
-  return url;
-}
-
 export async function signOut() {
   const client = requireSupabase();
   const { error } = await client.auth.signOut();
@@ -141,7 +97,7 @@ export async function upsertProfile(user) {
   const profile = {
     id: user.id,
     email: user.email,
-    username: user.user_metadata?.full_name || user.email?.split('@')[0],
+    username: user.user_metadata?.full_name || user.user_metadata?.user_name || user.user_metadata?.preferred_username || user.email?.split('@')[0],
     avatar_url: user.user_metadata?.avatar_url,
   };
 

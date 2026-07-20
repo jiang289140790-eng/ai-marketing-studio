@@ -170,6 +170,20 @@ npm run lint: PASS
 npm run build: PASS
 ```
 
+## Follow-up fix
+
+After production testing, the auth flow was simplified further to match the standard Supabase SPA pattern:
+
+- `detectSessionInUrl` is now enabled in `src/services/supabase-client.js`.
+- Supabase JS handles the OAuth callback `code` internally.
+- `AuthProvider` no longer performs async profile upsert work inside `onAuthStateChange`.
+- Profile sync now runs in a separate effect after a session exists.
+- `auth-service.js` no longer performs the default manual `exchangeCodeForSession()` flow, avoiding duplicate or conflicting PKCE handling.
+
+Why:
+
+Supabase's current JavaScript docs show `signInWithOAuth()` supports PKCE and `onAuthStateChange()` examples use a synchronous callback. Keeping auth event handling synchronous makes the session update path less fragile.
+
 ## Expected user-facing result
 
 1. User opens production site.

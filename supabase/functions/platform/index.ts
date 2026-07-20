@@ -1572,3 +1572,86 @@ function jsonResponse(payload: unknown, status = 200) {
     },
   });
 }
+
+function htmlResponse(title: string, message: string, success = false) {
+  const accent = success ? '#16a34a' : '#dc2626';
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message);
+  return new Response(`<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #f3f6fb;
+        color: #0f172a;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(560px, calc(100vw - 32px));
+        border: 1px solid #d8e1ee;
+        border-radius: 24px;
+        background: white;
+        padding: 32px;
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
+        text-align: center;
+      }
+      .status {
+        display: inline-grid;
+        width: 52px;
+        height: 52px;
+        place-items: center;
+        border-radius: 18px;
+        background: ${success ? '#dcfce7' : '#fee2e2'};
+        color: ${accent};
+        font-size: 28px;
+        font-weight: 900;
+      }
+      h1 { margin: 18px 0 10px; font-size: 28px; }
+      p { margin: 0; color: #475569; line-height: 1.7; word-break: break-word; }
+      a, button {
+        display: inline-block;
+        margin-top: 24px;
+        border: 0;
+        border-radius: 999px;
+        background: #0f172a;
+        color: white;
+        cursor: pointer;
+        font-weight: 800;
+        padding: 12px 18px;
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="status">${success ? '✓' : '!'}</div>
+      <h1>${safeTitle}</h1>
+      <p>${safeMessage}</p>
+      <button onclick="window.close()">关闭窗口</button>
+      <a href="https://jiang289140790-eng.github.io/ai-marketing-studio/">返回 AI Marketing Studio</a>
+    </main>
+  </body>
+</html>`, {
+    status: success ? 200 : 400,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'access-control-allow-origin': '*',
+    },
+  });
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}

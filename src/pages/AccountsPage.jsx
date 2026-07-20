@@ -26,38 +26,51 @@ const platformConnectionCards = [
   {
     platform: 'X',
     title: 'X / Twitter',
-    description: '通过 OAuth 连接自己的 X 账号，成功后自动写入账号矩阵。',
-    priority: '第一批',
+    description: '通过 OAuth 连接自己的 X 账号，成功后自动写入账号矩阵。支持重复连接多个 X 账号。',
+    priority: '已接入',
     implemented: true,
+    authType: 'oauth',
   },
   {
     platform: 'Telegram',
     title: 'Telegram',
-    description: '使用 Bot / Channel 连接。当前发布闭环已完成，连接配置集中在设置页。',
-    priority: '第一批',
+    description: '使用 Bot / Channel 连接。每个 Channel 会保存为一条独立连接。',
+    priority: '已接入',
     implemented: true,
     settingsOnly: true,
+    authType: 'bot',
   },
   {
     platform: 'Instagram',
     title: 'Instagram',
-    description: '连接层已预留，等待迁移成熟 OAuth 流程。',
-    priority: '第一批预留',
+    description: '连接入口已建立，等待迁移旧系统成熟 OAuth 流程与平台密钥。',
+    priority: '待迁移',
     implemented: false,
+    authType: 'oauth',
   },
   {
     platform: 'YouTube',
     title: 'YouTube',
-    description: '连接层已预留，后续接入频道授权、发布和数据同步。',
-    priority: '第一批预留',
+    description: '连接入口已建立，后续接入频道授权、发布和数据同步。',
+    priority: '待迁移',
     implemented: false,
+    authType: 'oauth',
   },
   {
     platform: 'TikTok',
     title: 'TikTok',
-    description: '连接层已预留，后续接入 OAuth、发布和表现数据。',
-    priority: '第一批预留',
+    description: '连接入口已建立，后续接入 OAuth、发布和表现数据。',
+    priority: '待迁移',
     implemented: false,
+    authType: 'oauth',
+  },
+  {
+    platform: 'Discord',
+    title: 'Discord',
+    description: '新增平台入口。后续可接入 Bot / OAuth，用于频道发布和社区运营。',
+    priority: '待迁移',
+    implemented: false,
+    authType: 'bot / oauth',
   },
 ];
 
@@ -67,23 +80,38 @@ function getAccountRole(account) {
   return role;
 }
 
-function getPrimaryConnection(account, allConnections = []) {
+function getConnectionsForAccount(account, allConnections = []) {
   const embeddedConnections = account.platform_connections || [];
   const relatedConnections = allConnections.filter((connection) => connection.account_id === account.id);
-  const connections = [...embeddedConnections, ...relatedConnections];
+  const byId = new Map();
+  [...embeddedConnections, ...relatedConnections].forEach((connection) => {
+    if (connection?.id) byId.set(connection.id, connection);
+  });
+  return Array.from(byId.values());
+}
+
+function getPrimaryConnection(account, allConnections = []) {
+  const connections = getConnectionsForAccount(account, allConnections);
   return connections.find((connection) => connection.status === 'connected') || connections[0] || null;
 }
 
-function getPlatformConnection(connections, platform) {
-  const matches = connections.filter((connection) => connection.platform === platform);
-  return matches.find((connection) => connection.status === 'connected') || matches[0] || null;
+function getPlatformConnections(connections, platform) {
+  return connections
+    .filter((connection) => connection.platform === platform)
+    .sort((a, b) => {
+      if (a.status === 'connected' && b.status !== 'connected') return -1;
+      if (a.status !== 'connected' && b.status === 'connected') return 1;
+      return new Date(b.connected_at || b.created_at || 0) - new Date(a.connected_at || a.created_at || 0);
+    });
 }
 
 function getConnectionAccountName(connection) {
   return (
     connection?.social_accounts?.account_name ||
+    connection?.metadata?.x?.username ||
     connection?.metadata?.username ||
     connection?.metadata?.screen_name ||
+    connection?.metadata?.telegram?.chat_id ||
     connection?.metadata?.chat_id ||
     '等待授权'
   );
@@ -201,11 +229,11 @@ export function AccountsPage({ userId, onNavigate }) {
   async function handleConnectPlatform(card) {
     if (card.platform !== 'X') {
       if (card.settingsOnly && onNavigate) {
-        setMessage('已切换到设置页，请在那里填写 Telegram Channel / Chat ID 完成连接。');
+        setMessage('已切换到设置页，请在那里填写 Telegram Channel / Chat ID。每次填写一个新 Channel，就会新增一条连接。');
         onNavigate('settings');
         return;
       }
-      setMessage(`${card.title} 的 OAuth 连接层已预留，等待迁移旧系统成熟实现。`);
+      setMessage(`${card.title} 已加入连接中心，但真实 ${card.authType} 流程还需要迁移旧系统实现和配置平台密钥。`);
       return;
     }
 
@@ -300,6 +328,58 @@ export function AccountsPage({ userId, onNavigate }) {
     }
   }
 
+  function renderConnectionActions(card, platformConnections) {
+    const busy = busyKey === `platform:${card.platform}`;
+    const hasConnection = platformConnections.length > 0;
+
+    if (card.platform === 'X') {
+      return (
+        <button
+          type="button"
+          className="primary-button"
+          disabled={busy || !isSupabaseConfigured || !userId}
+          onClick={() => handleConnectPlatform(card)}
+        >
+          {hasConnection ? '连接另一个 X 账号' : '连接 X'}
+        </button>
+      );
+    }
+
+    if (card.settingsOnly) {
+      return (
+        <button type="button" className="ghost-button" onClick={() => handleConnectPlatform(card)}>
+          {hasConnection ? '添加另一个 Telegram' : '到设置页连接'}
+        </button>
+      );
+    }
+
+    return (
+      <button type="button" className="ghost-button" disabled={!card.implemented} onClick={() => handleConnectPlatform(card)}>
+        {card.implemented ? `连接 ${card.platform}` : '准备接入'}
+      </button>
+    );
+  }
+
+  function renderConnectionRecord(connection) {
+    const busy = busyKey === `connection:${connection.id}`;
+    return (
+      <div className="connection-record" key={connection.id}>
+        <div>
+          <strong>{getConnectionAccountName(connection)}</strong>
+          <small>{formatDate(connection.connected_at || connection.created_at)}</small>
+        </div>
+        <StatusBadge status={connection.status || 'pending'} />
+        {connection.platform === 'X' && (
+          <div className="mini-actions">
+            <button type="button" disabled={busy} onClick={() => handleRefreshXStatus(connection)}>状态</button>
+            <button type="button" disabled={busy} onClick={() => handleReconnectX(connection)}>重连</button>
+            <button type="button" disabled={busy} onClick={() => handleDisconnectX(connection)}>断开</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderPlatformConnectionCenter() {
     return (
       <section className="connection-center">
@@ -307,65 +387,45 @@ export function AccountsPage({ userId, onNavigate }) {
           <div>
             <p className="eyebrow">Platform Connection Center</p>
             <h2>连接自己的运营账号</h2>
-            <p>自有账号不再要求先手动填写资料。先从这里连接平台，授权成功后系统会自动创建或绑定 social_accounts。</p>
+            <p>每个平台都可以保存多个连接账号。连接成功后系统会自动创建或绑定到 social_accounts，Token 只在后端安全层处理。</p>
           </div>
         </div>
 
-        <div className="platform-connection-grid">
+        <div className="platform-connection-grid multi">
           {platformConnectionCards.map((card) => {
-            const connection = getPlatformConnection(connections, card.platform);
-            const connected = connection?.status === 'connected';
-            const pending = connection?.status === 'pending';
-            const busy = busyKey === `platform:${card.platform}` || busyKey === `connection:${connection?.id}`;
+            const platformConnections = getPlatformConnections(connections, card.platform);
+            const connectedCount = platformConnections.filter((connection) => connection.status === 'connected').length;
+            const status = connectedCount ? 'connected' : platformConnections[0]?.status || 'not_connected';
+            const firstConnection = platformConnections[0];
             return (
-              <article className={`platform-connection-card ${connected ? 'connected' : ''}`} key={card.platform}>
+              <article className={`platform-connection-card ${connectedCount ? 'connected' : ''}`} key={card.platform}>
                 <div className="platform-card-top">
                   <div>
                     <span className="platform-icon">{card.platform.slice(0, 1)}</span>
                     <h3>{card.title}</h3>
                   </div>
-                  <StatusBadge status={connection?.status || 'not_connected'} />
+                  <StatusBadge status={status} />
                 </div>
                 <p>{card.description}</p>
                 <div className="connection-meta-grid">
-                  <span>账号</span>
-                  <strong>{connected || pending ? getConnectionAccountName(connection) : '未连接'}</strong>
+                  <span>连接数</span>
+                  <strong>{connectedCount}/{platformConnections.length}</strong>
                   <span>权限</span>
-                  <strong>{getPermissionsLabel(connection)}</strong>
+                  <strong>{getPermissionsLabel(firstConnection)}</strong>
                   <span>最后同步</span>
-                  <strong>{formatDate(connection?.last_sync || connection?.connected_at)}</strong>
+                  <strong>{formatDate(firstConnection?.last_sync || firstConnection?.connected_at)}</strong>
                 </div>
+
+                <div className="connection-record-list">
+                  {platformConnections.length ? platformConnections.map(renderConnectionRecord) : (
+                    <div className="connection-empty">暂无连接账号</div>
+                  )}
+                </div>
+
                 <div className="card-actions">
-                  {!connection && (
-                    <button
-                      type="button"
-                      className={card.implemented && !card.settingsOnly ? 'primary-button' : 'ghost-button'}
-                      disabled={busy || !card.implemented || !isSupabaseConfigured || !userId}
-                      onClick={() => handleConnectPlatform(card)}
-                    >
-                      {card.settingsOnly ? '到设置页连接' : card.implemented ? `连接 ${card.platform}` : '等待迁移'}
-                    </button>
-                  )}
-                  {connection?.platform === 'X' && (
-                    <>
-                      <button type="button" className="ghost-button" disabled={busy} onClick={() => handleRefreshXStatus(connection)}>
-                        检查状态
-                      </button>
-                      <button type="button" className="ghost-button" disabled={busy} onClick={() => handleReconnectX(connection)}>
-                        重新授权
-                      </button>
-                      <button type="button" className="ghost-button danger" disabled={busy} onClick={() => handleDisconnectX(connection)}>
-                        断开
-                      </button>
-                    </>
-                  )}
-                  {card.settingsOnly && (
-                    <button type="button" className="ghost-button" onClick={() => handleConnectPlatform(card)}>
-                      查看连接说明
-                    </button>
-                  )}
+                  {renderConnectionActions(card, platformConnections)}
                 </div>
-                <small>{card.priority}</small>
+                <small>{card.priority} · {card.authType}</small>
               </article>
             );
           })}
@@ -375,6 +435,7 @@ export function AccountsPage({ userId, onNavigate }) {
   }
 
   function renderConnectionCell(account) {
+    const accountConnections = getConnectionsForAccount(account, connections);
     const connection = getPrimaryConnection(account, connections);
     const isBusy = busyKey === `account:${account.id}` || busyKey === `connection:${connection?.id}`;
     const connected = connection?.status === 'connected';
@@ -385,6 +446,7 @@ export function AccountsPage({ userId, onNavigate }) {
           <StatusBadge status={connected ? 'connected' : (connection?.status || account.api_status || 'not_connected')} />
           {connected && <span className="success-pill">API已连接</span>}
         </div>
+        <small>连接记录：{accountConnections.length}</small>
         <small>权限：{getPermissionsLabel(connection)}</small>
         <small>最后同步：{formatDate(connection?.last_sync || connection?.connected_at)}</small>
         {account.platform === 'X' && (
@@ -436,38 +498,14 @@ export function AccountsPage({ userId, onNavigate }) {
         </dl>
 
         <div className="profile-grid">
-          <section>
-            <h4>目标用户</h4>
-            <p>{profile?.target_audience || account.target_audience || '等待 AI 分析'}</p>
-          </section>
-          <section>
-            <h4>内容方向</h4>
-            <p>{profile?.content_direction || account.content_strategy || '等待 AI 分析'}</p>
-          </section>
-          <section>
-            <h4>视觉风格</h4>
-            <p>{profile?.visual_style || profile?.content_style || '等待 AI 分析'}</p>
-          </section>
-          <section>
-            <h4>文案风格</h4>
-            <p>{profile?.copywriting_style || profile?.content_style || '等待 AI 分析'}</p>
-          </section>
-          <section>
-            <h4>发布时间规律</h4>
-            <p>{formatList(profile?.best_posting_windows) || profile?.posting_frequency || account.posting_frequency || '等待 AI 分析'}</p>
-          </section>
-          <section>
-            <h4>爆款规律</h4>
-            <p>{formatList(profile?.viral_patterns)}</p>
-          </section>
-          <section>
-            <h4>品牌定位</h4>
-            <p>{profile?.brand_positioning || '等待 AI 分析'}</p>
-          </section>
-          <section>
-            <h4>运营建议</h4>
-            <p>{profile?.operation_advice || profile?.ai_strategy || '等待 AI 分析'}</p>
-          </section>
+          <section><h4>目标用户</h4><p>{profile?.target_audience || account.target_audience || '等待 AI 分析'}</p></section>
+          <section><h4>内容方向</h4><p>{profile?.content_direction || account.content_strategy || '等待 AI 分析'}</p></section>
+          <section><h4>视觉风格</h4><p>{profile?.visual_style || profile?.content_style || '等待 AI 分析'}</p></section>
+          <section><h4>文案风格</h4><p>{profile?.copywriting_style || profile?.content_style || '等待 AI 分析'}</p></section>
+          <section><h4>发布时间规律</h4><p>{formatList(profile?.best_posting_windows) || profile?.posting_frequency || account.posting_frequency || '等待 AI 分析'}</p></section>
+          <section><h4>爆款规律</h4><p>{formatList(profile?.viral_patterns)}</p></section>
+          <section><h4>品牌定位</h4><p>{profile?.brand_positioning || '等待 AI 分析'}</p></section>
+          <section><h4>运营建议</h4><p>{profile?.operation_advice || profile?.ai_strategy || '等待 AI 分析'}</p></section>
         </div>
       </article>
     );
@@ -479,7 +517,7 @@ export function AccountsPage({ userId, onNavigate }) {
         <div>
           <p className="eyebrow">Account Intelligence Core</p>
           <h2>账号管理</h2>
-          <p>social_accounts 是唯一账号实体；平台授权状态统一由 platform_connections 管理，敏感 Token 不进入前端。</p>
+          <p>social_accounts 是唯一账号实体；platform_connections 保存每个平台的多个授权连接，敏感 Token 不进入前端。</p>
         </div>
         <div className="button-row">
           <button className="ghost-button" type="button" disabled={!accounts.length || busyKey === 'strategy'} onClick={() => handleGenerateStrategy()}>
@@ -517,7 +555,7 @@ export function AccountsPage({ userId, onNavigate }) {
       <div className="stat-grid">
         <StatCard label="账号总数" value={stats.total} hint="social_accounts" />
         <StatCard label="自有账号" value={stats.owned} hint="owned" />
-        <StatCard label="平台已连接" value={stats.apiConnected} hint="platform_connections" />
+        <StatCard label="平台已连接" value={stats.apiConnected} hint="connected platform_connections" />
         <StatCard label="情报账号" value={stats.intelligenceAccounts} hint="competitor / inspiration" />
         <StatCard label="已有AI画像" value={stats.profiled} hint="account_profiles" />
       </div>

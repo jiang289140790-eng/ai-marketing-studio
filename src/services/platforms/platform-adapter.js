@@ -3,6 +3,7 @@ import { telegramAdapter } from './telegram-adapter';
 import { tiktokAdapter } from './tiktok-adapter';
 import { xAdapter } from './x-adapter';
 import { youtubeAdapter } from './youtube-adapter';
+import { discordAdapter } from './discord-adapter';
 
 export const platformAdapterMethods = [
   'connect',
@@ -21,6 +22,7 @@ export const platformAdapters = {
   Instagram: instagramAdapter,
   TikTok: tiktokAdapter,
   YouTube: youtubeAdapter,
+  Discord: discordAdapter,
 };
 
 export function getPlatformAdapter(platform) {

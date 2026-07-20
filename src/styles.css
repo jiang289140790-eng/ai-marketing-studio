@@ -502,6 +502,10 @@ th {
   padding-bottom: 4px;
 }
 
+.platform-connection-grid.multi {
+  grid-template-columns: repeat(6, minmax(260px, 1fr));
+}
+
 .platform-connection-card {
   display: grid;
   min-width: 220px;
@@ -561,6 +565,52 @@ th {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.connection-record-list {
+  display: grid;
+  gap: 8px;
+}
+
+.connection-record,
+.connection-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--soft);
+  padding: 10px;
+}
+
+.connection-record strong,
+.connection-record small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mini-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.mini-actions button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 9px;
 }
 
 .content-card,

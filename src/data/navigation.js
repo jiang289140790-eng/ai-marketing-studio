@@ -21,11 +21,11 @@ export const navigationItems = [
   { id: 'settings', label: '设置', icon: '⚙' },
 ];
 
-export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram'];
+export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];
 
-export const platformAdapterIds = ['telegram', 'x', 'youtube', 'instagram', 'tiktok'];
+export const platformAdapterIds = ['telegram', 'x', 'youtube', 'instagram', 'tiktok', 'discord'];
 
-export const collectorPlatforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Reddit'];
+export const collectorPlatforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord', 'Reddit'];
 
 export const contentStatuses = ['idea', 'researching', 'draft', 'generating', 'review', 'scheduled', 'published', 'analyzing', 'archived'];
 

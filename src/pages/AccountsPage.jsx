@@ -12,9 +12,54 @@ import {
   listSocialAccounts,
   updateSocialAccount,
 } from '../services/account-service';
-import { connectXPlatform, disconnectXPlatform, getXPlatformStatus, reconnectXPlatform } from '../services/platform-connection-service';
+import {
+  connectXPlatform,
+  disconnectXPlatform,
+  getXPlatformStatus,
+  listPlatformConnections,
+  reconnectXPlatform,
+} from '../services/platform-connection-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate, statusLabel } from '../utils/formatters';
+
+const platformConnectionCards = [
+  {
+    platform: 'X',
+    title: 'X / Twitter',
+    description: '通过 OAuth 连接自己的 X 账号，成功后自动写入账号矩阵。',
+    priority: '第一批',
+    implemented: true,
+  },
+  {
+    platform: 'Telegram',
+    title: 'Telegram',
+    description: '使用 Bot / Channel 连接。当前发布闭环已完成，连接配置集中在设置页。',
+    priority: '第一批',
+    implemented: true,
+    settingsOnly: true,
+  },
+  {
+    platform: 'Instagram',
+    title: 'Instagram',
+    description: '连接层已预留，等待迁移成熟 OAuth 流程。',
+    priority: '第一批预留',
+    implemented: false,
+  },
+  {
+    platform: 'YouTube',
+    title: 'YouTube',
+    description: '连接层已预留，后续接入频道授权、发布和数据同步。',
+    priority: '第一批预留',
+    implemented: false,
+  },
+  {
+    platform: 'TikTok',
+    title: 'TikTok',
+    description: '连接层已预留，后续接入 OAuth、发布和表现数据。',
+    priority: '第一批预留',
+    implemented: false,
+  },
+];
 
 function getAccountRole(account) {
   const role = account.account_role || account.account_type || account.account_category || 'owned';
@@ -22,9 +67,26 @@ function getAccountRole(account) {
   return role;
 }
 
-function getPrimaryConnection(account) {
-  const connections = account.platform_connections || [];
+function getPrimaryConnection(account, allConnections = []) {
+  const embeddedConnections = account.platform_connections || [];
+  const relatedConnections = allConnections.filter((connection) => connection.account_id === account.id);
+  const connections = [...embeddedConnections, ...relatedConnections];
   return connections.find((connection) => connection.status === 'connected') || connections[0] || null;
+}
+
+function getPlatformConnection(connections, platform) {
+  const matches = connections.filter((connection) => connection.platform === platform);
+  return matches.find((connection) => connection.status === 'connected') || matches[0] || null;
+}
+
+function getConnectionAccountName(connection) {
+  return (
+    connection?.social_accounts?.account_name ||
+    connection?.metadata?.username ||
+    connection?.metadata?.screen_name ||
+    connection?.metadata?.chat_id ||
+    '等待授权'
+  );
 }
 
 function getPermissionsLabel(connection) {
@@ -42,17 +104,22 @@ function formatList(value) {
 
 export function AccountsPage({ userId }) {
   const [accounts, setAccounts] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [editing, setEditing] = useState(null);
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
   const [message, setMessage] = useState('');
-  const [busyAccountId, setBusyAccountId] = useState(null);
+  const [busyKey, setBusyKey] = useState(null);
   const [strategyResult, setStrategyResult] = useState(null);
 
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
-    const nextAccounts = await listSocialAccounts(userId);
+    const [nextAccounts, nextConnections] = await Promise.all([
+      listSocialAccounts(userId),
+      listPlatformConnections(userId),
+    ]);
     setAccounts(nextAccounts);
+    setConnections(nextConnections);
     setSelectedAccount((current) => {
       if (!current) return null;
       return nextAccounts.find((account) => account.id === current.id) || null;
@@ -64,15 +131,15 @@ export function AccountsPage({ userId }) {
   }, [refresh]);
 
   const stats = useMemo(() => {
-    const connectedAccounts = accounts.filter((account) => getPrimaryConnection(account)?.status === 'connected');
+    const connectedConnections = connections.filter((connection) => connection.status === 'connected');
     return {
       total: accounts.length,
       owned: accounts.filter((account) => getAccountRole(account) === 'owned').length,
-      apiConnected: connectedAccounts.length,
+      apiConnected: connectedConnections.length,
       intelligenceAccounts: accounts.filter((account) => ['competitor', 'inspiration'].includes(getAccountRole(account))).length,
       profiled: accounts.filter((account) => account.account_profiles?.length > 0).length,
     };
-  }, [accounts]);
+  }, [accounts, connections]);
 
   async function handleSave(payload) {
     try {
@@ -81,7 +148,7 @@ export function AccountsPage({ userId }) {
         setMessage('账号已更新。');
       } else {
         await createSocialAccount(userId, payload);
-        setMessage('账号已创建。可以继续连接平台 API，或点击“AI分析账号”生成账号画像。');
+        setMessage('账号已创建。自有账号建议优先使用上方平台连接；竞品和灵感账号可以手动维护。');
       }
       setEditing(null);
       setIsCreating(false);
@@ -103,7 +170,7 @@ export function AccountsPage({ userId }) {
   }
 
   async function handleAnalyzeAccount(account) {
-    setBusyAccountId(account.id);
+    setBusyKey(`account:${account.id}`);
     setMessage('');
     try {
       const result = await analyzeAccountWithAI(userId, account.id);
@@ -112,12 +179,12 @@ export function AccountsPage({ userId }) {
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setBusyAccountId(null);
+      setBusyKey(null);
     }
   }
 
   async function handleGenerateStrategy(account = null) {
-    setBusyAccountId(account?.id || 'strategy');
+    setBusyKey(account?.id ? `account:${account.id}` : 'strategy');
     setMessage('');
     setStrategyResult(null);
     try {
@@ -127,54 +194,78 @@ export function AccountsPage({ userId }) {
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setBusyAccountId(null);
+      setBusyKey(null);
     }
   }
 
-  async function handleConnectX(account) {
-    setBusyAccountId(account.id);
+  async function handleConnectPlatform(card) {
+    if (card.platform !== 'X') {
+      setMessage(card.settingsOnly
+        ? 'Telegram 连接入口目前集中在“设置 > Social Connections”。这里会显示它的连接状态。'
+        : `${card.title} 的 OAuth 连接层已预留，等待迁移旧系统成熟实现。`);
+      return;
+    }
+
+    setBusyKey(`platform:${card.platform}`);
+    setMessage('');
+    try {
+      const result = await connectXPlatform({ account_role: 'owned' });
+      if (result?.auth_url) {
+        setMessage('正在进入 X 授权页。授权成功返回后，账号会自动出现在账号矩阵。');
+        window.location.assign(result.auth_url);
+      } else {
+        setMessage('X OAuth 初始化完成，但没有返回授权地址。请检查 Edge Function 配置。');
+        await refresh();
+      }
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function handleConnectXForAccount(account) {
+    setBusyKey(`account:${account.id}`);
     setMessage('');
     try {
       const result = await connectXPlatform({ account_id: account.id });
       if (result?.auth_url) {
-        window.open(result.auth_url, '_blank', 'noopener,noreferrer');
-        setMessage('已打开 X 授权页面。授权成功返回后，请刷新账号状态。');
+        setMessage('正在进入 X 授权页。授权成功返回后，请刷新账号状态。');
+        window.location.assign(result.auth_url);
       } else {
         setMessage('X 连接已创建，请刷新状态查看结果。');
+        await refresh();
       }
-      await refresh();
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setBusyAccountId(null);
+      setBusyKey(null);
     }
   }
 
-  async function handleReconnectX(account) {
-    const connection = getPrimaryConnection(account);
-    if (!connection) return handleConnectX(account);
-    setBusyAccountId(account.id);
+  async function handleReconnectX(connection) {
+    if (!connection) return;
+    setBusyKey(`connection:${connection.id}`);
     setMessage('');
     try {
       const result = await reconnectXPlatform(connection.id);
       if (result?.auth_url) {
-        window.open(result.auth_url, '_blank', 'noopener,noreferrer');
-        setMessage('已重新打开 X 授权页面。授权成功后，请刷新账号状态。');
+        setMessage('正在进入 X 重新授权页。授权成功后会自动回到系统。');
+        window.location.assign(result.auth_url);
       } else {
         setMessage('X 重新连接已提交。');
+        await refresh();
       }
-      await refresh();
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setBusyAccountId(null);
+      setBusyKey(null);
     }
   }
 
-  async function handleDisconnectX(account) {
-    const connection = getPrimaryConnection(account);
+  async function handleDisconnectX(connection) {
     if (!connection) return;
-    setBusyAccountId(account.id);
+    setBusyKey(`connection:${connection.id}`);
     setMessage('');
     try {
       await disconnectXPlatform(connection.id);
@@ -183,65 +274,131 @@ export function AccountsPage({ userId }) {
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setBusyAccountId(null);
+      setBusyKey(null);
     }
   }
 
-  async function handleRefreshXStatus(account) {
-    const connection = getPrimaryConnection(account);
+  async function handleRefreshXStatus(connection) {
     if (!connection) {
       setMessage('这个 X 账号还没有连接记录，请先点击“连接 X”。');
       return;
     }
-    setBusyAccountId(account.id);
+    setBusyKey(`connection:${connection.id}`);
     setMessage('');
     try {
       const result = await getXPlatformStatus(connection.id);
-      const status = result?.connection?.status || result?.status || 'unknown';
+      const status = result?.connection?.status || result?.connections?.[0]?.status || result?.status || 'unknown';
       setMessage(`X 状态已刷新：${statusLabel(status)}`);
       await refresh();
     } catch (error) {
       setMessage(error.message);
     } finally {
-      setBusyAccountId(null);
+      setBusyKey(null);
     }
   }
 
-  function renderConnectionCell(account) {
-    const connection = getPrimaryConnection(account);
-    const isBusy = busyAccountId === account.id;
-    const connected = connection?.status === 'connected';
-
-    if (account.platform !== 'X') {
-      return (
-        <div className="connection-cell">
-          <StatusBadge status={account.api_status || connection?.status || 'not_connected'} />
-          <small>连接中心统一读取 platform_connections。</small>
+  function renderPlatformConnectionCenter() {
+    return (
+      <section className="connection-center">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Platform Connection Center</p>
+            <h2>连接自己的运营账号</h2>
+            <p>自有账号不再要求先手动填写资料。先从这里连接平台，授权成功后系统会自动创建或绑定 social_accounts。</p>
+          </div>
         </div>
-      );
-    }
+
+        <div className="platform-connection-grid">
+          {platformConnectionCards.map((card) => {
+            const connection = getPlatformConnection(connections, card.platform);
+            const connected = connection?.status === 'connected';
+            const pending = connection?.status === 'pending';
+            const busy = busyKey === `platform:${card.platform}` || busyKey === `connection:${connection?.id}`;
+            return (
+              <article className={`platform-connection-card ${connected ? 'connected' : ''}`} key={card.platform}>
+                <div className="platform-card-top">
+                  <div>
+                    <span className="platform-icon">{card.platform.slice(0, 1)}</span>
+                    <h3>{card.title}</h3>
+                  </div>
+                  <StatusBadge status={connection?.status || 'not_connected'} />
+                </div>
+                <p>{card.description}</p>
+                <div className="connection-meta-grid">
+                  <span>账号</span>
+                  <strong>{connected || pending ? getConnectionAccountName(connection) : '未连接'}</strong>
+                  <span>权限</span>
+                  <strong>{getPermissionsLabel(connection)}</strong>
+                  <span>最后同步</span>
+                  <strong>{formatDate(connection?.last_sync || connection?.connected_at)}</strong>
+                </div>
+                <div className="card-actions">
+                  {!connection && (
+                    <button
+                      type="button"
+                      className={card.implemented && !card.settingsOnly ? 'primary-button' : 'ghost-button'}
+                      disabled={busy || !card.implemented || !isSupabaseConfigured || !userId}
+                      onClick={() => handleConnectPlatform(card)}
+                    >
+                      {card.implemented ? `连接 ${card.platform}` : '等待迁移'}
+                    </button>
+                  )}
+                  {connection?.platform === 'X' && (
+                    <>
+                      <button type="button" className="ghost-button" disabled={busy} onClick={() => handleRefreshXStatus(connection)}>
+                        检查状态
+                      </button>
+                      <button type="button" className="ghost-button" disabled={busy} onClick={() => handleReconnectX(connection)}>
+                        重新授权
+                      </button>
+                      <button type="button" className="ghost-button danger" disabled={busy} onClick={() => handleDisconnectX(connection)}>
+                        断开
+                      </button>
+                    </>
+                  )}
+                  {card.settingsOnly && (
+                    <button type="button" className="ghost-button" onClick={() => handleConnectPlatform(card)}>
+                      查看连接说明
+                    </button>
+                  )}
+                </div>
+                <small>{card.priority}</small>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
+  function renderConnectionCell(account) {
+    const connection = getPrimaryConnection(account, connections);
+    const isBusy = busyKey === `account:${account.id}` || busyKey === `connection:${connection?.id}`;
+    const connected = connection?.status === 'connected';
 
     return (
       <div className="connection-cell">
         <div className="connection-status-row">
-          <StatusBadge status={connected ? 'connected' : (connection?.status || 'not_connected')} />
+          <StatusBadge status={connected ? 'connected' : (connection?.status || account.api_status || 'not_connected')} />
           {connected && <span className="success-pill">API已连接</span>}
         </div>
         <small>权限：{getPermissionsLabel(connection)}</small>
         <small>最后同步：{formatDate(connection?.last_sync || connection?.connected_at)}</small>
-        <div className="table-actions">
-          {!connected ? (
-            <button type="button" disabled={isBusy} onClick={() => handleConnectX(account)}>
-              {connection ? '继续连接 X' : '连接 X'}
-            </button>
-          ) : (
-            <>
-              <button type="button" disabled={isBusy} onClick={() => handleRefreshXStatus(account)}>刷新状态</button>
-              <button type="button" disabled={isBusy} onClick={() => handleReconnectX(account)}>重新连接</button>
-              <button type="button" disabled={isBusy} onClick={() => handleDisconnectX(account)}>断开</button>
-            </>
-          )}
-        </div>
+        {account.platform === 'X' && (
+          <div className="table-actions">
+            {!connected ? (
+              <button type="button" disabled={isBusy} onClick={() => handleConnectXForAccount(account)}>
+                {connection ? '继续连接 X' : '连接 X'}
+              </button>
+            ) : (
+              <>
+                <button type="button" disabled={isBusy} onClick={() => handleRefreshXStatus(connection)}>刷新状态</button>
+                <button type="button" disabled={isBusy} onClick={() => handleReconnectX(connection)}>重新连接</button>
+                <button type="button" disabled={isBusy} onClick={() => handleDisconnectX(connection)}>断开</button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -249,7 +406,7 @@ export function AccountsPage({ userId }) {
   function renderAccountDetail(account) {
     if (!account) return null;
     const profile = account.account_profiles?.[0];
-    const connection = getPrimaryConnection(account);
+    const connection = getPrimaryConnection(account, connections);
     return (
       <article className="detail-panel account-detail-panel">
         <div className="section-head">
@@ -259,10 +416,10 @@ export function AccountsPage({ userId }) {
             <p>{account.platform} · {statusLabel(getAccountRole(account))} · {account.account_url || '暂无 URL'}</p>
           </div>
           <div className="button-row">
-            <button className="primary-button" type="button" disabled={busyAccountId === account.id} onClick={() => handleAnalyzeAccount(account)}>
+            <button className="primary-button" type="button" disabled={busyKey === `account:${account.id}`} onClick={() => handleAnalyzeAccount(account)}>
               AI分析账号
             </button>
-            <button className="ghost-button" type="button" disabled={busyAccountId === account.id} onClick={() => handleGenerateStrategy(account)}>
+            <button className="ghost-button" type="button" disabled={busyKey === `account:${account.id}`} onClick={() => handleGenerateStrategy(account)}>
               生成今日策略
             </button>
           </div>
@@ -318,24 +475,26 @@ export function AccountsPage({ userId }) {
       <div className="section-head">
         <div>
           <p className="eyebrow">Account Intelligence Core</p>
-          <h2>账号矩阵管理</h2>
-          <p>social_accounts 是唯一账号实体。内容情报和采集中心只选择这里的账号，不再重复创建。</p>
+          <h2>账号管理</h2>
+          <p>social_accounts 是唯一账号实体；平台授权状态统一由 platform_connections 管理，敏感 Token 不进入前端。</p>
         </div>
         <div className="button-row">
-          <button className="ghost-button" type="button" disabled={!accounts.length || busyAccountId === 'strategy'} onClick={() => handleGenerateStrategy()}>
+          <button className="ghost-button" type="button" disabled={!accounts.length || busyKey === 'strategy'} onClick={() => handleGenerateStrategy()}>
             生成全局今日策略
           </button>
-          <button className="primary-button" type="button" onClick={() => setIsCreating(true)}>
-            添加账号
+          <button className="ghost-button" type="button" onClick={() => setIsCreating(true)}>
+            手动添加竞品/灵感账号
           </button>
         </div>
       </div>
+
+      {renderPlatformConnectionCenter()}
 
       {(isCreating || editing) && (
         <AccountForm initialValue={editing} onSubmit={handleSave} onCancel={() => { setIsCreating(false); setEditing(null); }} />
       )}
 
-      {message && <div className="notice">{message}</div>}
+      {message && <div className={message.toLowerCase().includes('missing') || message.toLowerCase().includes('error') || message.includes('失败') ? 'notice error' : 'notice'}>{message}</div>}
 
       {strategyResult && (
         <article className="analysis-card">
@@ -355,7 +514,7 @@ export function AccountsPage({ userId }) {
       <div className="stat-grid">
         <StatCard label="账号总数" value={stats.total} hint="social_accounts" />
         <StatCard label="自有账号" value={stats.owned} hint="owned" />
-        <StatCard label="API已连接" value={stats.apiConnected} hint="platform_connections" />
+        <StatCard label="平台已连接" value={stats.apiConnected} hint="platform_connections" />
         <StatCard label="情报账号" value={stats.intelligenceAccounts} hint="competitor / inspiration" />
         <StatCard label="已有AI画像" value={stats.profiled} hint="account_profiles" />
       </div>
@@ -365,7 +524,7 @@ export function AccountsPage({ userId }) {
       {!isSupabaseConfigured ? (
         <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会从 social_accounts、account_profiles 和 platform_connections 读取数据。" />
       ) : accounts.length === 0 ? (
-        <EmptyState title="还没有账号" description="先添加 X、Instagram、TikTok、YouTube 或 Telegram 账号。后续采集、分析、发布都会围绕这些账号运行。" />
+        <EmptyState title="还没有账号" description="自有账号请先使用上方平台连接；竞品和灵感账号可以手动添加，用于内容情报和AI分析。" />
       ) : (
         <div className="table-card">
           <table>
@@ -407,7 +566,7 @@ export function AccountsPage({ userId }) {
                     <td>
                       <div className="table-actions">
                         <button type="button" onClick={() => setSelectedAccount(account)}>详情</button>
-                        <button type="button" disabled={busyAccountId === account.id} onClick={() => handleAnalyzeAccount(account)}>AI分析</button>
+                        <button type="button" disabled={busyKey === `account:${account.id}`} onClick={() => handleAnalyzeAccount(account)}>AI分析</button>
                         <button type="button" onClick={() => setEditing(account)}>编辑</button>
                         {account.account_url && <a className="ghost-button" href={account.account_url} target="_blank" rel="noreferrer">打开</a>}
                         <button type="button" onClick={() => handleDelete(account)}>删除</button>

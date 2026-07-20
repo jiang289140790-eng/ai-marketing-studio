@@ -386,3 +386,33 @@ Recommended next action:
 ```text
 Make a small auth UI/session recovery code adjustment so stale PKCE/null sessions do not show as a persistent reset warning.
 ```
+
+## Update: direct authorize URL issue
+
+A direct link to:
+
+```text
+/auth/v1/authorize?provider=github&redirect_to=...
+```
+
+is not sufficient for this app because the frontend is using PKCE.
+
+Problem:
+
+```text
+The direct authorize URL can return ?code=... to the app, but the browser does not have the matching PKCE code verifier in storage.
+```
+
+Result:
+
+```text
+The app cannot exchange the returned code for a session.
+```
+
+Correct approach:
+
+```text
+Use supabase-js signInWithOAuth({ provider: 'github', options: { redirectTo } })
+```
+
+This lets Supabase JS create and store the PKCE verifier before redirecting to the provider.

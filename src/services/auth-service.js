@@ -1,4 +1,4 @@
-import { requireSupabase, supabaseProjectUrl } from './supabase-client';
+import { requireSupabase } from './supabase-client';
 
 export async function getCurrentSession() {
   const client = requireSupabase();
@@ -107,36 +107,15 @@ export function onAuthStateChange(callback) {
   return () => data.subscription.unsubscribe();
 }
 
-export function getGitHubLoginUrl() {
-  if (!supabaseProjectUrl) return '';
-
-  const redirectTo = `${window.location.origin}${window.location.pathname}`;
-  const url = new window.URL('/auth/v1/authorize', supabaseProjectUrl);
-  url.searchParams.set('provider', 'github');
-  url.searchParams.set('redirect_to', redirectTo);
-  return url.toString();
-}
-
 export async function signInWithGitHub() {
-  const loginUrl = getGitHubLoginUrl();
-  if (loginUrl) {
-    window.location.assign(loginUrl);
-    return;
-  }
-
   const client = requireSupabase();
-  const { data, error } = await client.auth.signInWithOAuth({
+  const { error } = await client.auth.signInWithOAuth({
     provider: 'github',
     options: {
       redirectTo: window.location.origin + window.location.pathname,
-      skipBrowserRedirect: true,
     },
   });
   if (error) throw error;
-  if (!data?.url) {
-    throw new Error('GitHub 登录地址生成失败，请检查 Supabase GitHub Provider 配置。');
-  }
-  window.location.assign(data.url);
 }
 
 export async function signOut() {

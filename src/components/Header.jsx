@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getGitHubLoginUrl, signInWithGitHub, signOut } from '../services/auth-service';
+import { signInWithGitHub, signOut } from '../services/auth-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
 export function Header({ session, profile, title }) {
@@ -8,7 +8,6 @@ export function Header({ session, profile, title }) {
   const [signInError, setSignInError] = useState('');
   const displayName = profile?.username || user?.user_metadata?.user_name || user?.user_metadata?.preferred_username || user?.email;
   const avatarUrl = profile?.avatar_url || user?.user_metadata?.avatar_url;
-  const githubLoginUrl = isSupabaseConfigured ? getGitHubLoginUrl() : '';
 
   async function handleGitHubSignIn() {
     setSignInError('');
@@ -47,21 +46,9 @@ export function Header({ session, profile, title }) {
           </>
         ) : (
           <div className="login-stack">
-            <a
-              className={`primary-button ${!isSupabaseConfigured || isSigningIn ? 'disabled-link' : ''}`}
-              href={githubLoginUrl || undefined}
-              onClick={(event) => {
-                if (!githubLoginUrl || isSigningIn) {
-                  event.preventDefault();
-                  if (!githubLoginUrl) handleGitHubSignIn();
-                  return;
-                }
-                setSignInError('');
-                setIsSigningIn(true);
-              }}
-            >
+            <button className="primary-button" type="button" onClick={handleGitHubSignIn} disabled={!isSupabaseConfigured || isSigningIn}>
               {isSigningIn ? '正在跳转…' : 'GitHub 登录'}
-            </a>
+            </button>
             {signInError && <span className="inline-error">{signInError}</span>}
           </div>
         )}

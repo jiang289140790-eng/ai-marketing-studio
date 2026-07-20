@@ -5,7 +5,6 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const authStorageKey = 'ai-marketing-studio-auth-session';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
-export const supabaseProjectUrl = supabaseUrl;
 
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {

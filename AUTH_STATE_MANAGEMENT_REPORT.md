@@ -184,6 +184,36 @@ Why:
 
 Supabase's current JavaScript docs show `signInWithOAuth()` supports PKCE and `onAuthStateChange()` examples use a synchronous callback. Keeping auth event handling synchronous makes the session update path less fragile.
 
+## Follow-up fix 2
+
+Production screenshot showed the app returned with:
+
+```text
+?code=...
+```
+
+but still displayed the unauthenticated Dashboard state.
+
+This means GitHub authorization succeeded, but the frontend did not exchange the returned OAuth code into a Supabase session.
+
+Applied fix:
+
+- Added `completeOAuthCallback()` in `src/services/auth-service.js`.
+- `AuthProvider` now checks the URL for `?code=` during startup.
+- If code exists, it calls `supabase.auth.exchangeCodeForSession(code)`.
+- On success, it cleans the URL and stores the session.
+- `detectSessionInUrl` is set to `false` so this app has one clear callback handler instead of competing automatic/manual handlers.
+
+Expected behavior:
+
+```text
+GitHub authorization returns to /ai-marketing-studio/?code=...
+AuthProvider exchanges code for session
+URL is cleaned back to /ai-marketing-studio/
+Header changes to 已登录
+Dashboard loads real Supabase data
+```
+
 ## Expected user-facing result
 
 1. User opens production site.

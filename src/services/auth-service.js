@@ -1,13 +1,8 @@
 import { requireSupabase } from './supabase-client';
 
-export async function getCurrentSession() {
-  const client = requireSupabase();
-  const { data, error } = await client.auth.getSession();
-  if (error) throw error;
-  return data.session;
-}
+export function cleanAuthParamsFromUrl() {
+  if (typeof window === 'undefined') return;
 
-function cleanAuthParamsFromUrl() {
   const cleanUrl = new window.URL(window.location.href);
   [
     'code',
@@ -26,6 +21,47 @@ function cleanAuthParamsFromUrl() {
   window.history.replaceState({}, document.title, cleanUrl.toString());
 }
 
+export async function getCurrentSession() {
+  const client = requireSupabase();
+  const { data, error } = await client.auth.getSession();
+  if (error) throw error;
+  return data.session;
+}
+
+export async function completeOAuthCallback() {
+  const client = requireSupabase();
+  const url = new window.URL(window.location.href);
+  const code = url.searchParams.get('code');
+  const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const accessToken = hashParams.get('access_token');
+  const refreshToken = hashParams.get('refresh_token');
+
+  if (url.searchParams.has('error') || url.searchParams.has('error_description')) {
+    const message = url.searchParams.get('error_description') || url.searchParams.get('error') || 'GitHub 登录失败。';
+    cleanAuthParamsFromUrl();
+    throw new Error(decodeURIComponent(message.replace(/\+/g, ' ')));
+  }
+
+  if (code) {
+    const { data, error } = await client.auth.exchangeCodeForSession(code);
+    cleanAuthParamsFromUrl();
+    if (error) throw error;
+    return data.session;
+  }
+
+  if (accessToken && refreshToken) {
+    const { data, error } = await client.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    cleanAuthParamsFromUrl();
+    if (error) throw error;
+    return data.session;
+  }
+
+  return null;
+}
+
 export function resetStoredAuthSession() {
   if (typeof window === 'undefined') return;
 
@@ -41,32 +77,6 @@ export function resetStoredAuthSession() {
   storageKeys.forEach((key) => window.localStorage.removeItem(key));
   window.sessionStorage.clear();
   cleanAuthParamsFromUrl();
-}
-
-export async function initializeAuthSession() {
-  const client = requireSupabase();
-  const url = new window.URL(window.location.href);
-  const hashParams = new window.URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const accessToken = hashParams.get('access_token');
-  const refreshToken = hashParams.get('refresh_token');
-
-  if (url.searchParams.has('error') || url.searchParams.has('error_description')) {
-    const message = url.searchParams.get('error_description') || url.searchParams.get('error') || 'GitHub 登录失败。';
-    cleanAuthParamsFromUrl();
-    throw new Error(decodeURIComponent(message.replace(/\+/g, ' ')));
-  }
-
-  if (accessToken && refreshToken) {
-    const { data, error } = await client.auth.setSession({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-    cleanAuthParamsFromUrl();
-    if (error) throw error;
-    return data.session;
-  }
-
-  return getCurrentSession();
 }
 
 export async function createGitHubSignInUrl() {

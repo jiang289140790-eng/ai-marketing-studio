@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { createGitHubSignInUrl, signOut, upsertProfile } from '../services/auth-service';
+import { completeOAuthCallback, createGitHubSignInUrl, signOut, upsertProfile } from '../services/auth-service';
 import { isSupabaseConfigured, supabase } from '../services/supabase-client';
 import { AuthContext } from './auth-context';
 
@@ -39,9 +39,10 @@ export function AuthProvider({ children }) {
       setError('');
 
       try {
+        const callbackSession = await completeOAuthCallback();
         const { data, error: sessionError } = await supabase.auth.getSession();
         if (sessionError) throw sessionError;
-        if (mounted) setSession(data.session);
+        if (mounted) setSession(callbackSession || data.session);
       } catch (authError) {
         if (mounted) {
           setError(authError.message || '登录状态恢复失败。');

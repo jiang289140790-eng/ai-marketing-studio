@@ -237,6 +237,30 @@ OAuth callback code exchange no longer fails before network request.
 If Supabase returns an auth error, the page can show the real auth error instead of a browser header exception.
 ```
 
+## Follow-up fix 4
+
+Production then showed:
+
+```text
+Failed to construct 'Headers': String contains non ISO-8859-1 code point.
+```
+
+Cause:
+
+The first `safeFetch` version still called `new Headers(rawHeaders)` before sanitizing raw header values, so the browser could throw before the sanitizer had a chance to run.
+
+Applied fix:
+
+- `createSafeHeaders()` no longer constructs `Headers` from raw input.
+- It manually handles `Headers`, array tuples, and plain objects.
+- Header names and values are sanitized before calling `safeHeaders.set()`.
+
+Expected behavior:
+
+```text
+The browser should no longer throw a Headers constructor error before the OAuth session exchange request.
+```
+
 ## Expected user-facing result
 
 1. User opens production site.

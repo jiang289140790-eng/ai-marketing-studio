@@ -10,12 +10,32 @@ function toAsciiHeaderValue(value) {
   return String(value ?? '').replace(/[^\x20-\x7E]/g, '');
 }
 
+function toAsciiHeaderName(name) {
+  return String(name ?? '').replace(/[^!#$%&'*+\-.^_`|~0-9A-Za-z]/g, '');
+}
+
 function createSafeHeaders(headers) {
   const safeHeaders = new globalThis.Headers();
 
-  new globalThis.Headers(headers || {}).forEach((value, key) => {
-    safeHeaders.set(key, toAsciiHeaderValue(value));
-  });
+  if (!headers) return safeHeaders;
+
+  const setSafeHeader = (key, value) => {
+    const safeKey = toAsciiHeaderName(key);
+    if (!safeKey) return;
+    safeHeaders.set(safeKey, toAsciiHeaderValue(value));
+  };
+
+  if (headers instanceof globalThis.Headers) {
+    headers.forEach((value, key) => setSafeHeader(key, value));
+    return safeHeaders;
+  }
+
+  if (Array.isArray(headers)) {
+    headers.forEach(([key, value]) => setSafeHeader(key, value));
+    return safeHeaders;
+  }
+
+  Object.entries(headers).forEach(([key, value]) => setSafeHeader(key, value));
 
   return safeHeaders;
 }

@@ -102,7 +102,7 @@ function formatList(value) {
   return value || '—';
 }
 
-export function AccountsPage({ userId }) {
+export function AccountsPage({ userId, onNavigate }) {
   const [accounts, setAccounts] = useState([]);
   const [connections, setConnections] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -200,9 +200,12 @@ export function AccountsPage({ userId }) {
 
   async function handleConnectPlatform(card) {
     if (card.platform !== 'X') {
-      setMessage(card.settingsOnly
-        ? 'Telegram 连接入口目前集中在“设置 > Social Connections”。这里会显示它的连接状态。'
-        : `${card.title} 的 OAuth 连接层已预留，等待迁移旧系统成熟实现。`);
+      if (card.settingsOnly && onNavigate) {
+        setMessage('已切换到设置页，请在那里填写 Telegram Channel / Chat ID 完成连接。');
+        onNavigate('settings');
+        return;
+      }
+      setMessage(`${card.title} 的 OAuth 连接层已预留，等待迁移旧系统成熟实现。`);
       return;
     }
 
@@ -340,7 +343,7 @@ export function AccountsPage({ userId }) {
                       disabled={busy || !card.implemented || !isSupabaseConfigured || !userId}
                       onClick={() => handleConnectPlatform(card)}
                     >
-                      {card.implemented ? `连接 ${card.platform}` : '等待迁移'}
+                      {card.settingsOnly ? '到设置页连接' : card.implemented ? `连接 ${card.platform}` : '等待迁移'}
                     </button>
                   )}
                   {connection?.platform === 'X' && (

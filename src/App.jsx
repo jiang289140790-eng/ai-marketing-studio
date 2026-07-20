@@ -51,7 +51,7 @@ export default function App() {
   const { error: authError, loading: authLoading, session, userId } = useAuth();
 
   const page = useMemo(() => {
-    const props = { userId };
+    const props = { userId, onNavigate: setActivePage };
 
     switch (activePage) {
       case 'accounts':

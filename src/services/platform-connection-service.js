@@ -1,4 +1,4 @@
-import { requireSupabase } from './supabase-client';
+import { requireSupabase, supabaseUrl } from './supabase-client';
 
 const connectionSelect = '*, social_accounts(account_name,account_url,avatar,status,api_status)';
 
@@ -105,15 +105,40 @@ async function invokeTelegramConnectionAction(action, payload = {}) {
 
 async function invokePlatformConnectionAction(platform, action, payload = {}) {
   const client = requireSupabase();
-  const { data, error } = await client.functions.invoke('platform', {
-    body: {
-      platform,
-      action,
-      ...Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined && value !== '')),
+  const {
+    data: { session },
+    error: sessionError,
+  } = await client.auth.getSession();
+
+  if (sessionError) throw sessionError;
+  if (!session?.access_token) throw new Error('请先登录，再连接平台账号。');
+
+  const body = {
+    platform,
+    action,
+    ...Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined && value !== '')),
+  };
+
+  const response = await globalThis.fetch(`${supabaseUrl}/functions/v1/platform`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
     },
+    body: JSON.stringify(body),
   });
 
-  if (error) throw error;
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { error: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(data?.error || `Platform Edge Function 请求失败：HTTP ${response.status}`);
+  }
   if (data?.error) throw new Error(data.error);
   return data;
 }

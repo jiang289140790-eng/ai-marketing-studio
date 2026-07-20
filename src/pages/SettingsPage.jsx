@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StatusBadge } from '../components/StatusBadge';
 import { StatCard } from '../components/StatCard';
-import { platforms } from '../data/navigation';
+import { platformConnectionCards } from '../data/platform-connections';
 import {
   connectTelegramPlatform,
   connectXPlatform,
@@ -10,6 +10,7 @@ import {
   getTelegramPlatformStatus,
   getXPlatformStatus,
   listPlatformConnections,
+  preparePlatformConnection,
   reconnectTelegramPlatform,
   reconnectXPlatform,
   summarizeConnections,
@@ -22,10 +23,36 @@ const initialTelegramForm = {
   chat_id: '',
 };
 
+function getConnectionsByPlatform(connections, platform) {
+  return connections
+    .filter((item) => item.platform === platform)
+    .sort((a, b) => {
+      if (a.status === 'connected' && b.status !== 'connected') return -1;
+      if (a.status !== 'connected' && b.status === 'connected') return 1;
+      return new Date(b.connected_at || b.created_at || 0) - new Date(a.connected_at || a.created_at || 0);
+    });
+}
+
+function getConnectionName(connection) {
+  return (
+    connection?.social_accounts?.account_name ||
+    connection?.metadata?.x?.username ||
+    connection?.metadata?.telegram?.chat_id ||
+    connection?.metadata?.chat_id ||
+    '等待授权'
+  );
+}
+
+function isErrorMessage(message) {
+  const text = String(message || '').toLowerCase();
+  return text.includes('missing') || text.includes('failed') || text.includes('error') || text.includes('失败');
+}
+
 export function SettingsPage({ userId }) {
   const [connections, setConnections] = useState([]);
   const [telegramForm, setTelegramForm] = useState(initialTelegramForm);
   const [message, setMessage] = useState('');
+  const [setupInfo, setSetupInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const stats = useMemo(() => summarizeConnections(connections), [connections]);
 
@@ -51,6 +78,7 @@ export function SettingsPage({ userId }) {
   async function handleTelegramConnect(event) {
     event.preventDefault();
     setMessage('');
+    setSetupInfo(null);
     setLoading(true);
     try {
       const result = await connectTelegramPlatform(telegramForm);
@@ -68,8 +96,9 @@ export function SettingsPage({ userId }) {
     }
   }
 
-  async function handleConnectionAction(action, connection) {
+  async function handleTelegramAction(action, connection) {
     setMessage('');
+    setSetupInfo(null);
     setLoading(true);
     try {
       if (action === 'disconnect') {
@@ -95,6 +124,7 @@ export function SettingsPage({ userId }) {
 
   async function handleXConnect() {
     setMessage('');
+    setSetupInfo(null);
     setLoading(true);
     try {
       const result = await connectXPlatform();
@@ -112,8 +142,9 @@ export function SettingsPage({ userId }) {
     }
   }
 
-  async function handleXConnectionAction(action, connection) {
+  async function handleXAction(action, connection) {
     setMessage('');
+    setSetupInfo(null);
     setLoading(true);
     try {
       if (action === 'disconnect') {
@@ -138,13 +169,115 @@ export function SettingsPage({ userId }) {
     }
   }
 
+  async function handlePreparedPlatform(card) {
+    setMessage('');
+    setSetupInfo(null);
+    setLoading(true);
+    try {
+      const result = await preparePlatformConnection(card.platform);
+      setSetupInfo({
+        title: card.title,
+        platform: card.platform,
+        setup: result.setup || {
+          required_secrets: card.requiredSecrets,
+          missing_secrets: card.requiredSecrets,
+          callback_url: card.callbackUrl,
+          auth_type: card.authType,
+          multi_account: true,
+        },
+      });
+      const missing = result.setup?.missing_secrets || card.requiredSecrets || [];
+      setMessage(missing.length
+        ? `${card.title} 配置入口已完成，还缺少：${missing.join(', ')}`
+        : `${card.title} Secrets 已配置，下一步可以接真实 OAuth handler。`);
+    } catch (error) {
+      setSetupInfo({
+        title: card.title,
+        platform: card.platform,
+        setup: {
+          required_secrets: card.requiredSecrets,
+          missing_secrets: card.requiredSecrets,
+          callback_url: card.callbackUrl,
+          auth_type: card.authType,
+          multi_account: true,
+        },
+      });
+      setMessage(`${card.title} 配置入口已准备，但请求返回：${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function renderSetupInfo() {
+    if (!setupInfo) return null;
+    const setup = setupInfo.setup || {};
+    return (
+      <article className="setup-panel">
+        <div>
+          <p className="eyebrow">Connection Setup</p>
+          <h3>{setupInfo.title || setupInfo.platform} 接入配置</h3>
+          <p>真实授权前，把平台开发者后台的密钥放进 Supabase Edge Function Secrets。前端只显示状态，不保存 token。</p>
+        </div>
+        <div className="setup-grid">
+          <div><span>授权方式</span><strong>{setup.auth_type || 'oauth2'}</strong></div>
+          <div><span>多账号</span><strong>{setup.multi_account ? '支持，每个账号一条连接' : '未开启'}</strong></div>
+          <div><span>回调地址</span><code>{setup.callback_url || setup.redirect_uri || '—'}</code></div>
+          <div><span>Token存储</span><strong>{setup.token_storage || 'platform_credentials_only'}</strong></div>
+        </div>
+        <div className="secret-list">
+          <strong>需要配置的 Secrets</strong>
+          {(setup.required_secrets || []).map((secret) => {
+            const missing = (setup.missing_secrets || []).includes(secret);
+            return <span className={missing ? 'tag warning' : 'tag success'} key={secret}>{secret}{missing ? ' · 缺少' : ' · 已配置'}</span>;
+          })}
+        </div>
+      </article>
+    );
+  }
+
+  function renderPlatformActions(card, platformConnections) {
+    const firstConnection = platformConnections[0];
+    const busy = loading || !userId || !isSupabaseConfigured;
+
+    if (card.platform === 'X') {
+      if (!firstConnection) {
+        return <button type="button" className="primary-button" disabled={busy} onClick={handleXConnect}>连接 X</button>;
+      }
+      return (
+        <div className="card-actions">
+          <button type="button" className="ghost-button" disabled={loading} onClick={() => handleXAction('status', firstConnection)}>检查状态</button>
+          <button type="button" className="ghost-button" disabled={loading} onClick={() => handleXAction('reconnect', firstConnection)}>重连</button>
+          <button type="button" className="ghost-button danger" disabled={loading} onClick={() => handleXAction('disconnect', firstConnection)}>断开</button>
+          <button type="button" className="ghost-button" disabled={busy} onClick={handleXConnect}>添加另一个</button>
+        </div>
+      );
+    }
+
+    if (card.platform === 'Telegram') {
+      if (!firstConnection) return <span className="tag">请用上方表单连接</span>;
+      return (
+        <div className="card-actions">
+          <button type="button" className="ghost-button" disabled={loading} onClick={() => handleTelegramAction('status', firstConnection)}>检查状态</button>
+          <button type="button" className="ghost-button" disabled={loading} onClick={() => handleTelegramAction('reconnect', firstConnection)}>重连</button>
+          <button type="button" className="ghost-button danger" disabled={loading} onClick={() => handleTelegramAction('disconnect', firstConnection)}>断开</button>
+        </div>
+      );
+    }
+
+    return (
+      <button type="button" className="ghost-button" disabled={busy} onClick={() => handlePreparedPlatform(card)}>
+        查看接入配置
+      </button>
+    );
+  }
+
   return (
     <section className="page-stack">
       <div className="section-head">
         <div>
           <p className="eyebrow">Settings</p>
           <h2>设置</h2>
-          <p>集中管理基础配置和平台连接状态。敏感 Token 不进入前端；Telegram Bot Token 只保存在 Supabase Edge Function Secrets。</p>
+          <p>集中管理基础配置和平台连接状态。敏感 Token 不进入前端，只由 Supabase Edge Function 读取和处理。</p>
         </div>
       </div>
 
@@ -155,22 +288,22 @@ export function SettingsPage({ userId }) {
         </article>
         <article className="settings-card">
           <h3>AI 服务</h3>
-          <p>GPT、Claude、Qwen、ComfyUI、n8n 仍保留接口位，后续建议通过后端或 Edge Function 代理。</p>
+          <p>AI Gateway、ComfyUI、Agent Runtime 仍通过后端安全层代理，不在浏览器暴露模型 API Key。</p>
         </article>
         <article className="settings-card">
           <h3>真实发布</h3>
-          <p>Telegram 与 X 已进入真实连接链路；Instagram、YouTube、TikTok、Discord 已建立配置入口，真实授权密钥统一放在 Supabase Edge Function Secrets。</p>
+          <p>Telegram 与 X 已进入真实连接链路；Instagram、YouTube、TikTok、Discord 已建立配置入口。</p>
         </article>
       </div>
 
       <form className="form-card" onSubmit={handleTelegramConnect}>
         <p className="eyebrow">Telegram Bot</p>
         <h3>连接 Telegram 发布账号</h3>
-        <p className="muted-text">需要先把 Bot 加为频道/群管理员。chat_id 可填频道用户名，例如 @your_channel；也可填 -100 开头的频道 ID。Bot Token 不在页面输入，由 Edge Function Secret 读取。</p>
+        <p className="muted-text">先把 Bot 加为频道/群管理员。Chat ID 可填频道用户名，例如 @your_channel；也可填 -100 开头的频道 ID。Bot Token 只从 Edge Function Secret 读取。</p>
         <div className="form-grid">
           <label>
             显示名称
-            <input value={telegramForm.account_name} onChange={(event) => updateTelegramForm('account_name', event.target.value)} placeholder="例如：Luravyn Telegram" required />
+            <input value={telegramForm.account_name} onChange={(event) => updateTelegramForm('account_name', event.target.value)} placeholder="例如：AI Creative Studio" required />
           </label>
           <label>
             Chat ID / 频道用户名
@@ -186,7 +319,7 @@ export function SettingsPage({ userId }) {
         <div>
           <p className="eyebrow">Social Connections</p>
           <h2>平台连接</h2>
-          <p>这里只展示连接状态和非敏感账号信息，不读取、不显示明文 token。</p>
+          <p>这里展示所有平台连接状态。每个平台可以保存多个账号；未接入的平台会显示完整配置说明，不再停留在灰色占位按钮。</p>
         </div>
       </div>
 
@@ -197,60 +330,50 @@ export function SettingsPage({ userId }) {
         <StatCard label="异常" value={loading ? '—' : stats.errors} hint="error" />
       </div>
 
-      {message && <div className={message.includes('Missing') || message.includes('failed') || message.includes('error') ? 'notice error' : 'notice'}>{message}</div>}
+      {message && <div className={isErrorMessage(message) ? 'notice error' : 'notice'}>{message}</div>}
+      {renderSetupInfo()}
 
       <div className="content-grid">
-        {platforms.map((platform) => {
-          const connection = connections.find((item) => item.platform === platform);
+        {platformConnectionCards.map((card) => {
+          const platformConnections = getConnectionsByPlatform(connections, card.platform);
+          const connectedCount = platformConnections.filter((item) => item.status === 'connected').length;
+          const status = connectedCount ? 'connected' : platformConnections[0]?.status || 'not_connected';
+          const firstConnection = platformConnections[0];
           return (
-            <article className="content-card" key={platform}>
+            <article className="content-card" key={card.platform}>
               <div className="card-meta">
-                <StatusBadge status={connection?.status || 'disconnected'} />
-                <span className="tag">{platform}</span>
+                <StatusBadge status={status} />
+                <span className="tag">{card.platform}</span>
               </div>
-              <h3>{connection?.social_accounts?.account_name || `${platform} 未连接`}</h3>
-              <p>{connection ? '连接记录已保存，凭证由 Edge Function 管理。' : '等待后续 OAuth / Bot / API 连接流程。'}</p>
+              <h3>{firstConnection?.social_accounts?.account_name || `${card.title} 未连接`}</h3>
+              <p>{firstConnection ? '连接记录已保存，凭证由 Edge Function 管理。' : card.description}</p>
+              <div className="metric-row">
+                <span>连接数</span>
+                <strong>{connectedCount}/{platformConnections.length}</strong>
+              </div>
               <div className="metric-row">
                 <span>连接时间</span>
-                <strong>{formatDate(connection?.connected_at)}</strong>
+                <strong>{formatDate(firstConnection?.connected_at)}</strong>
               </div>
               <div className="metric-row">
                 <span>最后同步</span>
-                <strong>{formatDate(connection?.last_sync)}</strong>
+                <strong>{formatDate(firstConnection?.last_sync)}</strong>
               </div>
-              {platform === 'Telegram' && connection && (
-                <div className="card-actions">
-                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleConnectionAction('status', connection)}>
-                    检查状态
-                  </button>
-                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleConnectionAction('reconnect', connection)}>
-                    重连
-                  </button>
-                  <button type="button" className="ghost-button danger" disabled={loading} onClick={() => handleConnectionAction('disconnect', connection)}>
-                    断开
-                  </button>
-                </div>
-              )}
-              {platform === 'X' && !connection && (
-                <div className="card-actions">
-                  <button type="button" className="ghost-button" disabled={loading || !userId || !isSupabaseConfigured} onClick={handleXConnect}>
-                    连接 X
-                  </button>
-                </div>
-              )}
-              {platform === 'X' && connection && (
-                <div className="card-actions">
-                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleXConnectionAction('status', connection)}>
-                    检查状态
-                  </button>
-                  <button type="button" className="ghost-button" disabled={loading} onClick={() => handleXConnectionAction('reconnect', connection)}>
-                    重连
-                  </button>
-                  <button type="button" className="ghost-button danger" disabled={loading} onClick={() => handleXConnectionAction('disconnect', connection)}>
-                    断开
-                  </button>
-                </div>
-              )}
+              <div className="connection-record-list">
+                {platformConnections.length ? platformConnections.map((connection) => (
+                  <div className="connection-record" key={connection.id}>
+                    <div>
+                      <strong>{getConnectionName(connection)}</strong>
+                      <small>{formatDate(connection.connected_at || connection.created_at)}</small>
+                    </div>
+                    <StatusBadge status={connection.status || 'pending'} />
+                  </div>
+                )) : <div className="connection-empty">暂无连接账号</div>}
+              </div>
+              <div className="card-actions">
+                {renderPlatformActions(card, platformConnections)}
+              </div>
+              <small>{card.priority} · {card.authType}</small>
             </article>
           );
         })}

@@ -214,6 +214,29 @@ Header changes to 已登录
 Dashboard loads real Supabase data
 ```
 
+## Follow-up fix 3
+
+Production callback showed this browser error:
+
+```text
+Failed to execute 'fetch' on 'Window': Failed to read the 'headers' property from 'RequestInit': String contains non ISO-8859-1 code point.
+```
+
+This means a Supabase request was blocked before it reached the network because one request header contained a non-Latin-1 character.
+
+Applied fix:
+
+- Added a `safeFetch` wrapper in `src/services/supabase-client.js`.
+- All Supabase request headers are normalized to ASCII before `fetch()`.
+- Set a fixed ASCII-only `X-Client-Info: ai-marketing-studio-web`.
+
+Expected behavior:
+
+```text
+OAuth callback code exchange no longer fails before network request.
+If Supabase returns an auth error, the page can show the real auth error instead of a browser header exception.
+```
+
 ## Expected user-facing result
 
 1. User opens production site.

@@ -6,6 +6,29 @@ const authStorageKey = 'ai-marketing-studio-auth-session';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
+function toAsciiHeaderValue(value) {
+  return String(value ?? '').replace(/[^\x20-\x7E]/g, '');
+}
+
+function createSafeHeaders(headers) {
+  const safeHeaders = new globalThis.Headers();
+
+  new globalThis.Headers(headers || {}).forEach((value, key) => {
+    safeHeaders.set(key, toAsciiHeaderValue(value));
+  });
+
+  return safeHeaders;
+}
+
+async function safeFetch(input, init = {}) {
+  const safeInit = {
+    ...init,
+    headers: createSafeHeaders(init.headers),
+  };
+
+  return globalThis.fetch(input, safeInit);
+}
+
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
@@ -14,6 +37,12 @@ export const supabase = isSupabaseConfigured
         detectSessionInUrl: false,
         flowType: 'pkce',
         storageKey: authStorageKey,
+      },
+      global: {
+        fetch: safeFetch,
+        headers: {
+          'X-Client-Info': 'ai-marketing-studio-web',
+        },
       },
     })
   : null;

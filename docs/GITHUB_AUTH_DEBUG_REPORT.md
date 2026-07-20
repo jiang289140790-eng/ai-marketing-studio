@@ -416,3 +416,64 @@ Use supabase-js signInWithOAuth({ provider: 'github', options: { redirectTo } })
 ```
 
 This lets Supabase JS create and store the PKCE verifier before redirecting to the provider.
+
+## Update: production click diagnosis
+
+Checked production bundle:
+
+```text
+https://jiang289140790-eng.github.io/ai-marketing-studio/assets/index-Bbhtejyx.js
+```
+
+Confirmed:
+
+```text
+Production bundle contains the correct Supabase project URL.
+Production bundle contains the frontend anon key.
+Production bundle contains GitHub login code.
+Supabase /auth/v1/authorize can redirect to GitHub.
+```
+
+A local SDK-only authorization URL generation test succeeded:
+
+```text
+provider: github
+redirect_to: https://jiang289140790-eng.github.io/ai-marketing-studio/
+code_challenge: present
+code_challenge_method: s256
+storage key: ai-marketing-studio-auth-session-code-verifier
+```
+
+This proves the provider and redirect config are basically valid. The fragile part is browser-side redirect execution and preserving the PKCE verifier.
+
+## Applied fix
+
+Changed GitHub login launch to:
+
+```js
+const { data, error } = await client.auth.signInWithOAuth({
+  provider: 'github',
+  options: {
+    redirectTo: window.location.origin + window.location.pathname,
+    skipBrowserRedirect: true,
+  },
+});
+
+window.location.assign(data.url);
+```
+
+Why:
+
+```text
+Supabase SDK still creates and stores the PKCE verifier.
+The app explicitly navigates to the SDK-generated URL.
+This avoids relying on the SDK/browser default redirect side effect.
+Do not use a hand-written authorize URL.
+```
+
+Expected result:
+
+```text
+Clicking GitHub 登录 should immediately leave the app and open GitHub authorization.
+After authorization, the app should return to the clean production URL and show 已登录.
+```

@@ -51,28 +51,24 @@ export async function updatePlatformConnection(id, payload) {
 }
 
 export async function connectTelegramPlatform(payload) {
-  return invokeTelegramConnectionAction('connect', {
-    chat_id: payload.chat_id,
-    account_name: payload.account_name,
-  });
+  return invokePlatformConnectionAction('Telegram', 'connect', payload);
 }
 
 export async function reconnectTelegramPlatform(connectionId, payload = {}) {
-  return invokeTelegramConnectionAction('reconnect', {
+  return invokePlatformConnectionAction('Telegram', 'reconnect', {
     connection_id: connectionId,
-    chat_id: payload.chat_id,
-    account_name: payload.account_name,
+    ...payload,
   });
 }
 
 export async function disconnectTelegramPlatform(connectionId) {
-  return invokeTelegramConnectionAction('disconnect', {
+  return invokePlatformConnectionAction('Telegram', 'disconnect', {
     connection_id: connectionId,
   });
 }
 
 export async function getTelegramPlatformStatus(connectionId) {
-  return invokeTelegramConnectionAction('status', {
+  return invokePlatformConnectionAction('Telegram', 'status', {
     connection_id: connectionId,
   });
 }
@@ -104,10 +100,6 @@ export async function preparePlatformConnection(platform, payload = {}) {
     mode: 'prepare',
     ...payload,
   });
-}
-
-async function invokeTelegramConnectionAction(action, payload = {}) {
-  return invokePlatformConnectionAction('Telegram', action, payload);
 }
 
 async function invokePlatformConnectionAction(platform, action, payload = {}) {

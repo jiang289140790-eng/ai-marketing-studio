@@ -18,7 +18,7 @@ export function Header({ title }) {
 
       window.setTimeout(() => {
         setIsSigningIn(false);
-        setSignInError('如果页面没有自动跳转，请点击下面的“继续 GitHub 授权”。');
+        setSignInError('如果页面没有自动跳转，请点击下方“继续 GitHub 授权”。');
       }, 1800);
     } catch (error) {
       setIsSigningIn(false);
@@ -52,7 +52,7 @@ export function Header({ title }) {
         ) : (
           <div className="login-stack">
             <button className="primary-button" type="button" onClick={handleGitHubSignIn} disabled={!isSupabaseConfigured || isSigningIn || loading}>
-              {isSigningIn ? '正在跳转…' : 'GitHub 登录'}
+              {isSigningIn ? '正在跳转...' : 'GitHub 登录'}
             </button>
             {authUrl && (
               <a className="auth-fallback-link" href={authUrl}>

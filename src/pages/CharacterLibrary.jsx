@@ -26,8 +26,10 @@ export function CharacterLibrary({ userId }) {
     try {
       if (editing) {
         await updateCharacter(editing.id, payload);
+        setMessage('角色已更新。');
       } else {
         await createCharacter(userId, payload);
+        setMessage('角色已创建。');
       }
       setEditing(null);
       setIsCreating(false);
@@ -41,6 +43,7 @@ export function CharacterLibrary({ userId }) {
     try {
       await deleteCharacter(character.id);
       if (selected?.id === character.id) setSelected(null);
+      setMessage('角色已删除。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -51,11 +54,11 @@ export function CharacterLibrary({ userId }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">AI Character Library</p>
+          <p className="eyebrow">Character Brain</p>
           <h2>角色库</h2>
-          <p>保存角色设定、外观、性格、Prompt 和 LoRA，用于未来 AI 内容生成。</p>
+          <p>保存角色设定、外观、性格、Prompt 和 LoRA。未来 Asset Factory 会根据角色自动选择 LoRA、Workflow 和生成参数。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured}>
+        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
           新建角色
         </button>
       </div>
@@ -76,12 +79,14 @@ export function CharacterLibrary({ userId }) {
         />
       )}
 
-      {message && <div className="notice error">{message}</div>}
+      {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
       {!isSupabaseConfigured ? (
         <EmptyState title="等待 Supabase 配置" description="配置后这里会从 characters 表读取角色。" />
+      ) : !userId ? (
+        <EmptyState title="请先登录" description="登录后才能读取和管理你的角色库。" />
       ) : characters.length === 0 ? (
-        <EmptyState title="暂无角色" description="创建第一个 AI 角色，沉淀你的虚拟模特、品牌人物或内容 IP。" />
+        <EmptyState title="暂无角色" description="创建第一个 AI 角色，用来沉淀虚拟模特、品牌人物或内容 IP。" />
       ) : (
         <div className="asset-grid">
           {characters.map((character) => (

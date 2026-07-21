@@ -28,6 +28,7 @@ export function AssetLibrary({ userId }) {
     try {
       await createAsset(userId, payload);
       setIsCreating(false);
+      setMessage('资产已保存。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -44,6 +45,7 @@ export function AssetLibrary({ userId }) {
         name: file.name,
         tags: [],
       });
+      setMessage('文件已上传到素材库。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -54,6 +56,7 @@ export function AssetLibrary({ userId }) {
     try {
       await deleteAsset(asset.id);
       if (selected?.id === asset.id) setSelected(null);
+      setMessage('资产已删除。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -72,11 +75,11 @@ export function AssetLibrary({ userId }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">ContentStudio Asset Library + Civitai</p>
+          <p className="eyebrow">Asset Factory</p>
           <h2>素材库</h2>
-          <p>统一管理图片、视频、音频、Prompt、Workflow 和 LoRA。后续可接 Civitai 模型资产与 ComfyUI 工作流。</p>
+          <p>统一管理图片、视频、音频、Prompt、Workflow 和 LoRA。后续可以继续接入 Civitai 模型资产与 ComfyUI 工作流。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured}>
+        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
           新建资产
         </button>
       </div>
@@ -106,17 +109,19 @@ export function AssetLibrary({ userId }) {
               type="file"
               accept={uploadType === 'video' ? 'video/*' : uploadType === 'audio' ? 'audio/*' : 'image/*'}
               onChange={handleFile}
-              disabled={!isSupabaseConfigured}
+              disabled={!isSupabaseConfigured || !userId}
             />
           </label>
         </div>
       </div>
 
       {isCreating && <AssetForm onSubmit={handleCreate} onCancel={() => setIsCreating(false)} />}
-      {message && <div className="notice error">{message}</div>}
+      {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
       {!isSupabaseConfigured ? (
         <EmptyState title="等待 Supabase Storage 配置" description="配置后这里会从 assets 表读取资产，并支持上传与删除。" />
+      ) : !userId ? (
+        <EmptyState title="请先登录" description="登录后才能读取和管理你的素材库。" />
       ) : assets.length === 0 ? (
         <EmptyState title="暂无素材" description="上传文件，或者保存一个 Workflow / LoRA / Prompt 资产。" />
       ) : (

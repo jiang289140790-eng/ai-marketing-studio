@@ -59,9 +59,7 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
           平台
           <select value={form.platform} onChange={(event) => update('platform', event.target.value)}>
             {platforms.map((platform) => (
-              <option key={platform} value={platform}>
-                {platform}
-              </option>
+              <option key={platform} value={platform}>{platform}</option>
             ))}
           </select>
         </label>
@@ -85,9 +83,7 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
           账号角色
           <select value={form.account_role || form.account_type || 'owned'} onChange={(event) => update('account_role', event.target.value)}>
             {accountCategories.map((category) => (
-              <option key={category.value} value={category.value}>
-                {category.label}
-              </option>
+              <option key={category.value} value={category.value}>{category.label}</option>
             ))}
           </select>
         </label>
@@ -103,9 +99,7 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
           API 状态
           <select value={form.api_status || 'not_connected'} onChange={(event) => update('api_status', event.target.value)}>
             {apiStatuses.map((status) => (
-              <option key={status.value} value={status.value}>
-                {status.label}
-              </option>
+              <option key={status.value} value={status.value}>{status.label}</option>
             ))}
           </select>
         </label>
@@ -119,7 +113,7 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
         </label>
         <label className="wide-field">
           内容方向
-          <textarea value={form.content_strategy || ''} onChange={(event) => update('content_strategy', event.target.value)} placeholder="可留空，例如：AI角色、AI图片、AI工具、教程、案例拆解" />
+          <textarea value={form.content_strategy || ''} onChange={(event) => update('content_strategy', event.target.value)} placeholder="例如：AI角色、AI图片、AI工具、教程、案例拆解" />
         </label>
         <label className="wide-field">
           账号运营备注
@@ -127,13 +121,9 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
         </label>
       </div>
       <div className="button-row">
-        <button className="primary-button" type="submit">
-          保存账号
-        </button>
+        <button className="primary-button" type="submit">保存账号</button>
         {onCancel && (
-          <button className="ghost-button" type="button" onClick={onCancel}>
-            取消
-          </button>
+          <button className="ghost-button" type="button" onClick={onCancel}>取消</button>
         )}
       </div>
     </form>

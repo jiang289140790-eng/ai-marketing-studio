@@ -3,48 +3,33 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
-import { AgentCenter } from './pages/AgentCenter';
-import { AIStudio } from './pages/AIStudio';
-import { AnalyticsPage } from './pages/AnalyticsPage';
 import { AssetLibrary } from './pages/AssetLibrary';
-import { AutomationCenter } from './pages/AutomationCenter';
 import { CharacterLibrary } from './pages/CharacterLibrary';
-import { CollectionCenter } from './pages/CollectionCenter';
-import { ContentIntelligence } from './pages/ContentIntelligence';
-import { ContentLibrary } from './pages/ContentLibrary';
-import { DailyReport } from './pages/DailyReport';
 import { Dashboard } from './pages/Dashboard';
-import { PerformanceCenter } from './pages/PerformanceCenter';
-import { PromptLibrary } from './pages/PromptLibrary';
-import { PublishCenter } from './pages/PublishCenter';
-import { PublishPlan } from './pages/PublishPlan';
-import { SettingsPage } from './pages/SettingsPage';
-import { SystemHealth } from './pages/SystemHealth';
-import { WorkflowRuns } from './pages/WorkflowRuns';
-import { WorkflowTestCenter } from './pages/WorkflowTestCenter';
 
 const pageTitles = {
-  dashboard: 'Dashboard',
-  accounts: '账号管理',
-  content: '内容库',
-  'ai-studio': 'AI 生成',
+  dashboard: 'AI 运营控制台',
+  accounts: '账号矩阵',
   assets: '素材库',
   characters: '角色库',
-  prompts: 'Prompt 库',
-  workflows: 'Workflow Runs',
-  'workflow-test': 'Workflow Test Center',
-  agents: 'Agent Center',
-  intelligence: '内容情报',
-  collection: '采集中心',
-  automation: '自动化中心',
+  content: '内容工厂',
+  intelligence: '情报中心',
   publish: '发布中心',
-  performance: '效果分析',
-  health: '系统健康',
-  report: '运营日报',
-  planner: '发布计划',
   analytics: '数据分析',
   settings: '设置',
 };
+
+function PlaceholderPage({ title, description }) {
+  return (
+    <section className="page-stack">
+      <div className="hero-panel">
+        <p className="eyebrow">等待迁移</p>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+    </section>
+  );
+}
 
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard');
@@ -56,42 +41,20 @@ export default function App() {
     switch (activePage) {
       case 'accounts':
         return <AccountsPage {...props} />;
-      case 'content':
-        return <ContentLibrary {...props} />;
-      case 'ai-studio':
-        return <AIStudio {...props} />;
       case 'assets':
         return <AssetLibrary {...props} />;
       case 'characters':
         return <CharacterLibrary {...props} />;
-      case 'prompts':
-        return <PromptLibrary {...props} />;
-      case 'workflows':
-        return <WorkflowRuns {...props} />;
-      case 'workflow-test':
-        return <WorkflowTestCenter {...props} />;
-      case 'agents':
-        return <AgentCenter {...props} />;
+      case 'content':
+        return <PlaceholderPage title="内容工厂" description="后续会把本地 Command Center 的内容生成、审核、发布准备流程迁移到这里。" />;
       case 'intelligence':
-        return <ContentIntelligence {...props} />;
-      case 'collection':
-        return <CollectionCenter {...props} />;
-      case 'automation':
-        return <AutomationCenter {...props} />;
+        return <PlaceholderPage title="情报中心" description="后续会把 Research Intelligence、竞品账号分析和内容机会发现迁移到这里。" />;
       case 'publish':
-        return <PublishCenter {...props} />;
-      case 'performance':
-        return <PerformanceCenter {...props} />;
-      case 'health':
-        return <SystemHealth {...props} />;
-      case 'report':
-        return <DailyReport {...props} />;
-      case 'planner':
-        return <PublishPlan {...props} />;
+        return <PlaceholderPage title="发布中心" description="后续会把 Telegram / X 等平台发布链路迁移到这里。" />;
       case 'analytics':
-        return <AnalyticsPage {...props} />;
+        return <PlaceholderPage title="数据分析" description="后续会把内容表现、成本、转化和策略优化闭环迁移到这里。" />;
       case 'settings':
-        return <SettingsPage {...props} />;
+        return <PlaceholderPage title="设置" description="这里用于后续集中管理 Supabase、平台连接和个人运营参数。" />;
       default:
         return <Dashboard {...props} onNavigate={setActivePage} />;
     }
@@ -101,8 +64,8 @@ export default function App() {
     <div className="app-shell">
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
       <div className="main-shell">
-        <Header title={pageTitles[activePage]} />
-        {authLoading && <div className="notice">正在恢复登录状态…</div>}
+        <Header title={pageTitles[activePage] || pageTitles.dashboard} />
+        {authLoading && <div className="notice">正在恢复登录状态...</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
         {page}
       </div>

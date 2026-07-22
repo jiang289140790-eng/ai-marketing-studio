@@ -36,7 +36,19 @@ export const asyncActions = new Set([
   'analyze_account',
 ]);
 
-export async function getExecutionStatus() {
+let healthCache;
+let healthCacheAt = 0;
+const HEALTH_CACHE_MS = 15_000;
+
+export async function getExecutionStatus({ force = false } = {}) {
+  if (!force && healthCache && Date.now() - healthCacheAt < HEALTH_CACHE_MS) return healthCache;
+
+  healthCache = loadExecutionStatus();
+  healthCacheAt = Date.now();
+  return healthCache;
+}
+
+async function loadExecutionStatus() {
   try {
     const data = await callGatewayFunction('ops-health', { method: 'GET' });
     const status = data?.status || {};
@@ -111,11 +123,11 @@ export function isTerminalStatus(status) {
 }
 
 export function buildHealthReason(status) {
-  if (!status) return 'ops-health 尚未返回状态。';
-  if (!status.bridge_configured) return 'Supabase Edge Function 尚未配置 OPS_MCP_BRIDGE_URL 或 OPS_MCP_BRIDGE_SECRET。';
-  if (!status.bridge) return 'MCP Runtime Bridge 暂不可访问。';
-  if (!status.mcp) return 'AI Marketing Studio MCP 暂不可用。';
-  return '执行网关未完整连接。';
+  if (!status) return '执行服务状态暂时无法读取，请稍后刷新。';
+  if (!status.bridge_configured) return '执行服务暂未连接。请先完成 MCP Bridge 部署，之后才能运行自动化操作。';
+  if (!status.bridge) return '执行服务暂时无法访问，请检查 MCP Bridge 的公网健康状态。';
+  if (!status.mcp) return 'MCP 服务尚未准备完成，自动化操作暂不可用。';
+  return '执行服务尚未完全就绪。';
 }
 
 function buildHealthDetails(status = {}) {

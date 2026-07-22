@@ -12,6 +12,7 @@ import {
   loadContentWorkspaceData,
   normalizeList,
 } from '../services/ops-service';
+import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 
@@ -36,6 +37,17 @@ const VIDEO_MODES = [
   ['reference_video', '参考视频生成'],
   ['character_lora_video', '角色 LoRA 视频'],
   ['multi_shot', '多镜头分段生成'],
+];
+
+const WORKFLOW_FILTERS = [
+  ['all', '全部'],
+  ['pending_review', '待审核'],
+  ['pending_asset', '待生成素材'],
+  ['generated_asset', '已生成素材'],
+  ['pending_publish', '待发布'],
+  ['published', '已发布'],
+  ['failed', '失败'],
+  ['test', '测试数据'],
 ];
 
 const IMAGE_REQUIREMENT_FIELDS = [
@@ -77,6 +89,9 @@ const VIDEO_REQUIREMENT_FIELDS = [
 export function ContentWorkspacePage({ userId, onNavigate }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
+  const [activeWorkflow, setActiveWorkflow] = useState('all');
+  const [hideTests, setHideTests] = useState(true);
+  const [gateway, setGateway] = useState({ loading: true, connected: false });
 
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) return undefined;
@@ -87,8 +102,25 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
     return undefined;
   }, [userId]);
 
+  useEffect(() => {
+    if (!userId) return undefined;
+    let cancelled = false;
+    getExecutionStatus().then((status) => {
+      if (!cancelled) setGateway({ loading: false, ...status });
+    });
+    return () => { cancelled = true; };
+  }, [userId]);
+
   const contentPackages = useMemo(() => getContentPackages(data), [data]);
   const assets = useMemo(() => getAssets(data), [data]);
+  const workflowCounts = useMemo(() => WORKFLOW_FILTERS.reduce((result, [id]) => {
+    result[id] = contentPackages.filter((item) => contentMatchesWorkflow(item, id, data, assets)).length;
+    return result;
+  }, {}), [assets, contentPackages, data]);
+  const filteredPackages = useMemo(() => contentPackages.filter((item) => {
+    if (hideTests && activeWorkflow !== 'test' && isTestContent(item)) return false;
+    return contentMatchesWorkflow(item, activeWorkflow, data, assets);
+  }), [activeWorkflow, assets, contentPackages, data, hideTests]);
 
   if (!isSupabaseConfigured) {
     return <EmptyState title="等待 Supabase 配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
@@ -120,8 +152,29 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
         <StatCard label="可用素材" value={loading ? '-' : assets.length} hint="素材库与历史素材" />
       </div>
 
+      {!gateway.loading && !gateway.connected && (
+        <div className="execution-service-notice">
+          <div><strong>执行服务暂未连接</strong><span>内容查看、编辑和审核不受影响；生成、导入与发布动作暂不可执行。</span></div>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>查看 Command Center 的执行网关状态</button>
+        </div>
+      )}
+
+      <div className="content-workflow-toolbar">
+        <div className="workflow-filter-list" aria-label="内容工作流筛选">
+          {WORKFLOW_FILTERS.map(([id, label]) => (
+            <button className={activeWorkflow === id ? 'active' : ''} type="button" key={id} onClick={() => setActiveWorkflow(id)}>
+              {label}<span>{workflowCounts[id] || 0}</span>
+            </button>
+          ))}
+        </div>
+        <label className="hide-test-toggle">
+          <input type="checkbox" checked={hideTests} onChange={(event) => setHideTests(event.target.checked)} />
+          隐藏测试内容
+        </label>
+      </div>
+
       <div className="content-workspace-list">
-        {contentPackages.length ? contentPackages.map((item) => (
+        {filteredPackages.length ? filteredPackages.map((item) => (
           <ContentPackageCard
             key={`${item.sourceKey}-${item.id}`}
             item={item}
@@ -130,7 +183,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
             onNavigate={onNavigate}
           />
         )) : (
-          <EmptyState title="暂无内容包" description="当前数据库没有可审核内容。Content Factory 生成后，会进入这里继续素材生成和终审。" />
+          <EmptyState title="没有匹配的内容包" description="请更换工作流筛选，或关闭“隐藏测试内容”后再查看。" />
         )}
       </div>
 
@@ -142,8 +195,22 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
+  const character = findById(data.characters, item.characterId);
+  const lora = getLoraInfo(character, item);
   const linkedAssets = assetsForContent(item, assets);
-  const [studioOpen, setStudioOpen] = useState(true);
+  const [studioOpen, setStudioOpen] = useState(false);
+  const sectionIds = {
+    studio: `content-${item.id}-studio`,
+    copy: `content-${item.id}-copy`,
+    media: `content-${item.id}-media`,
+    results: `content-${item.id}-results`,
+    approval: `content-${item.id}-approval`,
+  };
+
+  function openSection(target) {
+    setStudioOpen(true);
+    window.setTimeout(() => document.getElementById(sectionIds[target])?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  }
 
   return (
     <article className="content-package-card">
@@ -154,6 +221,7 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
           <p className="body-preview">{truncate(displayText(item.body, '等待生成正文'), 220)}</p>
         </div>
         <div className="badge-stack">
+          {isTestContent(item) && <span className="test-content-badge">测试内容</span>}
           <StatusBadge status={item.reviewStatus || item.status} />
           <StatusBadge status={item.platform} />
         </div>
@@ -161,10 +229,23 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
 
       <div className="content-card-meta">
         <Info label="Campaign" value={campaign?.name || campaign?.title} />
+        <Info label="策略" value={strategy?.name || strategy?.title} />
         <Info label="平台" value={item.platform} />
         <Info label="目标账号" value={account?.account_name || account?.username || account?.account_url} />
+        <Info label="状态" value={item.status} />
+        <Info label="审核状态" value={item.reviewStatus || item.approvalStatus} />
+        <Info label="角色" value={character?.display_name || character?.name} />
+        <Info label="LoRA" value={lora.name || lora.model || lora.filename} />
         <Info label="素材" value={linkedAssets.length} />
         <Info label="创建" value={formatDate(item.createdAt)} />
+        <Info label="最近更新" value={formatDate(item.updatedAt)} />
+      </div>
+
+      <div className="content-copy-summary">
+        <Info label="Hook" value={item.hook} />
+        <Info label="正文摘要" value={truncate(item.body, 160)} />
+        <Info label="CTA" value={item.cta} />
+        <Info label="标签" value={item.tags} />
       </div>
 
       <div className="asset-strip" aria-label="内容素材预览">
@@ -178,35 +259,29 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
       </div>
 
       <div className="button-row content-card-quick-actions">
-        <button className="ghost-button" type="button" onClick={() => setStudioOpen((current) => !current)}>
-          {studioOpen ? '收起工作室' : '查看详情与生成工作室'}
-        </button>
-        <ExecutionButton
-          action="save_draft"
-          actionName="让 Content Agent 整理文案与素材"
-          className="ghost-button"
-          resourceType="content_package"
-          resourceId={item.id}
-          payload={{ content_package_id: item.id, campaign_id: item.campaignId, strategy_id: strategy?.id, mode: 'organize_copy_and_assets' }}
-        >
-          让 Content Agent 整理文案与素材
-        </ExecutionButton>
+        <button className="ghost-button" type="button" onClick={() => openSection('studio')}>查看详情</button>
+        <button className="ghost-button" type="button" onClick={() => openSection('copy')}>继续编辑</button>
+        <button className="ghost-button" type="button" onClick={() => openSection('media')}>生成素材</button>
+        <button className="ghost-button" type="button" onClick={() => openSection('approval')}>审核</button>
+        <button className="ghost-button" type="button" onClick={() => openSection('results')}>查看生成结果</button>
+        {studioOpen && <button className="ghost-button" type="button" onClick={() => setStudioOpen(false)}>收起工作室</button>}
       </div>
 
       <details
         className="generation-studio"
+        id={sectionIds.studio}
         open={studioOpen}
         onToggle={(event) => setStudioOpen(event.currentTarget.open)}
       >
         <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
-        <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} />
+        <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} sectionIds={sectionIds} />
       </details>
     </article>
   );
 }
 
-function ContentPackageStudio({ item, data, assets, onNavigate }) {
+function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
@@ -304,7 +379,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
           </div>
         </section>
 
-        <section className="workspace-block">
+        <section className="workspace-block" id={sectionIds.copy}>
           <h3>文案内容</h3>
           <div className="editor-grid">
             <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
@@ -355,7 +430,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
           </div>
         </section>
 
-        <section className="workspace-block media-generation-shell">
+        <section className="workspace-block media-generation-shell" id={sectionIds.media}>
           <div className="media-generation-heading">
             <div>
               <p className="eyebrow">视觉内容生成</p>
@@ -588,7 +663,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
           </div>
         )}
 
-        <section className="workspace-block">
+        <section className="workspace-block" id={sectionIds.results}>
           <h3>生成结果回传</h3>
           <GenerationResults
             item={item}
@@ -599,7 +674,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
           />
         </section>
 
-        <section className="workspace-block approval-block">
+        <section className="workspace-block approval-block" id={sectionIds.approval}>
           <h3>终审与发布队列</h3>
           <div className="editor-grid final-review-editor">
             <label>最终贴文正文
@@ -804,6 +879,69 @@ function runsForContent(item, runs) {
     const input = run.input_data || {};
     return String(input.content_package_id || input.content_id || run.content_package_id || '') === String(item.id);
   });
+}
+
+function isTestContent(item) {
+  const metadata = safeJson(item?.raw?.metadata);
+  const marker = [
+    item?.title,
+    item?.sourceLabel,
+    metadata.label,
+    metadata.source,
+    metadata.environment,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return item?.raw?.is_test === true
+    || item?.raw?.test_data === true
+    || metadata.is_test === true
+    || metadata.test_data === true
+    || marker.includes('[test]')
+    || marker.includes('[测试示例]')
+    || marker.includes('测试示例');
+}
+
+function contentMatchesWorkflow(item, filter, data, assets) {
+  if (filter === 'all') return true;
+  if (filter === 'test') return isTestContent(item);
+
+  const contentAssets = assetsForContent(item, assets);
+  const contentRuns = runsForContent(item, data.workflowRuns || []);
+  const publishTask = (data.publishTasks || []).find((task) => (
+    String(task.content_package_id || task.content_id || '') === String(item.id)
+  ));
+  const states = [
+    item.status,
+    item.reviewStatus,
+    item.approvalStatus,
+    publishTask?.status,
+    ...contentAssets.map((asset) => asset.status),
+    ...contentRuns.map((run) => run.status),
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  const hasState = (...values) => values.some((value) => states.includes(value));
+  const hasAsset = contentAssets.some((asset) => (
+    Boolean(asset.url || asset.thumbnail)
+    || ['completed', 'ready', 'approved', 'generated'].includes(String(asset.status).toLowerCase())
+  ));
+
+  if (filter === 'failed') return hasState('failed', 'error', 'cancelled');
+  if (filter === 'published') return hasState('published');
+  if (filter === 'pending_publish') {
+    return !hasState('published', 'failed', 'error')
+      && Boolean(publishTask || item.approvedForPublishing || hasState('approved', 'scheduled', 'ready_for_publish', 'publishing'));
+  }
+  if (filter === 'generated_asset') return !hasState('failed', 'error') && Boolean(hasAsset || item.assetConfirmed);
+  if (filter === 'pending_asset') {
+    return !hasAsset
+      && !hasState('failed', 'error', 'published')
+      && Boolean(item.copyConfirmed || item.approvedForPublishing || hasState('approved', 'copy_approved', 'pending_asset'));
+  }
+  if (filter === 'pending_review') {
+    return !hasState('published', 'failed', 'error')
+      && !item.approvedForPublishing
+      && hasState('draft', 'review', 'pending', 'pending_review', 'ready_for_review');
+  }
+
+  return false;
 }
 
 function getLoraInfo(character, item) {

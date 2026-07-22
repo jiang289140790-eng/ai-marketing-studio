@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
-import { ExecutionButton } from '../components/ExecutionButton';
 import { ExecutionStatus } from '../components/ExecutionStatus';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
@@ -43,6 +42,7 @@ const EMPTY_DATA = {
 export function CommandCenter({ userId, onNavigate }) {
   const [data, setData] = useState(EMPTY_DATA);
   const [loading, setLoading] = useState(false);
+  const [gatewayStatus, setGatewayStatus] = useState({ loading: true, connected: false });
 
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) return undefined;
@@ -141,6 +141,10 @@ export function CommandCenter({ userId, onNavigate }) {
     },
   ];
 
+  function scrollToGateway() {
+    document.getElementById('execution-gateway-status')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   return (
     <section className="page-stack">
       <div className="hero-panel command-hero">
@@ -153,13 +157,32 @@ export function CommandCenter({ userId, onNavigate }) {
           </p>
         </div>
         <div className="hero-actions">
-          <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>查看 Campaign 与策略</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>进入内容工作台</button>
-          <ExecutionButton actionName="运行 Daily Ops Agent" reason="Daily Ops Agent 尚未加入本次 action allowlist，先接通单个业务动作。">运行今日 AI 运营</ExecutionButton>
+          {gatewayStatus.loading ? (
+            <div className="execution-hero-state pending">
+              <strong>正在检查执行服务</strong>
+              <span>业务数据仍可正常查看和审核。</span>
+            </div>
+          ) : gatewayStatus.connected ? (
+            <div className="execution-hero-state connected">
+              <strong>执行服务已连接</strong>
+              <span>可以从具体 Campaign、内容或发布任务发起受控动作。</span>
+              <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>查看待处理内容</button>
+            </div>
+          ) : (
+            <div className="execution-hero-state unavailable">
+              <strong>执行服务暂未连接</strong>
+              <span>请先完成 MCP Bridge 部署，之后才能运行每日 AI 运营。</span>
+              <div className="button-row">
+                <button className="ghost-button" type="button" onClick={scrollToGateway}>查看执行网关状态</button>
+                <button className="ghost-button" type="button" onClick={() => onNavigate('connections')}>查看连接详情</button>
+                <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>查看待处理内容</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      <ExecutionStatus />
+      <ExecutionStatus onStatus={setGatewayStatus} />
       <DataReadErrors errors={data.__errors} />
 
       <section className="daily-ops-panel">

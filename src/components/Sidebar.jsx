@@ -1,14 +1,27 @@
+import { useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
 export function Sidebar({ activePage, onNavigate }) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  function navigate(pageId) {
+    onNavigate(pageId);
+    setMobileOpen(false);
+  }
+
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">AI</div>
-        <div className="brand-copy">
-          <strong>AI Marketing OS</strong>
-          <span>Command Center</span>
+    <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+      <div className="sidebar-top">
+        <div className="brand">
+          <div className="brand-mark">AI</div>
+          <div className="brand-copy">
+            <strong>AI Marketing OS</strong>
+            <span>Command Center</span>
+          </div>
         </div>
+        <button className="sidebar-toggle" type="button" aria-expanded={mobileOpen} aria-label="展开或收起导航" onClick={() => setMobileOpen((current) => !current)}>
+          {mobileOpen ? '关闭' : '菜单'}
+        </button>
       </div>
 
       <nav className="nav-list" aria-label="主导航">
@@ -19,7 +32,7 @@ export function Sidebar({ activePage, onNavigate }) {
               <button
                 key={item.id}
                 className={`nav-item ${activePage === item.id ? 'active' : ''}`}
-                onClick={() => onNavigate(item.id)}
+                onClick={() => navigate(item.id)}
                 type="button"
               >
                 <span className="nav-icon">{item.icon}</span>

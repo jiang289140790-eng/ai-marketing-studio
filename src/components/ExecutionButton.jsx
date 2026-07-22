@@ -20,7 +20,7 @@ export function ExecutionButton({
   const execution = useExecutionAction({ action, resourceType, resourceId, payload, ready: ready && Boolean(action), onCompleted });
   const actionLabel = actionName || String(children);
   const localReason = reason || (!action ? getUnavailableReason(actionLabel) : '');
-  const gatewayReason = execution.gateway.connected ? '' : '执行服务暂未连接，请查看上方连接状态';
+  const gatewayReason = execution.gateway.connected ? '' : '执行服务暂未连接，请查看 Command Center 的执行网关状态。';
   const disabledReason = localReason || gatewayReason;
   const disabled = Boolean(localReason) || !execution.canRun;
   const label = buttonLabel(children, execution.state.status);

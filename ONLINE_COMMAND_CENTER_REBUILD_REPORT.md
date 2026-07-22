@@ -224,6 +224,14 @@ LoRA 不作为独立页面，而是进入角色库详情体系。
 ## 上线地址
 
 - GitHub Pages：[https://jiang289140790-eng.github.io/ai-marketing-studio/](https://jiang289140790-eng.github.io/ai-marketing-studio/)
+- 重构提交：`cd51da56d331eeba7a2ebb13140913167d2cf089`
+- GitHub Actions：`Deploy GitHub Pages` 已通过
+- 线上构建确认：
+  - `AI Command Center`：存在
+  - `内容工作台`：存在
+  - `发布队列`：存在
+  - `平台连接`：存在
+  - 旧入口 `内容工厂` / `Ops Data`：未出现在当前构建产物中
 
 ## 下一步建议
 

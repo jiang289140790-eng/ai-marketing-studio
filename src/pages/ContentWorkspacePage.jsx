@@ -213,6 +213,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
   const referenceAccount = findById(data.accounts, item.referenceAccountId);
   const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || '');
   const [selectedAssetIds, setSelectedAssetIds] = useState(item.referenceAssetIds || []);
+  const [activeMediaPanel, setActiveMediaPanel] = useState(null);
   const [videoMode, setVideoMode] = useState('character_lora_video');
   const [draft, setDraft] = useState(() => ({
     title: item.title || '',
@@ -244,7 +245,8 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
   const imageReq = normalizeRequirement(item.imageRequirements || item.assetRequirement);
   const videoReq = normalizeRequirement(item.videoRequirements || item.assetRequirement);
   const parsedX = parseXUrl(xUrl);
-  const needsReference = ['image_to_video', 'first_frame', 'first_last_frame', 'reference_video', 'multi_shot'].includes(videoMode);
+  const needsReference = activeMediaPanel === 'video'
+    && ['image_to_video', 'first_frame', 'first_last_frame', 'reference_video', 'multi_shot'].includes(videoMode);
   const missingGenerationReason = !selectedCharacter
     ? '请先选择人物角色'
     : !hasLora(lora)
@@ -281,6 +283,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
     aspect_ratio: imageReq.aspect_ratio || videoReq.aspect_ratio || '9:16',
     reference_source: referenceSource,
     force_remote: forceRemote,
+    media_type: activeMediaPanel,
   };
 
   return (
@@ -352,15 +355,54 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
           </div>
         </section>
 
-        <section className="workspace-block">
-          <h3>图片要求</h3>
-          <RequirementGrid fields={IMAGE_REQUIREMENT_FIELDS} value={imageReq} empty="当前内容没有结构化图片要求。" />
+        <section className="workspace-block media-generation-shell">
+          <div className="media-generation-heading">
+            <div>
+              <p className="eyebrow">视觉内容生成</p>
+              <h3>选择要生成的内容</h3>
+            </div>
+            <span>点击图片或视频后展开对应设置</span>
+          </div>
+          <div className="media-generation-switch" role="group" aria-label="选择图片或视频生成">
+            <button
+              className={`media-generation-option ${activeMediaPanel === 'image' ? 'active' : ''}`}
+              type="button"
+              aria-expanded={activeMediaPanel === 'image'}
+              onClick={() => setActiveMediaPanel((current) => current === 'image' ? null : 'image')}
+            >
+              <span className="media-generation-icon">▧</span>
+              <span>
+                <strong>图片生成</strong>
+                <small>图片要求、角色 LoRA、参考素材与生图</small>
+              </span>
+              <b>{activeMediaPanel === 'image' ? '收起' : '展开'}</b>
+            </button>
+            <button
+              className={`media-generation-option ${activeMediaPanel === 'video' ? 'active' : ''}`}
+              type="button"
+              aria-expanded={activeMediaPanel === 'video'}
+              onClick={() => setActiveMediaPanel((current) => current === 'video' ? null : 'video')}
+            >
+              <span className="media-generation-icon">▶</span>
+              <span>
+                <strong>视频生成</strong>
+                <small>视频要求、生成方式、参考素材与生视频</small>
+              </span>
+              <b>{activeMediaPanel === 'video' ? '收起' : '展开'}</b>
+            </button>
+          </div>
         </section>
 
-        <section className="workspace-block">
-          <h3>视频要求</h3>
-          <RequirementGrid fields={VIDEO_REQUIREMENT_FIELDS} value={videoReq} empty="当前内容没有结构化视频要求。" />
-        </section>
+        {activeMediaPanel && (
+          <div className="media-generation-panel">
+            <section className="workspace-block media-requirement-block">
+              <h3>{activeMediaPanel === 'image' ? '图片要求' : '视频要求'}</h3>
+              {activeMediaPanel === 'image' ? (
+                <RequirementGrid fields={IMAGE_REQUIREMENT_FIELDS} value={imageReq} empty="当前内容没有结构化图片要求。" />
+              ) : (
+                <RequirementGrid fields={VIDEO_REQUIREMENT_FIELDS} value={videoReq} empty="当前内容没有结构化视频要求。" />
+              )}
+            </section>
 
         <section className="workspace-block">
           <h3>人物角色与 LoRA</h3>
@@ -403,7 +445,8 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
           )}
         </section>
 
-        <section className="workspace-block">
+        {activeMediaPanel === 'video' && (
+          <section className="workspace-block">
           <h3>视频生成方式</h3>
           <label className="full-editor">生成方式
             <select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
@@ -411,7 +454,8 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
             </select>
           </label>
           <ModeInputs mode={videoMode} selectedAssets={selectedAssets} videoReq={videoReq} />
-        </section>
+          </section>
+        )}
 
         <section className="workspace-block">
           <h3>素材来源</h3>
@@ -419,11 +463,13 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
             <label>来源账号（可选）
               <input value={referenceSource} onChange={(event) => setReferenceSource(event.target.value)} placeholder="例如 @maisiewzil" />
             </label>
-            <label>生成方式
-              <select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
-                {VIDEO_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-            </label>
+            {activeMediaPanel === 'video' && (
+              <label>生成方式
+                <select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
+                  {VIDEO_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+            )}
           </div>
           <div className="asset-source-grid">
             <div>
@@ -493,7 +539,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
         </section>
 
         <section className="workspace-block">
-          <h3>图片与视频生成</h3>
+          <h3>{activeMediaPanel === 'image' ? '生成图片' : '生成视频'}</h3>
           <div className="button-row">
             <ExecutionButton
               action="upload_reference_asset"
@@ -516,29 +562,33 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
             >
               从 X 链接导入
             </ExecutionButton>
-            <ExecutionButton
-              action="generate_character_image"
-              actionName="使用角色 LoRA 生成图片"
-              resourceType="content_package"
-              resourceId={item.id}
-              payload={generationPayload}
-              reason={missingGenerationReason}
-            >
-              使用角色 LoRA 生成图片
-            </ExecutionButton>
-            <ExecutionButton
-              action="generate_character_video"
-              actionName="使用角色 LoRA 生成视频"
-              className="ghost-button"
-              resourceType="content_package"
-              resourceId={item.id}
-              payload={generationPayload}
-              reason={missingGenerationReason}
-            >
-              使用角色 LoRA 生成视频
-            </ExecutionButton>
+            {activeMediaPanel === 'image' ? (
+              <ExecutionButton
+                action="generate_character_image"
+                actionName="使用角色 LoRA 生成图片"
+                resourceType="content_package"
+                resourceId={item.id}
+                payload={generationPayload}
+                reason={missingGenerationReason}
+              >
+                使用角色 LoRA 生成图片
+              </ExecutionButton>
+            ) : (
+              <ExecutionButton
+                action="generate_character_video"
+                actionName="使用角色 LoRA 生成视频"
+                resourceType="content_package"
+                resourceId={item.id}
+                payload={generationPayload}
+                reason={missingGenerationReason}
+              >
+                使用角色 LoRA 生成视频
+              </ExecutionButton>
+            )}
           </div>
         </section>
+          </div>
+        )}
 
         <section className="workspace-block">
           <h3>生成结果回传</h3>

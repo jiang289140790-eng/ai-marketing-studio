@@ -1406,6 +1406,106 @@ textarea {
   border-radius: 18px;
 }
 
+.media-generation-shell {
+  padding: 18px;
+}
+
+.media-generation-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.media-generation-heading h3 {
+  margin: 4px 0 0;
+}
+
+.media-generation-heading > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.media-generation-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.media-generation-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  min-height: 92px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.34);
+  color: #f8fafc;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.media-generation-option:hover {
+  border-color: rgba(34, 211, 238, 0.46);
+  background: rgba(34, 211, 238, 0.07);
+  transform: translateY(-1px);
+}
+
+.media-generation-option.active {
+  border-color: rgba(34, 211, 238, 0.7);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.18), rgba(34, 211, 238, 0.1));
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.08);
+}
+
+.media-generation-option > span:nth-child(2) {
+  display: grid;
+  gap: 5px;
+}
+
+.media-generation-option strong {
+  font-size: 16px;
+}
+
+.media-generation-option small,
+.media-generation-option b {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.media-generation-option b {
+  color: #a5f3fc;
+}
+
+.media-generation-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: rgba(34, 211, 238, 0.12);
+  color: #67e8f9;
+  font-size: 18px;
+}
+
+.media-generation-panel {
+  display: grid;
+  gap: 0;
+  margin-top: -2px;
+  padding: 14px 14px 2px;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  border-radius: 20px;
+  background: rgba(34, 211, 238, 0.035);
+}
+
+.media-requirement-block {
+  border-color: rgba(34, 211, 238, 0.2);
+}
+
 .studio-controls-grid,
 .result-review-toolbar {
   display: grid;
@@ -1696,5 +1796,14 @@ textarea {
     margin: -20px -20px 16px;
     padding: 18px 20px;
     flex-direction: column;
+  }
+
+  .media-generation-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .media-generation-switch {
+    grid-template-columns: 1fr;
   }
 }

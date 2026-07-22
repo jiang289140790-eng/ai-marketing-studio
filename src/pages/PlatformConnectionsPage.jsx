@@ -78,8 +78,15 @@ export function PlatformConnectionsPage({ userId }) {
                 )) : <div className="connection-empty">暂无连接账号</div>}
               </div>
               <div className="button-row">
-                <ExecutionButton actionName={`连接 ${card.title}`} className="ghost-button">连接新账号</ExecutionButton>
-                <ExecutionButton actionName={`检查 ${card.title} 状态`} className="ghost-button">检查状态</ExecutionButton>
+                <ExecutionButton
+                  action={card.platform === 'X' ? 'sync_x_account' : undefined}
+                  actionName={`连接 ${card.title}`}
+                  className="ghost-button"
+                  reason={card.platform === 'X' ? undefined : `${card.title} 连接流程尚未接入 Bridge action。`}
+                >
+                  连接新账号
+                </ExecutionButton>
+                <ExecutionButton actionName={`检查 ${card.title} 状态`} className="ghost-button" reason="平台状态检查需要对应平台适配器完成后开启。">检查状态</ExecutionButton>
               </div>
             </article>
           );

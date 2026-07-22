@@ -120,10 +120,27 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
 
       <div className="button-row">
         <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>返回内容工作台修改</button>
-        <ExecutionButton actionName="发布前安全检查" className="ghost-button">发布前检查</ExecutionButton>
-        <ExecutionButton actionName="批准发布计划" reason={platformConnected ? undefined : '无法批准：该平台账号未连接或连接状态不可用。'}>批准发布计划</ExecutionButton>
-        <ExecutionButton actionName="二次确认并执行发布" reason="执行发布必须通过可信服务端调用 Platform Adapter，不能在 GitHub Pages 前端执行。">二次确认执行发布</ExecutionButton>
-        <ExecutionButton actionName="失败后重试发布" className="ghost-button">失败后重试</ExecutionButton>
+        <ExecutionButton actionName="发布前安全检查" className="ghost-button" reason="发布前检查会在 execute_publish dry-run 阶段执行。">发布前检查</ExecutionButton>
+        <ExecutionButton
+          action="approve_publish"
+          actionName="批准发布计划"
+          resourceType="publish_task"
+          resourceId={task.id}
+          payload={{ publish_task_id: task.id, action: 'approve' }}
+          reason={platformConnected ? undefined : '无法批准：该平台账号未连接或连接状态不可用。'}
+        >
+          批准发布计划
+        </ExecutionButton>
+        <ExecutionButton
+          action="execute_publish"
+          actionName="二次确认并执行发布"
+          resourceType="publish_task"
+          resourceId={task.id}
+          payload={{ publish_task_id: task.id, dry_run: true }}
+        >
+          二次确认执行发布
+        </ExecutionButton>
+        <ExecutionButton action="execute_publish" actionName="失败后重试发布" className="ghost-button" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: true }}>失败后重试</ExecutionButton>
       </div>
     </article>
   );

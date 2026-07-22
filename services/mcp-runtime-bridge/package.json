@@ -1,0 +1,14 @@
+{
+  "name": "ai-marketing-studio-mcp-runtime-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "lint": "node --check server.js && node --check action-registry.js && node --check auth.js && node --check schemas.js && node --check mcp-client.js && node --check worker.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "@supabase/supabase-js": "^2.53.0"
+  }
+}

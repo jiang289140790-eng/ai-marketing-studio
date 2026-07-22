@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { ExecutionButton } from '../components/ExecutionButton';
+import { ExecutionStatus } from '../components/ExecutionStatus';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import {
@@ -109,9 +110,11 @@ export function CommandCenter({ userId, onNavigate }) {
         <div className="hero-actions">
           <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>查看 Campaign 与策略</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>进入内容工作台</button>
-          <ExecutionButton actionName="运行 Daily Ops Agent">运行今日 AI 运营</ExecutionButton>
+          <ExecutionButton actionName="运行 Daily Ops Agent" reason="Daily Ops Agent 尚未加入本次 action allowlist，先接通单个业务动作。">运行今日 AI 运营</ExecutionButton>
         </div>
       </div>
+
+      <ExecutionStatus />
 
       <div className="ops-alert-grid">
         <WorkItem label="待审批策略" value={summary.pendingStrategies} page="campaigns" onNavigate={onNavigate} />

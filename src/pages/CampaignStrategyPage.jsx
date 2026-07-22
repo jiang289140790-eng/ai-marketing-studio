@@ -56,8 +56,8 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
           策略生成后先等待你审批；审批通过后，才会创建内容包并进入内容工作台。
         </p>
         <div className="button-row">
-          <ExecutionButton actionName="创建 Campaign">新建 Campaign</ExecutionButton>
-          <ExecutionButton actionName="让 Strategy Agent 生成策略" className="ghost-button">生成策略</ExecutionButton>
+          <ExecutionButton actionName="创建 Campaign" reason="新建 Campaign 需要先接入表单提交数据，不能空 payload 创建。">新建 Campaign</ExecutionButton>
+          <ExecutionButton action="generate_strategy" actionName="让 Strategy Agent 生成策略" className="ghost-button">生成策略</ExecutionButton>
           <button className="ghost-button" type="button" onClick={() => onNavigate('accounts')}>选择账号矩阵</button>
         </div>
       </div>
@@ -146,8 +146,25 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate }) {
       </div>
 
       <div className="button-row">
-        <ExecutionButton actionName="批准策略并创建内容包">批准策略</ExecutionButton>
-        <ExecutionButton actionName="驳回并重新生成策略" className="ghost-button">驳回并重生成</ExecutionButton>
+        <ExecutionButton
+          action="approve_strategy"
+          actionName="批准策略并创建内容包"
+          resourceType="strategy"
+          resourceId={strategy.id}
+          payload={{ strategy_id: strategy.id, action: 'approve' }}
+        >
+          批准策略
+        </ExecutionButton>
+        <ExecutionButton
+          action="reject_strategy"
+          actionName="驳回并重新生成策略"
+          className="ghost-button"
+          resourceType="strategy"
+          resourceId={strategy.id}
+          payload={{ strategy_id: strategy.id, action: 'reject' }}
+        >
+          驳回并重生成
+        </ExecutionButton>
         <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>查看关联内容</button>
       </div>
     </article>

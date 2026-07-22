@@ -322,6 +322,21 @@ small {
   color: #fbbf24;
 }
 
+.execution-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(15, 23, 42, 0.76);
+  padding: 14px 16px;
+}
+
+.execution-status strong,
+.execution-status small {
+  display: block;
+}
+
 .notice {
   border: 1px solid rgba(245, 158, 11, 0.28);
   border-radius: 18px;

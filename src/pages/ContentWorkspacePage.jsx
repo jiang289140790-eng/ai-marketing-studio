@@ -61,7 +61,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
           视觉需求、角色与 LoRA、参考素材、生成结果、版权确认和最终审核动作。
         </p>
         <div className="button-row">
-          <ExecutionButton actionName="让 Content Agent 生成内容">生成内容包</ExecutionButton>
+          <ExecutionButton actionName="让 Content Agent 生成内容" reason="请先从已批准策略进入内容包，避免创建孤立内容。">生成内容包</ExecutionButton>
           <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>打开素材库</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>打开角色库</button>
         </div>
@@ -139,9 +139,9 @@ function ContentPackageCard({ item, expanded, onToggle, data, assets, onNavigate
             </div>
             <p className="draft-preview">{displayText(item.body, '暂无正文。后续由 Content Agent 根据已批准策略生成。')}</p>
             <div className="button-row">
-              <ExecutionButton actionName="保存草稿" className="ghost-button">保存草稿</ExecutionButton>
-              <ExecutionButton actionName="让 Agent 重写文案" className="ghost-button">Agent 重写</ExecutionButton>
-              <ExecutionButton actionName="从 X 链接导入参考">导入 X 参考链接</ExecutionButton>
+              <ExecutionButton action="save_draft" actionName="保存草稿" className="ghost-button" resourceType="content_package" resourceId={item.id} payload={{ content_package_id: item.id }}>保存草稿</ExecutionButton>
+              <ExecutionButton action="rewrite_content" actionName="让 Agent 重写文案" className="ghost-button" resourceType="content_package" resourceId={item.id} payload={{ content_package_id: item.id }}>Agent 重写</ExecutionButton>
+              <ExecutionButton action="import_x_reference" actionName="从 X 链接导入参考" resourceType="content_package" resourceId={item.id} payload={{ content_package_id: item.id }}>导入 X 参考链接</ExecutionButton>
             </div>
           </section>
 
@@ -158,7 +158,20 @@ function ContentPackageCard({ item, expanded, onToggle, data, assets, onNavigate
             <div className="button-row">
               <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>去角色库选择角色</button>
               <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>去素材库选择参考</button>
-              <ExecutionButton actionName="提交图片生成" reason={missingCharacterReason || missingLoraReason || missingAssetReason || undefined}>提交图片生成</ExecutionButton>
+              <ExecutionButton
+                action="generate_character_image"
+                actionName="提交图片生成"
+                resourceType="content_package"
+                resourceId={item.id}
+                payload={{
+                  content_package_id: item.id,
+                  character_id: character?.id,
+                  reference_asset_id: linkedAssets[0]?.id,
+                }}
+                reason={missingCharacterReason || missingLoraReason || missingAssetReason || undefined}
+              >
+                提交图片生成
+              </ExecutionButton>
               <ExecutionButton actionName="提交视频生成" className="ghost-button" reason="视频生成暂不在第一批线上执行；需要先接入可信 Media Gateway。">提交视频生成</ExecutionButton>
             </div>
           </section>
@@ -183,7 +196,15 @@ function ContentPackageCard({ item, expanded, onToggle, data, assets, onNavigate
           <section className="workspace-block approval-block">
             <h4>内容终审</h4>
             <p>确认正文、CTA、标签、发布账号、排期、最终素材和素材权益后，才能送入发布队列。送入队列不等于自动发布。</p>
-            <ExecutionButton actionName="终审通过并创建发布任务" reason="终审动作需要可信服务端创建 publish task，并写入 approval_status=pending。">终审通过，送入发布队列</ExecutionButton>
+            <ExecutionButton
+              action="finalize_content_package"
+              actionName="终审通过并创建发布任务"
+              resourceType="content_package"
+              resourceId={item.id}
+              payload={{ content_package_id: item.id }}
+            >
+              终审通过，送入发布队列
+            </ExecutionButton>
           </section>
         </div>
       )}

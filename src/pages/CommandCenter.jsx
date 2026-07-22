@@ -6,6 +6,7 @@ import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import {
   countWhere,
+  displayText,
   getAssets,
   getContentPackages,
   getKnowledgeItems,
@@ -62,10 +63,11 @@ export function CommandCenter({ userId, onNavigate }) {
       contentPackages,
       assets,
       knowledge,
-      pendingStrategies: countWhere(data.strategies, (item) => ['review', 'pending', 'draft'].includes(item.status)),
-      pendingContent: countWhere(contentPackages, (item) => ['draft', 'review', 'generating'].includes(item.status)),
+      activeCampaigns: countWhere(data.campaigns, (item) => !['completed', 'archived', 'cancelled'].includes(String(item.status).toLowerCase())),
+      pendingStrategies: countWhere(data.strategies, (item) => item.status === 'review'),
+      pendingContent: countWhere(contentPackages, (item) => ['draft', 'review'].includes(item.reviewStatus || item.status)),
       generating: countWhere([...data.agentRuns, ...data.workflowRuns], (item) => ['running', 'queued', 'generating'].includes(item.status)),
-      pendingPublish: countWhere(data.publishTasks, (item) => ['draft', 'scheduled', 'pending'].includes(item.status || item.approval_status)),
+      pendingPublish: countWhere(data.publishTasks, (item) => item.approval_status === 'pending' || item.status === 'pending'),
       failedTasks: countWhere(allTasks, (item) => ['failed', 'error'].includes(item.status)),
       connectedAccounts: countWhere(data.platformConnections, (item) => item.status === 'connected'),
       accountReports: data.accountReports.length + data.accountProfiles.length,
@@ -95,6 +97,49 @@ export function CommandCenter({ userId, onNavigate }) {
   const latestRuns = getLatest([...data.agentRuns, ...data.workflowRuns], 5);
   const latestContent = getLatest(summary.contentPackages, 5);
   const latestKnowledge = getLatest(summary.knowledge, 5);
+  const pipelineSteps = [
+    {
+      step: 1,
+      label: '情报发现',
+      status: summary.accountReports > 0 ? 'done' : data.insights.length > 0 ? 'active' : 'idle',
+      count: summary.accountReports || data.insights.length,
+    },
+    { step: 2, label: '策略生成', status: data.strategies.length > 0 ? 'done' : 'idle', attention: summary.pendingStrategies, count: summary.pendingStrategies },
+    { step: 3, label: '内容生产', status: summary.contentPackages.length > 0 ? 'done' : 'idle', attention: summary.pendingContent, count: summary.pendingContent },
+    { step: 4, label: '素材生成', status: summary.generating > 0 ? 'active' : summary.assets.length > 0 ? 'done' : 'idle', count: summary.generating || summary.assets.length },
+    { step: 5, label: '发布审批', status: data.publishTasks.length > 0 ? 'done' : 'idle', attention: summary.pendingPublish, count: summary.pendingPublish },
+    { step: 6, label: '数据回收', status: data.contentMetrics.length > 0 ? 'done' : 'idle', count: data.contentMetrics.length },
+  ];
+  const actionItems = [
+    { label: '待审批策略', description: '确认 AI 生成的定位、内容支柱和执行计划。', value: summary.pendingStrategies, page: 'campaigns', button: '去审批策略' },
+    { label: '待审核内容', description: '检查文案、CTA、角色 LoRA 与最终素材。', value: summary.pendingContent, page: 'workspace', button: '去审核内容' },
+    { label: '待确认发布', description: '确认发布时间、目标账号和发布安全条件。', value: summary.pendingPublish, page: 'publish', button: '去发布队列' },
+    { label: '失败任务', description: '查看失败原因并决定重试、重生成或人工处理。', value: summary.failedTasks, page: 'health', button: '查看异常', danger: true },
+  ];
+  const latestReport = getLatest([...data.accountReports, ...data.accountProfiles], 1)[0];
+  const latestStrategyMemory = getLatest(data.strategyMemory, 1)[0];
+  const bestContentMemory = [...data.contentMemory]
+    .sort((left, right) => Number(right.success_rate || right.score || 0) - Number(left.success_rate || left.score || 0))[0];
+  const recommendations = [
+    {
+      emoji: '🔎',
+      title: '账号情报发现',
+      text: recommendationText(latestReport, ['key_findings', 'summary', 'analysis', 'report', 'description']),
+      empty: '完成一次账号分析后，这里会显示最新的受众、内容模式和增长机会。',
+    },
+    {
+      emoji: '🧭',
+      title: '策略复盘教训',
+      text: recommendationText(latestStrategyMemory, ['lessons_learned', 'learning', 'summary', 'description']),
+      empty: '策略执行并回收数据后，这里会提示下一轮应该保留或调整的方向。',
+    },
+    {
+      emoji: '⚡',
+      title: '推荐内容模式',
+      text: recommendationText(bestContentMemory, ['pattern', 'winning_pattern', 'recommendation', 'summary', 'description']),
+      empty: '积累内容表现后，这里会推荐成功率最高的 Hook、结构和 CTA 模式。',
+    },
+  ];
 
   return (
     <section className="page-stack">
@@ -117,22 +162,46 @@ export function CommandCenter({ userId, onNavigate }) {
       <ExecutionStatus />
       <DataReadErrors errors={data.__errors} />
 
-      <div className="ops-alert-grid">
-        <WorkItem label="待审批策略" value={summary.pendingStrategies} page="campaigns" onNavigate={onNavigate} />
-        <WorkItem label="待审核内容" value={summary.pendingContent} page="workspace" onNavigate={onNavigate} />
-        <WorkItem label="生成中任务" value={summary.generating} page="health" onNavigate={onNavigate} />
-        <WorkItem label="待发布审批" value={summary.pendingPublish} page="publish" onNavigate={onNavigate} />
-        <WorkItem label="失败任务" value={summary.failedTasks} page="health" onNavigate={onNavigate} danger />
-      </div>
+      <section className="daily-ops-panel">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">AI DAILY OPS</p>
+            <h3>今日运营工作流</h3>
+            <p>实时读取 Supabase 状态，快速判断流程推进到哪一步、哪里需要人工确认。</p>
+          </div>
+          <StatusBadge status={summary.failedTasks ? 'failed' : summary.generating ? 'running' : 'success'} />
+        </div>
+        <div className="daily-ops-pipeline" aria-label="AI Daily Ops 六步工作流">
+          {pipelineSteps.map((item) => <PipelineStep key={item.step} {...item} />)}
+        </div>
+      </section>
 
       <div className="stat-grid compact">
-        <StatCard label="账号矩阵" value={loading ? '-' : data.accounts.length} hint={`${summary.connectedAccounts} 个平台连接已建立`} />
-        <StatCard label="账号智能报告" value={loading ? '-' : summary.accountReports} hint="账号画像、复刻策略、风险记录" />
-        <StatCard label="内容包" value={loading ? '-' : summary.contentPackages.length} hint="生成、素材、审核在同一张卡片" />
-        <StatCard label="素材 / 角色" value={loading ? '-' : `${summary.assets.length}/${data.characters.length}`} hint="素材库 / 角色库" />
-        <StatCard label="发布任务" value={loading ? '-' : data.publishTasks.length} hint="最终安全审批队列" />
-        <StatCard label="知识沉淀" value={loading ? '-' : summary.knowledge.length} hint="Knowledge Vault 与运营记忆" />
+        <StatCard label="活跃 Campaign" value={loading ? '-' : summary.activeCampaigns} hint="当前运营目标" />
+        <StatCard label="待你审批" value={loading ? '-' : summary.pendingStrategies + summary.pendingContent + summary.pendingPublish} hint="策略、内容与发布" />
+        <StatCard label="已连接平台" value={loading ? '-' : summary.connectedAccounts} hint="可执行的平台连接" />
+        <StatCard label="知识库条目" value={loading ? '-' : summary.knowledge.length} hint="Knowledge Vault 与运营记忆" />
       </div>
+
+      <section className="attention-panel">
+        <div className="section-head compact-head">
+          <div><p className="eyebrow">ACTION CENTER</p><h3>需要你处理</h3></div>
+          <span className="attention-total">{actionItems.reduce((total, item) => total + item.value, 0)} 项待办</span>
+        </div>
+        <div className="attention-grid">
+          {actionItems.map((item) => <WorkItem key={item.label} {...item} onNavigate={onNavigate} />)}
+        </div>
+      </section>
+
+      <section className="recommendation-panel">
+        <div className="section-head compact-head">
+          <div><p className="eyebrow">AI NEXT MOVE</p><h3>下一步建议</h3><p>从账号报告、策略记忆和内容记忆中提取最新可执行建议。</p></div>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
+        </div>
+        <div className="recommendation-grid">
+          {recommendations.map((item) => <RecommendationCard key={item.title} {...item} />)}
+        </div>
+      </section>
 
       <div className="dashboard-grid">
         <section className="table-card mini-panel">
@@ -178,13 +247,50 @@ function DataReadErrors({ errors = [] }) {
   );
 }
 
-function WorkItem({ label, value, page, onNavigate, danger = false }) {
+function PipelineStep({ step, label, status, attention, count }) {
+  const visualStatus = attention ? 'attention' : status;
+  const icon = visualStatus === 'done' ? '✓' : visualStatus === 'active' ? '⚡' : visualStatus === 'attention' ? '!' : '·';
   return (
-    <button className={`work-item ${danger ? 'danger' : ''}`} type="button" onClick={() => onNavigate(page)}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </button>
+    <div className={`pipeline-step ${visualStatus}`}>
+      <div className="pipeline-marker"><span>{icon}</span></div>
+      <small>步骤 {step}</small>
+      <strong>{label}</strong>
+      <span className="pipeline-count">{count || 0}</span>
+    </div>
   );
+}
+
+function WorkItem({ label, description, value, page, button, onNavigate, danger = false }) {
+  return (
+    <article className={`attention-card ${danger ? 'danger' : ''} ${value ? 'has-work' : 'clear'}`}>
+      <div className="attention-card-head"><strong>{label}</strong><span>{value}</span></div>
+      <p>{description}</p>
+      <button className={value ? 'primary-button' : 'ghost-button'} type="button" onClick={() => onNavigate(page)}>{value ? button : '查看'}</button>
+    </article>
+  );
+}
+
+function RecommendationCard({ emoji, title, text, empty }) {
+  return (
+    <article className="recommendation-card">
+      <span className="recommendation-icon">{emoji}</span>
+      <div><h4>{title}</h4><p>{truncate(text || empty, 100)}</p></div>
+    </article>
+  );
+}
+
+function recommendationText(row, fields) {
+  if (!row) return '';
+  for (const field of fields) {
+    const value = row[field];
+    if (value != null && value !== '') return displayText(value, '');
+  }
+  return displayText(row, '');
+}
+
+function truncate(value, length) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > length ? `${text.slice(0, length)}…` : text;
 }
 
 function RecordList({ rows, empty }) {

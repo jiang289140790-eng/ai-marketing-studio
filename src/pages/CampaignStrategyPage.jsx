@@ -221,13 +221,13 @@ function CampaignCard({ campaign, strategies, accounts, onNavigate, onRefresh })
             platforms,
             objective: campaign.goal,
             content_topics: topics,
-            period_type: 'custom',
+            period_type: 'weekly',
             content_theme_count: Math.max(3, topics.length || 3),
             save_to_db: true,
           }}
           onCompleted={onRefresh}
         >
-          生成策略
+          让 AI 生成本周策略
         </ExecutionButton>
         <button className="ghost-button" type="button" onClick={() => onNavigate('accounts')}>选择账号矩阵</button>
       </div>
@@ -243,6 +243,9 @@ function CampaignCard({ campaign, strategies, accounts, onNavigate, onRefresh })
 function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefresh }) {
   const account = findById(accounts, strategy.account_id || strategy.target_account_id);
   const plan = strategy.plan || strategy.strategy || strategy.output || {};
+  const pillars = normalizePillars(strategy.content_themes || strategy.content_pillars || plan.content_pillars || plan.content_themes);
+  const dailyPlan = normalizeDailyPlan(strategy.daily_plan || plan.daily_plan || plan.weekly_plan || plan.content_calendar);
+  const isReview = ['review', 'pending', 'draft'].includes(strategy.status || 'review');
 
   return (
     <article className={`strategy-card ${compact ? 'compact-card' : ''}`}>
@@ -250,7 +253,7 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
         <div>
           <p className="eyebrow">Strategy Agent</p>
           <h3>{strategy.name || strategy.title || plan.title || '待审核策略'}</h3>
-          <p>{strategy.description || plan.executive_summary || 'Agent 生成的策略会转成可审核的业务内容。'}</p>
+          <p className="strategy-summary">{strategy.description || strategy.executive_summary || plan.executive_summary || 'Agent 生成的策略会转成可审核的业务内容。'}</p>
         </div>
         <StatusBadge status={strategy.status || 'review'} />
       </div>
@@ -264,28 +267,55 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
         <Info label="模型" value={strategy.llm_model} />
       </div>
 
+      <div className="strategy-pillars" aria-label="内容支柱">
+        {pillars.length ? pillars.map((pillar, index) => (
+          <span className="pillar-tag" key={`${pillar.name}-${index}`}>
+            {pillar.name}{pillar.weight != null ? ` · ${Math.round(pillar.weight * 100)}%` : ''}
+          </span>
+        )) : <span className="pillar-tag muted">等待 AI 生成内容支柱</span>}
+      </div>
+
+      <div className="strategy-daily-plan">
+        <div className="daily-plan-head"><strong>本周执行预览</strong><span>{dailyPlan.length ? `${dailyPlan.length} 天` : '等待生成'}</span></div>
+        {dailyPlan.length ? (
+          <div className="daily-plan-grid">
+            {dailyPlan.slice(0, 7).map((day) => (
+              <div className="day-slot" key={day.day}>
+                <strong>{day.day}</strong>
+                <span>{day.pillar || '待定主题'}</span>
+                <small>{day.platform || '待定平台'}</small>
+              </div>
+            ))}
+          </div>
+        ) : <div className="empty-card-inline">AI 策略生成后，这里会显示周一到周日的主题与平台安排。</div>}
+      </div>
+
       <div className="button-row">
-        <ExecutionButton
-          action="approve_strategy"
-          actionName="批准策略并创建内容包"
-          resourceType="strategy"
-          resourceId={strategy.id}
-          payload={{ strategy_id: strategy.id, action: 'approve' }}
-          onCompleted={onRefresh}
-        >
-          批准策略
-        </ExecutionButton>
-        <ExecutionButton
-          action="reject_strategy"
-          actionName="驳回策略"
-          className="ghost-button"
-          resourceType="strategy"
-          resourceId={strategy.id}
-          payload={() => ({ strategy_id: strategy.id, action: 'reject', feedback: window.prompt('驳回原因或修改意见') || '' })}
-          onCompleted={onRefresh}
-        >
-          驳回策略
-        </ExecutionButton>
+        {isReview && (
+          <>
+            <ExecutionButton
+              action="approve_strategy"
+              actionName="批准策略并创建内容包"
+              resourceType="strategy"
+              resourceId={strategy.id}
+              payload={{ strategy_id: strategy.id, action: 'approve' }}
+              onCompleted={onRefresh}
+            >
+              批准策略
+            </ExecutionButton>
+            <ExecutionButton
+              action="reject_strategy"
+              actionName="驳回策略"
+              className="ghost-button"
+              resourceType="strategy"
+              resourceId={strategy.id}
+              payload={() => ({ strategy_id: strategy.id, action: 'reject', feedback: window.prompt('驳回原因或修改意见') || '' })}
+              onCompleted={onRefresh}
+            >
+              驳回策略
+            </ExecutionButton>
+          </>
+        )}
         <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>查看关联内容</button>
       </div>
     </article>
@@ -360,4 +390,29 @@ function extractAccountIds(value) {
   return normalizeArray(value)
     .map((item) => (typeof item === 'string' ? item : item?.account_id || item?.id))
     .filter(Boolean);
+}
+
+function normalizePillars(value) {
+  return normalizeArray(value).map((item, index) => {
+    if (typeof item === 'string') return { name: item, weight: null };
+    const rawWeight = item?.weight ?? item?.ratio ?? item?.percentage;
+    const numericWeight = rawWeight == null ? null : Number(rawWeight);
+    return {
+      name: item?.pillar || item?.name || item?.title || item?.theme || `内容支柱 ${index + 1}`,
+      weight: Number.isFinite(numericWeight) ? (numericWeight > 1 ? numericWeight / 100 : numericWeight) : null,
+    };
+  });
+}
+
+function normalizeDailyPlan(value) {
+  if (!value) return [];
+  const entries = Array.isArray(value) ? value.map((item, index) => [item.day || item.date || `第 ${index + 1} 天`, item]) : Object.entries(value);
+  return entries.map(([day, item]) => {
+    const plan = typeof item === 'string' ? { pillar: item } : item || {};
+    return {
+      day,
+      pillar: plan.pillar || plan.theme || plan.topic || plan.title || plan.content,
+      platform: normalizeArray(plan.platform || plan.platforms || plan.channel).join(' / '),
+    };
+  });
 }

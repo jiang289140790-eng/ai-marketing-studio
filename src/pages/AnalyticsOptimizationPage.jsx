@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
+import { StatusBadge } from '../components/StatusBadge';
 import { loadKeys } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 
-const EMPTY = { contentMetrics: [], publishMetrics: [], insights: [], accountReports: [], publishTasks: [] };
+const EMPTY = { contentMetrics: [], publishMetrics: [], insights: [], accountReports: [], publishTasks: [], contentMemory: [], strategyMemory: [] };
 
 export function AnalyticsOptimizationPage({ userId, onNavigate }) {
   const [data, setData] = useState(EMPTY);
@@ -14,7 +15,7 @@ export function AnalyticsOptimizationPage({ userId, onNavigate }) {
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
-    loadKeys(['contentMetrics', 'publishMetrics', 'insights', 'accountReports', 'publishTasks'])
+    loadKeys(['contentMetrics', 'publishMetrics', 'insights', 'accountReports', 'publishTasks', 'contentMemory', 'strategyMemory'])
       .then((next) => setData({ ...EMPTY, ...next }))
       .finally(() => setLoading(false));
   }, [userId]);
@@ -56,6 +57,48 @@ export function AnalyticsOptimizationPage({ userId, onNavigate }) {
           </div>
         </section>
       ) : <EmptyState title="暂无分析数据" description="内容发布并回传指标后，这里会形成可用于下一轮生成的优化依据。" />}
+
+      <div className="analytics-memory-grid">
+        <section className="table-card memory-section">
+          <div className="panel-title"><div><p className="eyebrow">CONTENT MEMORY</p><h3>高表现内容模式</h3></div><span>{data.contentMemory.length} 条</span></div>
+          <div className="memory-card-list">
+            {data.contentMemory.length ? data.contentMemory.slice(0, 20).map((memory, index) => (
+              <article className="memory-card" key={memory.id || index}>
+                <div className="memory-card-head">
+                  <strong>{memory.pattern || memory.winning_pattern || memory.content_type || memory.title || '内容模式'}</strong>
+                  <StatusBadge status={memory.status || 'success'} />
+                </div>
+                <div className="tag-row">
+                  {memory.platform && <span className="tag">{memory.platform}</span>}
+                  <span className="tag">成功率 {formatRate(memory.success_rate || memory.score)}</span>
+                </div>
+                <p>{memory.recommendation || memory.summary || memory.description || '该模式已保存，可供 Content Agent 下一轮生成参考。'}</p>
+              </article>
+            )) : <div className="empty-card-inline">发布内容回传表现后，高成功率模式会沉淀到这里。</div>}
+          </div>
+        </section>
+
+        <section className="table-card memory-section">
+          <div className="panel-title"><div><p className="eyebrow">STRATEGY MEMORY</p><h3>策略学习结果</h3></div><span>{data.strategyMemory.length} 条</span></div>
+          <div className="memory-card-list">
+            {data.strategyMemory.length ? data.strategyMemory.slice(0, 20).map((memory, index) => (
+              <article className="memory-card" key={memory.id || index}>
+                <div className="memory-card-head">
+                  <strong>{memory.strategy_name || memory.title || memory.name || '策略复盘'}</strong>
+                  <StatusBadge status={memory.status || 'completed'} />
+                </div>
+                <p>{memory.lessons_learned || memory.learning || memory.summary || memory.description || '策略学习结果已保存。'}</p>
+              </article>
+            )) : <div className="empty-card-inline">策略执行并完成复盘后，经验和教训会显示在这里。</div>}
+          </div>
+        </section>
+      </div>
     </section>
   );
+}
+
+function formatRate(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return '—';
+  return `${Math.round((number > 1 ? number / 100 : number) * 100)}%`;
 }

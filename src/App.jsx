@@ -3,6 +3,8 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
+import { AIWorksPage } from './pages/AIWorksPage';
+import { AnalyticsOptimizationPage } from './pages/AnalyticsOptimizationPage';
 import { AssetLibrary } from './pages/AssetLibrary';
 import { CampaignStrategyPage } from './pages/CampaignStrategyPage';
 import { CharacterLibrary } from './pages/CharacterLibrary';
@@ -12,6 +14,7 @@ import { PlatformConnectionsPage } from './pages/PlatformConnectionsPage';
 import { PublishQueuePage } from './pages/PublishQueuePage';
 import { SystemOverviewPage } from './pages/SystemOverviewPage';
 import { WorkflowModelConfigPage } from './pages/WorkflowModelConfigPage';
+import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
 
 const pageTitles = {
   dashboard: 'AI Command Center',
@@ -21,6 +24,9 @@ const pageTitles = {
   accounts: '账号矩阵',
   assets: '素材库',
   characters: '角色库',
+  aiworks: 'AI 成果',
+  analytics: '分析优化',
+  knowledge: '知识库',
   connections: '平台连接',
   health: '系统状态',
   workflows: '工作流与模型配置',
@@ -46,6 +52,12 @@ export default function App() {
         return <AssetLibrary {...props} />;
       case 'characters':
         return <CharacterLibrary {...props} />;
+      case 'aiworks':
+        return <AIWorksPage {...props} />;
+      case 'analytics':
+        return <AnalyticsOptimizationPage {...props} />;
+      case 'knowledge':
+        return <KnowledgeBasePage {...props} />;
       case 'connections':
         return <PlatformConnectionsPage {...props} />;
       case 'health':

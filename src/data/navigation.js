@@ -9,6 +9,9 @@ export const navigationSections = [
       { id: 'campaigns', label: 'Campaign 与策略', icon: '◆' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
       { id: 'publish', label: '发布队列', icon: '↗' },
+      { id: 'aiworks', label: 'AI 成果', icon: '✦' },
+      { id: 'analytics', label: '分析优化', icon: '↗' },
+      { id: 'knowledge', label: '知识库', icon: '◇' },
     ],
   },
   {

@@ -3,71 +3,36 @@ import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import {
-  countBy,
-  getAssetRows,
-  getContentRows,
-  getKnowledgeRows,
-  latestRows,
+  countWhere,
+  getAssets,
+  getContentPackages,
+  getKnowledgeItems,
+  getLatest,
   loadCommandCenterData,
 } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 
 const EMPTY_DATA = {
+  accounts: [],
+  accountProfiles: [],
   campaigns: [],
   strategies: [],
   contentPackages: [],
-  contentLibrary: [],
+  legacyContent: [],
+  assets: [],
+  legacyAssets: [],
+  characters: [],
   publishTasks: [],
   contentMetrics: [],
-  knowledgeEntries: [],
+  knowledge: [],
+  insights: [],
   contentMemory: [],
   strategyMemory: [],
-  assets: [],
-  assetLibrary: [],
-  characters: [],
-  accounts: [],
-  platformConnections: [],
-  accountReports: [],
-  accountProfiles: [],
   agentRuns: [],
   workflowRuns: [],
-  viralContents: [],
-  contentAnalysis: [],
+  platformConnections: [],
 };
-
-const opsSteps = [
-  {
-    title: '情报发现',
-    page: 'knowledge',
-    description: 'Research Agent 发现账号、爆款内容和市场机会。',
-  },
-  {
-    title: '策略判断',
-    page: 'campaigns',
-    description: 'Strategy Agent 把目标拆成可执行的内容计划。',
-  },
-  {
-    title: '内容生产',
-    page: 'content',
-    description: 'Content Factory 生成文案、平台版本和待审核内容包。',
-  },
-  {
-    title: '素材生成',
-    page: 'assets',
-    description: 'Asset Factory / ComfyUI 生成图片、视频、LoRA 和 Workflow 资产。',
-  },
-  {
-    title: '发布审批',
-    page: 'publish',
-    description: 'Distribution Center 汇总待发布、已发布和失败任务。',
-  },
-  {
-    title: '复盘学习',
-    page: 'analytics',
-    description: 'Analytics Loop 把表现数据写回知识库，影响下一轮策略。',
-  },
-];
 
 export function CommandCenter({ userId, onNavigate }) {
   const [data, setData] = useState(EMPTY_DATA);
@@ -75,44 +40,39 @@ export function CommandCenter({ userId, onNavigate }) {
 
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) return undefined;
-
     setLoading(true);
     loadCommandCenterData()
       .then((nextData) => setData({ ...EMPTY_DATA, ...nextData }))
       .finally(() => setLoading(false));
-
     return undefined;
   }, [userId]);
 
   const summary = useMemo(() => {
-    const contentRows = getContentRows(data);
-    const assetRows = getAssetRows(data);
-    const knowledgeRows = getKnowledgeRows(data);
-    const pendingStrategies = countBy(data.strategies, (item) => ['review', 'pending', 'draft'].includes(item.status));
-    const pendingContent = countBy(contentRows, (item) => ['draft', 'review', 'generating'].includes(item.status));
-    const pendingPublish = countBy(data.publishTasks, (item) => ['draft', 'scheduled', 'pending'].includes(item.status));
-    const published = countBy(data.publishTasks, (item) => item.status === 'published');
-    const failed = countBy(
+    const contentPackages = getContentPackages(data);
+    const assets = getAssets(data);
+    const knowledge = getKnowledgeItems(data);
+    const pendingPublish = countWhere(data.publishTasks, (item) => ['draft', 'scheduled', 'pending'].includes(item.status || item.approval_status));
+    const failedTasks = countWhere(
       [...data.publishTasks, ...data.agentRuns, ...data.workflowRuns],
-      (item) => item.status === 'failed',
+      (item) => ['failed', 'error'].includes(item.status),
     );
 
     return {
-      contentRows,
-      assetRows,
-      knowledgeRows,
-      pendingStrategies,
-      pendingContent,
+      contentPackages,
+      assets,
+      knowledge,
+      pendingStrategies: countWhere(data.strategies, (item) => ['review', 'pending', 'draft'].includes(item.status)),
+      pendingContent: countWhere(contentPackages, (item) => ['draft', 'review', 'generating'].includes(item.status)),
       pendingPublish,
-      published,
-      failed,
+      failedTasks,
+      connectedAccounts: countWhere(data.platformConnections, (item) => item.status === 'connected'),
     };
   }, [data]);
 
   if (!isSupabaseConfigured) {
     return (
       <section className="page-stack">
-        <EmptyState title="等待 Supabase 配置" description="配置 Supabase 后，线上总控台会读取真实运营数据。" />
+        <EmptyState title="等待 Supabase 配置" description="配置完成后，总控台会读取你的真实运营数据。" />
       </section>
     );
   }
@@ -123,87 +83,77 @@ export function CommandCenter({ userId, onNavigate }) {
         <div className="hero-panel">
           <p className="eyebrow">Personal AI Ops Workspace</p>
           <h2>请先登录你的个人运营工作台</h2>
-          <p>登录后，Command Center 会把账号矩阵、素材库、角色库和运营链路合成一个每日工作台。</p>
+          <p>登录后，这里会显示今日待处理事项、Agent 执行结果、最近内容、待批准发布和异常任务。</p>
         </div>
       </section>
     );
   }
 
-  const latestKnowledge = latestRows(summary.knowledgeRows, 4);
-  const latestContent = latestRows(summary.contentRows, 4);
-  const latestRuns = latestRows([...data.agentRuns, ...data.workflowRuns], 4);
+  const latestRuns = getLatest([...data.agentRuns, ...data.workflowRuns], 4);
+  const latestContent = getLatest(summary.contentPackages, 4);
+  const latestPublish = getLatest(data.publishTasks, 4);
 
   return (
     <section className="page-stack">
       <div className="hero-panel command-hero">
-        <p className="eyebrow">AI Marketing OS · Command Center</p>
-        <h2>你管理 AI 营销团队，系统推进每日运营</h2>
+        <p className="eyebrow">AI Command Center</p>
+        <h2>今天你只需要审批关键决策，AI 团队继续往前跑</h2>
         <p>
-          这里吸收了本地 Command Center 的整体逻辑：从情报发现、策略生成、内容生产、素材生成、发布审批到数据复盘。
-          已上线的账号矩阵、素材库、角色库会成为这条链路里的核心资产。
+          线上站点现在采用本地 Command Center 的核心操作方式：Campaign 负责目标与策略，内容工作台合并生成与审核，
+          发布队列作为最终安全审批点。账号矩阵、素材库和角色库作为三个核心资产中心参与整个流程。
         </p>
         <div className="button-row">
-          <button className="primary-button" type="button" onClick={() => onNavigate('accounts')}>管理账号矩阵</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>查看素材库</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>查看角色库</button>
+          <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>创建或查看 Campaign</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>进入内容工作台</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('publish')}>检查发布队列</button>
         </div>
       </div>
 
       <div className="stat-grid">
-        <StatCard label="账号资产" value={loading ? '-' : data.accounts.length} hint="social_accounts" />
-        <StatCard label="AI 内容" value={loading ? '-' : summary.contentRows.length} hint="content packages / library" />
-        <StatCard label="素材资产" value={loading ? '-' : summary.assetRows.length} hint="assets / asset_library" />
-        <StatCard label="知识记忆" value={loading ? '-' : summary.knowledgeRows.length} hint="Knowledge Vault" />
-        <StatCard label="待审批发布" value={loading ? '-' : summary.pendingPublish} hint="publish queue" />
-        <StatCard label="异常任务" value={loading ? '-' : summary.failed} hint="需要人工处理" />
-      </div>
-
-      <div className="ops-flow">
-        {opsSteps.map((step, index) => (
-          <button className="ops-step-card" type="button" key={step.title} onClick={() => onNavigate(step.page)}>
-            <span>{index + 1}</span>
-            <strong>{step.title}</strong>
-            <small>{step.description}</small>
-          </button>
-        ))}
+        <StatCard label="待审批策略" value={loading ? '-' : summary.pendingStrategies} hint="Agent 生成后等待你确认" />
+        <StatCard label="待审核内容" value={loading ? '-' : summary.pendingContent} hint="文案、素材、终审在同一张卡片" />
+        <StatCard label="待批准发布" value={loading ? '-' : summary.pendingPublish} hint="不会自动发布" />
+        <StatCard label="异常任务" value={loading ? '-' : summary.failedTasks} hint="需要人工检查" />
+        <StatCard label="账号资产" value={loading ? '-' : data.accounts.length} hint={`${summary.connectedAccounts} 个已连接平台账号`} />
+        <StatCard label="素材与角色" value={loading ? '-' : `${summary.assets.length}/${data.characters.length}`} hint="素材库 / 角色库" />
       </div>
 
       <div className="dashboard-grid">
         <section className="table-card mini-panel">
           <div className="panel-title">
-            <h3>今日需要你看的事</h3>
-            <span className="config-pill">人工审批点</span>
+            <h3>今日待处理事项</h3>
+            <span className="config-pill">人工决策</span>
           </div>
           <div className="stack-list">
-            <WorkItem label="待处理策略" value={summary.pendingStrategies} page="campaigns" onNavigate={onNavigate} />
-            <WorkItem label="待审核内容" value={summary.pendingContent} page="content" onNavigate={onNavigate} />
-            <WorkItem label="待审批发布" value={summary.pendingPublish} page="publish" onNavigate={onNavigate} />
-            <WorkItem label="失败任务" value={summary.failed} page="analytics" onNavigate={onNavigate} danger />
+            <WorkItem label="策略等待审批" value={summary.pendingStrategies} page="campaigns" onNavigate={onNavigate} />
+            <WorkItem label="内容等待终审" value={summary.pendingContent} page="workspace" onNavigate={onNavigate} />
+            <WorkItem label="发布等待批准" value={summary.pendingPublish} page="publish" onNavigate={onNavigate} />
+            <WorkItem label="失败或异常任务" value={summary.failedTasks} page="health" onNavigate={onNavigate} danger />
           </div>
         </section>
 
         <section className="table-card mini-panel">
           <div className="panel-title">
-            <h3>最新知识沉淀</h3>
-            <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>进入知识库</button>
+            <h3>最近 Agent 执行结果</h3>
+            <button className="ghost-button" type="button" onClick={() => onNavigate('health')}>查看系统状态</button>
           </div>
-          <RecordList rows={latestKnowledge} empty="还没有知识沉淀。Research Agent 或账号分析完成后会出现在这里。" />
+          <RecordList rows={latestRuns} empty="还没有 Agent 或 Workflow 执行记录。" />
         </section>
 
         <section className="table-card mini-panel">
           <div className="panel-title">
-            <h3>最新内容包</h3>
-            <button className="ghost-button" type="button" onClick={() => onNavigate('content')}>进入内容工厂</button>
+            <h3>最近内容</h3>
+            <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>进入内容工作台</button>
           </div>
-          <RecordList rows={latestContent} empty="还没有内容包。策略批准后会进入内容生产。" />
+          <RecordList rows={latestContent} empty="还没有内容包。策略批准后会进入这里。" />
         </section>
 
         <section className="table-card mini-panel">
           <div className="panel-title">
-            <h3>AI 执行记录</h3>
-            <StatusBadge status={latestRuns[0]?.status || 'pending'} />
+            <h3>待批准发布</h3>
+            <StatusBadge status={summary.pendingPublish ? 'pending' : 'success'} />
           </div>
-          <RecordList rows={latestRuns} empty="还没有 AI 执行记录。" />
+          <RecordList rows={latestPublish} empty="暂无发布任务。" />
         </section>
       </div>
     </section>
@@ -220,19 +170,17 @@ function WorkItem({ label, value, page, onNavigate, danger = false }) {
 }
 
 function RecordList({ rows, empty }) {
-  if (!rows.length) {
-    return <div className="empty-card-inline">{empty}</div>;
-  }
+  if (!rows.length) return <div className="empty-card-inline">{empty}</div>;
 
   return (
     <div className="record-list">
       {rows.map((row) => (
-        <article className="record-row" key={row.id || `${row.title}-${row.created_at}`}>
+        <article className="record-row" key={row.id || `${row.title}-${row.created_at || row.createdAt}`}>
           <div>
-            <strong>{row.title || row.name || row.agent_name || row.type || row.status || '未命名记录'}</strong>
-            <small>{row.summary || row.description || row.platform || row.model || row.status || '运营数据'}</small>
+            <strong>{row.title || row.name || row.agent_name || row.type || row.platform || '未命名记录'}</strong>
+            <small>{row.summary || row.description || row.status || row.model || '运营记录'}</small>
           </div>
-          <span>{formatDate(row.created_at || row.updated_at || row.completed_at)}</span>
+          <span>{formatDate(row.created_at || row.createdAt || row.updated_at || row.completed_at)}</span>
         </article>
       ))}
     </div>

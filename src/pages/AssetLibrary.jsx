@@ -119,7 +119,7 @@ export function AssetLibrary({ userId }) {
       {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase Storage 配置" description="配置后这里会从 assets 表读取资产，并支持上传与删除。" />
+        <EmptyState title="等待素材存储配置" description="配置后这里会读取真实素材，并支持上传与删除。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的素材库。" />
       ) : assets.length === 0 ? (
@@ -167,7 +167,7 @@ export function AssetLibrary({ userId }) {
             <div><dt>创建时间</dt><dd>{formatDate(selected.created_at)}</dd></div>
           </dl>
           {selected.prompt && <p className="draft-preview">{selected.prompt}</p>}
-          {selected.workflow && <pre className="code-preview">{JSON.stringify(selected.workflow, null, 2)}</pre>}
+          {selected.workflow && <p className="draft-preview">这个素材已绑定 Workflow 配置，可在内容工作台中作为生成流程使用。</p>}
         </aside>
       )}
     </section>

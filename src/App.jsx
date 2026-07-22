@@ -4,38 +4,27 @@ import { Sidebar } from './components/Sidebar';
 import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
 import { AssetLibrary } from './pages/AssetLibrary';
+import { CampaignStrategyPage } from './pages/CampaignStrategyPage';
 import { CharacterLibrary } from './pages/CharacterLibrary';
 import { CommandCenter } from './pages/CommandCenter';
-import { OpsDataPage } from './pages/OpsDataPage';
+import { ContentWorkspacePage } from './pages/ContentWorkspacePage';
+import { PlatformConnectionsPage } from './pages/PlatformConnectionsPage';
+import { PublishQueuePage } from './pages/PublishQueuePage';
+import { SystemOverviewPage } from './pages/SystemOverviewPage';
+import { WorkflowModelConfigPage } from './pages/WorkflowModelConfigPage';
 
 const pageTitles = {
-  dashboard: 'AI 运营总控台',
-  accounts: '账号矩阵',
+  dashboard: 'AI Command Center',
   campaigns: 'Campaign 与策略',
-  content: '内容工厂',
-  aiworks: 'AI 成果',
+  workspace: '内容工作台',
+  publish: '发布队列',
+  accounts: '账号矩阵',
   assets: '素材库',
   characters: '角色库',
-  publish: '发布队列',
-  analytics: '分析优化',
-  knowledge: '知识库',
-  settings: '设置',
+  connections: '平台连接',
+  health: '系统状态',
+  workflows: '工作流与模型配置',
 };
-
-function SettingsPage() {
-  return (
-    <section className="page-stack">
-      <div className="hero-panel">
-        <p className="eyebrow">Settings</p>
-        <h2>系统设置</h2>
-        <p>
-          线上 GitHub Pages 只保留前端可见配置。平台密钥、AI Key、Telegram/X Token 等敏感信息继续放在
-          Supabase Edge Function Secrets 或后端环境变量中，不能进入前端。
-        </p>
-      </div>
-    </section>
-  );
-}
 
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard');
@@ -45,21 +34,24 @@ export default function App() {
     const props = { userId, onNavigate: setActivePage };
 
     switch (activePage) {
+      case 'campaigns':
+        return <CampaignStrategyPage {...props} />;
+      case 'workspace':
+        return <ContentWorkspacePage {...props} />;
+      case 'publish':
+        return <PublishQueuePage {...props} />;
       case 'accounts':
         return <AccountsPage {...props} />;
       case 'assets':
         return <AssetLibrary {...props} />;
       case 'characters':
         return <CharacterLibrary {...props} />;
-      case 'campaigns':
-      case 'content':
-      case 'aiworks':
-      case 'publish':
-      case 'analytics':
-      case 'knowledge':
-        return <OpsDataPage type={activePage} {...props} />;
-      case 'settings':
-        return <SettingsPage />;
+      case 'connections':
+        return <PlatformConnectionsPage {...props} />;
+      case 'health':
+        return <SystemOverviewPage {...props} />;
+      case 'workflows':
+        return <WorkflowModelConfigPage {...props} />;
       default:
         return <CommandCenter {...props} />;
     }

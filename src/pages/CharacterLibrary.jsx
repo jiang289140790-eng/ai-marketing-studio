@@ -82,7 +82,7 @@ export function CharacterLibrary({ userId }) {
       {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置后这里会从 characters 表读取角色。" />
+        <EmptyState title="等待 Supabase 配置" description="配置后这里会读取你的真实角色资产。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的角色库。" />
       ) : characters.length === 0 ? (

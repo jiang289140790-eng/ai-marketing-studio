@@ -219,7 +219,7 @@ export function AccountsPage({ userId }) {
         <div>
           <p className="eyebrow">Account Intelligence Core</p>
           <h2>账号矩阵管理</h2>
-          <p>social_accounts 是唯一账号实体。自己的账号、竞品账号和灵感账号都统一放在这里，后续供情报、Agent 和发布系统调用。</p>
+          <p>这里是唯一的账号资产中心。自己的账号、竞品账号和灵感账号都统一放在这里，后续供情报、Agent 和发布系统调用。</p>
         </div>
         <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
           添加账号
@@ -235,17 +235,17 @@ export function AccountsPage({ userId }) {
       {message && <div className={messageIsError(message) ? 'notice error' : 'notice'}>{message}</div>}
 
       <div className="stat-grid">
-        <StatCard label="账号总数" value={stats.total} hint="social_accounts" />
+        <StatCard label="账号总数" value={stats.total} hint="统一账号资产" />
         <StatCard label="自有账号" value={stats.owned} hint="owned" />
         <StatCard label="情报账号" value={stats.intelligence} hint="competitor / inspiration" />
-        <StatCard label="平台已连接" value={stats.connected} hint="platform_connections" />
-        <StatCard label="已有 AI 画像" value={stats.profiled} hint="account_profiles" />
+        <StatCard label="平台已连接" value={stats.connected} hint="已授权连接" />
+        <StatCard label="已有 AI 画像" value={stats.profiled} hint="账号智能分析" />
       </div>
 
       {renderAccountDetail(selectedAccount)}
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会从 social_accounts、account_profiles 和 platform_connections 读取真实数据。" />
+        <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会读取你的真实账号、画像和平台连接状态。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的个人账号矩阵。" />
       ) : accounts.length === 0 ? (

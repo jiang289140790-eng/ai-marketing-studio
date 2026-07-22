@@ -431,9 +431,14 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
               <Info label="LoRA 模型" value={lora.name || lora.model || lora.filename} />
               <Info label="LoRA 版本" value={lora.version} />
               <Info label="LoRA 权重" value={lora.weight || lora.strength} />
-              <Info label="可用于图片" value={booleanText(lora.image_enabled ?? lora.image)} />
-              <Info label="可用于视频" value={booleanText(lora.video_enabled ?? lora.video)} />
-              <Info label="视频生成方式" value={displayText(videoModeLabel(videoMode))} />
+              {activeMediaPanel === 'image' ? (
+                <Info label="可用于图片" value={booleanText(lora.image_enabled ?? lora.image)} />
+              ) : (
+                <>
+                  <Info label="可用于视频" value={booleanText(lora.video_enabled ?? lora.video)} />
+                  <Info label="视频生成方式" value={displayText(videoModeLabel(videoMode))} />
+                </>
+              )}
               <Info label="素材库参考" value={selectedAssets.map((asset) => asset.name)} />
             </div>
           </div>
@@ -463,13 +468,6 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
             <label>来源账号（可选）
               <input value={referenceSource} onChange={(event) => setReferenceSource(event.target.value)} placeholder="例如 @maisiewzil" />
             </label>
-            {activeMediaPanel === 'video' && (
-              <label>生成方式
-                <select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
-                  {VIDEO_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </label>
-            )}
           </div>
           <div className="asset-source-grid">
             <div>

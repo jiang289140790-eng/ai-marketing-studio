@@ -38,7 +38,7 @@ export const ORDER_FIELDS = {
   characters: 'created_at',
   publishTasks: 'created_at',
   publishMetrics: 'last_sync',
-  contentMetrics: 'collected_at',
+  contentMetrics: 'fetched_at',
   knowledge: 'created_at',
   insights: 'created_at',
   contentMemory: 'created_at',

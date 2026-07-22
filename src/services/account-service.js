@@ -74,6 +74,23 @@ export async function listAccountProfiles(userId) {
   return data || [];
 }
 
+export async function upsertAccountProfile(userId, accountId, payload) {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('account_profiles')
+    .upsert({
+      ...payload,
+      user_id: userId,
+      account_id: accountId,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,account_id' })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function analyzeAccountWithAI() {
   throw new Error('账号 AI 分析入口已预留；请先迁移本地 Command Center 的 Account Intelligence Agent。');
 }

@@ -865,6 +865,152 @@ small {
   color: var(--muted);
 }
 
+.knowledge-vault-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.78)),
+    radial-gradient(circle at right top, rgba(14, 165, 233, 0.24), transparent 28rem);
+}
+
+.knowledge-toolbar {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(15, 23, 42, 0.78);
+}
+
+.knowledge-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: #94a3b8;
+}
+
+.knowledge-search input {
+  width: 100%;
+}
+
+.knowledge-type-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.knowledge-type-filters button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.36);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.knowledge-type-filters button span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.knowledge-type-filters button.active {
+  border-color: rgba(34, 211, 238, 0.7);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.8), rgba(8, 145, 178, 0.75));
+  color: #fff;
+}
+
+.knowledge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.knowledge-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(17, 24, 39, 0.76));
+}
+
+.knowledge-card.expanded {
+  grid-column: 1 / -1;
+}
+
+.knowledge-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-type-badge {
+  max-width: 70%;
+  overflow: hidden;
+  padding: 5px 9px;
+  border: 1px solid rgba(96, 165, 250, 0.42);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.16);
+  color: #bfdbfe;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-type-badge.type-strategy { border-color: rgba(167, 139, 250, 0.52); color: #ddd6fe; }
+.knowledge-type-badge.type-insight { border-color: rgba(45, 212, 191, 0.5); color: #99f6e4; }
+.knowledge-type-badge.type-research { border-color: rgba(251, 191, 36, 0.48); color: #fde68a; }
+.knowledge-type-badge.type-account { border-color: rgba(244, 114, 182, 0.48); color: #fbcfe8; }
+
+.knowledge-card h3 {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.knowledge-content {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.knowledge-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.knowledge-tags span {
+  padding: 5px 8px;
+  border-radius: 9px;
+  background: rgba(51, 65, 85, 0.72);
+  color: #bae6fd;
+  font-size: 12px;
+}
+
+.knowledge-expand {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: #67e8f9;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 3px 0;
+}
+
 input,
 select,
 textarea {
@@ -906,6 +1052,11 @@ textarea {
 
   .main-shell {
     padding: 20px;
+  }
+
+  .knowledge-vault-hero,
+  .knowledge-grid {
+    grid-template-columns: 1fr;
   }
 
   .header,
@@ -1189,6 +1340,87 @@ textarea {
 .day-slot small { color: #67e8f9; }
 
 /* Analytics learning loop */
+.analytics-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 24px;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.78)),
+    radial-gradient(circle at right top, rgba(124, 58, 237, 0.28), transparent 28rem);
+}
+
+.analytics-loop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.analytics-loop span {
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.09);
+  color: #cffafe;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.analytics-loop i {
+  color: #8b5cf6;
+  font-style: normal;
+}
+
+.analytics-performance-section .panel-title p,
+.memory-section .panel-title p {
+  margin-bottom: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.performance-table {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+.performance-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.7fr) repeat(3, minmax(80px, 0.55fr)) minmax(150px, 0.85fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 760px;
+  padding: 11px 13px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.28);
+  color: #cbd5e1;
+}
+
+.performance-row strong {
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+.performance-row time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.performance-head {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .analytics-memory-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1224,6 +1456,51 @@ textarea {
   line-height: 1.6;
 }
 
+.memory-platform {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.08);
+  color: #a5f3fc;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.memory-facts,
+.memory-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.memory-facts span {
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(51, 65, 85, 0.52);
+}
+
+.memory-example,
+.memory-goal {
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.effectiveness {
+  color: #fde68a;
+  letter-spacing: 0.04em;
+}
+
+.memory-footer time {
+  color: #64748b;
+}
+
 .final-review-editor {
   margin-bottom: 16px;
 }
@@ -1246,6 +1523,7 @@ textarea {
   .attention-grid,
   .recommendation-grid { grid-template-columns: 1fr; }
   .analytics-memory-grid { grid-template-columns: 1fr; }
+  .analytics-hero { grid-template-columns: 1fr; }
   .final-review-editor label:first-child { grid-column: auto; }
   .compact-head { align-items: flex-start; }
 }

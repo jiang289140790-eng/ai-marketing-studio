@@ -4,28 +4,32 @@ import { Sidebar } from './components/Sidebar';
 import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
 import { AIWorksPage } from './pages/AIWorksPage';
-import { AnalyticsOptimizationPage } from './pages/AnalyticsOptimizationPage';
+import { AnalyticsPage } from './pages/AnalyticsPage';
 import { AssetLibrary } from './pages/AssetLibrary';
 import { CampaignStrategyPage } from './pages/CampaignStrategyPage';
 import { CharacterLibrary } from './pages/CharacterLibrary';
 import { CommandCenter } from './pages/CommandCenter';
 import { ContentWorkspacePage } from './pages/ContentWorkspacePage';
+import { ContentIntelligence } from './pages/ContentIntelligence';
+import { DailyReport } from './pages/DailyReport';
 import { PlatformConnectionsPage } from './pages/PlatformConnectionsPage';
 import { PublishQueuePage } from './pages/PublishQueuePage';
 import { SystemOverviewPage } from './pages/SystemOverviewPage';
 import { WorkflowModelConfigPage } from './pages/WorkflowModelConfigPage';
-import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
+import { KnowledgeVaultPage } from './pages/KnowledgeVaultPage';
 
 const pageTitles = {
   dashboard: 'AI Command Center',
   campaigns: 'Campaign 与策略',
   workspace: '内容工作台',
+  intelligence: '内容情报',
   publish: '发布队列',
   accounts: '账号矩阵',
   assets: '素材库',
   characters: '角色库',
   aiworks: 'AI 成果',
   analytics: '分析优化',
+  dailyreport: '运营日报',
   knowledge: '知识库',
   connections: '平台连接',
   health: '系统状态',
@@ -44,6 +48,8 @@ export default function App() {
         return <CampaignStrategyPage {...props} />;
       case 'workspace':
         return <ContentWorkspacePage {...props} />;
+      case 'intelligence':
+        return <ContentIntelligence {...props} />;
       case 'publish':
         return <PublishQueuePage {...props} />;
       case 'accounts':
@@ -55,9 +61,11 @@ export default function App() {
       case 'aiworks':
         return <AIWorksPage {...props} />;
       case 'analytics':
-        return <AnalyticsOptimizationPage {...props} />;
+        return <AnalyticsPage {...props} />;
+      case 'dailyreport':
+        return <DailyReport {...props} />;
       case 'knowledge':
-        return <KnowledgeBasePage {...props} />;
+        return <KnowledgeVaultPage {...props} />;
       case 'connections':
         return <PlatformConnectionsPage {...props} />;
       case 'health':

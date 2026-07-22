@@ -8,10 +8,17 @@ export const navigationSections = [
     items: [
       { id: 'campaigns', label: 'Campaign 与策略', icon: '◆' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
+      { id: 'intelligence', label: '内容情报', icon: '⌕' },
       { id: 'publish', label: '发布队列', icon: '↗' },
       { id: 'aiworks', label: 'AI 成果', icon: '✦' },
-      { id: 'analytics', label: '分析优化', icon: '↗' },
-      { id: 'knowledge', label: '知识库', icon: '◇' },
+    ],
+  },
+  {
+    label: '智能分析',
+    items: [
+      { id: 'analytics', label: '分析优化', icon: '▥' },
+      { id: 'dailyreport', label: '运营日报', icon: '▦' },
+      { id: 'knowledge', label: '知识库', icon: '🧠' },
     ],
   },
   {
@@ -59,4 +66,14 @@ export const assetTypes = [
   { value: 'prompt', label: 'Prompt' },
   { value: 'workflow', label: 'Workflow' },
   { value: 'lora', label: 'LoRA' },
+];
+
+export const contentTypes = [
+  { value: 'text', label: '纯文字' },
+  { value: 'image', label: '图片' },
+  { value: 'video', label: '视频' },
+  { value: 'short_video', label: '短视频' },
+  { value: 'carousel', label: '轮播图' },
+  { value: 'thread', label: '长帖 / Thread' },
+  { value: 'ad', label: '广告内容' },
 ];

@@ -1,0 +1,184 @@
+import { useEffect, useMemo, useState } from 'react';
+import { EmptyState } from '../components/EmptyState';
+import { StatCard } from '../components/StatCard';
+import { normalizeList, readRows } from '../services/ops-service';
+import { isSupabaseConfigured } from '../services/supabase-client';
+import { formatDate } from '../utils/formatters';
+
+const TYPE_FILTERS = [
+  { id: 'all', label: '全部' },
+  { id: 'account', label: '账号' },
+  { id: 'character', label: '角色' },
+  { id: 'content', label: '内容' },
+  { id: 'strategy', label: '策略' },
+  { id: 'insight', label: '洞察' },
+  { id: 'campaign', label: 'Campaign' },
+  { id: 'research', label: '研究' },
+];
+
+function getTypeGroup(item) {
+  const type = String(item.type || item.entry_type || item.category || '').toLowerCase();
+  if (type.includes('account')) return 'account';
+  if (type.includes('character')) return 'character';
+  if (type.includes('strategy')) return 'strategy';
+  if (type.includes('campaign')) return 'campaign';
+  if (type.includes('research')) return 'research';
+  if (type.includes('insight')) return 'insight';
+  return 'content';
+}
+
+function getContent(item) {
+  const value = item.content || item.summary || item.description || item.insight || '';
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  return JSON.stringify(value, null, 2);
+}
+
+function getTags(item) {
+  const source = item.metadata?.tags ?? item.tags ?? item.metadata?.keywords ?? [];
+  return normalizeList(source).map((tag) => (typeof tag === 'object' ? tag.name || tag.label : tag)).filter(Boolean);
+}
+
+function getSearchText(item) {
+  return [item.title, item.type, getContent(item), ...getTags(item), JSON.stringify(item.metadata || {})]
+    .filter(Boolean)
+    .join(' ')
+    .toLocaleLowerCase();
+}
+
+export function KnowledgeVaultPage({ userId, onNavigate }) {
+  const [items, setItems] = useState([]);
+  const [query, setQuery] = useState('');
+  const [activeType, setActiveType] = useState('all');
+  const [expandedId, setExpandedId] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!userId || !isSupabaseConfigured) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    readRows('knowledge', { limit: 500 })
+      .then((rows) => {
+        if (!cancelled) setItems(rows);
+      })
+      .catch((nextError) => {
+        if (!cancelled) setError(nextError.message || '知识记录读取失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const counts = useMemo(() => items.reduce((result, item) => {
+    const group = getTypeGroup(item);
+    result[group] = (result[group] || 0) + 1;
+    return result;
+  }, {}), [items]);
+
+  const filteredItems = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return items.filter((item) => {
+      const typeMatches = activeType === 'all' || getTypeGroup(item) === activeType;
+      const queryMatches = !needle || getSearchText(item).includes(needle);
+      return typeMatches && queryMatches;
+    });
+  }, [activeType, items, query]);
+
+  if (!userId) {
+    return <EmptyState title="请先登录" description="登录后才能读取 Knowledge Vault 与 Agent 运营记忆。" />;
+  }
+
+  return (
+    <section className="page-stack knowledge-vault-page">
+      <div className="hero-panel knowledge-vault-hero">
+        <div>
+          <p className="eyebrow">KNOWLEDGE VAULT / AGENT MEMORY</p>
+          <h2>让账号、内容、策略与研究结果成为 Agent 可复用的知识</h2>
+          <p>这里汇总 MCP 和运营工作流写入的结构化知识。你可以搜索标题、正文、标签或元数据，并按业务类型快速筛选。</p>
+        </div>
+        <div className="button-row">
+          <button className="ghost-button" type="button" onClick={() => onNavigate('accounts')}>打开账号矩阵</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('analytics')}>查看分析优化</button>
+        </div>
+      </div>
+
+      <div className="stat-grid compact">
+        <StatCard label="知识记录" value={loading ? '-' : items.length} hint="从 Supabase 实时读取" />
+        <StatCard label="当前结果" value={loading ? '-' : filteredItems.length} hint="搜索与分类筛选结果" />
+        <StatCard label="知识类型" value={loading ? '-' : Object.keys(counts).length} hint="账号、内容、策略、研究等" />
+        <StatCard label="最新写入" value={loading || !items[0] ? '-' : formatDate(items[0].created_at)} hint="按创建时间倒序" />
+      </div>
+
+      <div className="knowledge-toolbar">
+        <label className="knowledge-search">
+          <span aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索账号、Hook、关键词、策略或研究报告…"
+          />
+        </label>
+        <div className="knowledge-type-filters" aria-label="知识类型筛选">
+          {TYPE_FILTERS.map((filter) => {
+            const count = filter.id === 'all' ? items.length : (counts[filter.id] || 0);
+            return (
+              <button
+                className={activeType === filter.id ? 'active' : ''}
+                key={filter.id}
+                type="button"
+                onClick={() => setActiveType(filter.id)}
+              >
+                {filter.label}<span>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {error && <div className="notice error">{error}</div>}
+
+      {!loading && filteredItems.length > 0 ? (
+        <div className="knowledge-grid">
+          {filteredItems.map((item, index) => {
+            const itemId = item.id || `${item.type || 'knowledge'}-${index}`;
+            const content = getContent(item);
+            const tags = getTags(item);
+            const expanded = expandedId === itemId;
+            const preview = content.length > 260 ? `${content.slice(0, 260)}…` : content;
+
+            return (
+              <article className={`knowledge-card${expanded ? ' expanded' : ''}`} key={itemId}>
+                <div className="knowledge-card-topline">
+                  <span className={`knowledge-type-badge type-${getTypeGroup(item)}`}>{item.type || 'knowledge'}</span>
+                  <time>{formatDate(item.created_at || item.updated_at)}</time>
+                </div>
+                <h3>{item.title || '未命名知识记录'}</h3>
+                <p className="knowledge-content">{expanded ? content : preview || '这条记录暂时没有正文。'}</p>
+                {tags.length > 0 && (
+                  <div className="knowledge-tags">
+                    {tags.slice(0, expanded ? tags.length : 8).map((tag) => <span key={String(tag)}>#{tag}</span>)}
+                  </div>
+                )}
+                {content.length > 260 && (
+                  <button className="knowledge-expand" type="button" onClick={() => setExpandedId(expanded ? null : itemId)}>
+                    {expanded ? '收起全文' : '展开全文'}
+                  </button>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      ) : !loading && !error ? (
+        <EmptyState title="没有匹配的知识" description="试试更换关键词或类型；MCP 新写入的知识也会在这里显示。" />
+      ) : null}
+    </section>
+  );
+}

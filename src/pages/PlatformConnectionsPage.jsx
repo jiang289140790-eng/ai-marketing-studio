@@ -9,10 +9,19 @@ import { formatDate } from '../utils/formatters';
 
 export function PlatformConnectionsPage({ userId }) {
   const [data, setData] = useState({ platformConnections: [], accounts: [] });
+  const [isLoading, setIsLoading] = useState(true);
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (!userId || !isSupabaseConfigured) return undefined;
-    loadPlatformConnectionData().then((nextData) => setData({ platformConnections: [], accounts: [], ...nextData }));
+    if (!userId || !isSupabaseConfigured) {
+      setIsLoading(false);
+      return undefined;
+    }
+    setIsLoading(true);
+    loadPlatformConnectionData()
+      .then((nextData) => setData({ platformConnections: [], accounts: [], ...nextData }))
+      .catch((error) => setMessage(error.message))
+      .finally(() => setIsLoading(false));
     return undefined;
   }, [userId]);
 
@@ -36,18 +45,32 @@ export function PlatformConnectionsPage({ userId }) {
   return (
     <section className="page-stack">
       <div className="hero-panel">
-        <p className="eyebrow">平台连接</p>
-        <h2>统一查看 X、Telegram、Instagram、YouTube、TikTok、Discord 的连接状态</h2>
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Connection Health</p>
+            <h2>平台连接健康总览</h2>
+          </div>
+          <ExecutionButton actionName="检查全部连接" className="primary-button" reason="全平台健康检查需要执行网关接入各平台适配器后开启。">
+            检查全部连接
+          </ExecutionButton>
+        </div>
         <p>
-          每个平台可以保留多个账号连接。这里不显示、不保存前端 Token；OAuth、Bot Token、Client Secret、发布执行和状态同步必须由 Edge Function、
-          可信 API 或本地 MCP Runtime 处理。
+          这里只汇总各平台的连接数量、同步时间和限流健康，不重复展示账号明细。具体账号及其连接灯请在“账号矩阵”中查看。
         </p>
       </div>
 
-      <div className="platform-connection-grid multi">
+      {message && <div className="notice error">{message}</div>}
+
+      {isLoading ? (
+        <div className="skeleton-grid" aria-label="平台连接加载中">
+          {Array.from({ length: 6 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}
+        </div>
+      ) : <div className="platform-connection-grid multi">
         {platformConnectionCards.map((card) => {
           const rows = byPlatform.get(String(card.platform).toLowerCase()) || [];
-          const connected = rows.filter((row) => row.status === 'connected');
+          const connected = rows.filter((row) => row.status === 'connected' || row.is_connected === true);
+          const latest = rows[0];
+          const rateLimit = latest?.rate_limit_status || latest?.metadata?.rate_limit_status || '未上报';
           return (
             <article className={`platform-connection-card ${connected.length ? 'connected' : ''}`} key={card.platform}>
               <div className="platform-card-top">
@@ -61,37 +84,18 @@ export function PlatformConnectionsPage({ userId }) {
               <div className="connection-meta-grid">
                 <span>连接数</span>
                 <strong>{connected.length}/{rows.length}</strong>
-                <span>权限</span>
-                <strong>{displayText(rows[0]?.permissions)}</strong>
                 <span>最后同步</span>
-                <strong>{formatDate(rows[0]?.last_sync || rows[0]?.connected_at)}</strong>
-              </div>
-              <div className="connection-record-list">
-                {rows.length ? rows.map((connection) => (
-                  <div className="connection-record" key={connection.id}>
-                    <div>
-                      <strong>{connection.account_name || connection.metadata?.username || connection.metadata?.chat_id || '已保存连接'}</strong>
-                      <small>{formatDate(connection.connected_at || connection.created_at)}</small>
-                    </div>
-                    <StatusBadge status={connection.status || 'pending'} />
-                  </div>
-                )) : <div className="connection-empty">暂无连接账号</div>}
+                <strong>{formatDate(latest?.last_sync || latest?.connected_at)}</strong>
+                <span>API 限流</span>
+                <strong>{displayText(rateLimit)}</strong>
               </div>
               <div className="button-row">
-                <ExecutionButton
-                  action={card.platform === 'X' ? 'sync_x_account' : undefined}
-                  actionName={`连接 ${card.title}`}
-                  className="ghost-button"
-                  reason={card.platform === 'X' ? undefined : `${card.title} 连接流程尚未接入 Bridge action。`}
-                >
-                  连接新账号
-                </ExecutionButton>
                 <ExecutionButton actionName={`检查 ${card.title} 状态`} className="ghost-button" reason="平台状态检查需要对应平台适配器完成后开启。">检查状态</ExecutionButton>
               </div>
             </article>
           );
         })}
-      </div>
+      </div>}
     </section>
   );
 }

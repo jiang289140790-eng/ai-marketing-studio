@@ -69,7 +69,7 @@ a {
   background: rgba(2, 6, 23, 0.96);
   color: white;
   padding: 24px 18px;
-  min-width: 0;
+  min-width: 220px;
   scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
 }
 
@@ -143,10 +143,16 @@ small {
   white-space: normal;
 }
 
-.brand-copy,
-.nav-label {
+.brand-copy {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-icon {
@@ -257,6 +263,11 @@ small {
 .page-stack {
   display: grid;
   gap: 20px;
+}
+
+.stack {
+  display: grid;
+  gap: 16px;
 }
 
 .hero-panel,
@@ -798,6 +809,40 @@ small {
   margin: 18px 0;
 }
 
+.library-asset {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.library-asset.video {
+  aspect-ratio: 16 / 9;
+}
+
+.library-asset img,
+.library-asset video,
+.asset-preview-large img,
+.asset-preview-large video,
+.asset-select-card img,
+.asset-select-card video,
+.asset-result-card img,
+.asset-result-card video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-preview-large img {
+  aspect-ratio: 1 / 1;
+}
+
+.asset-preview-large video {
+  aspect-ratio: 16 / 9;
+}
+
 .prompt-card {
   display: grid;
   place-items: center;
@@ -851,6 +896,56 @@ small {
   max-width: 560px;
   color: var(--muted);
   line-height: 1.7;
+}
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, rgba(30, 41, 59, 0.7) 25%, rgba(71, 85, 105, 0.72) 50%, rgba(30, 41, 59, 0.7) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.skeleton-card {
+  min-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.connection-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 92px;
+}
+
+.connection-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+  background: rgba(71, 85, 105, 0.42);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.connection-dot.connected {
+  border-color: rgba(34, 197, 94, 0.62);
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.08);
 }
 
 .auth-fallback-link,

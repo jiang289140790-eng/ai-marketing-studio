@@ -7,17 +7,38 @@ import { createAsset, deleteAsset, searchAssets, uploadAsset } from '../services
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate, statusLabel } from '../utils/formatters';
 
+function getAssetType(asset) {
+  return String(asset.asset_type || asset.type || '').toLowerCase();
+}
+
+function getAssetUrl(asset) {
+  return asset.url || asset.output_url || asset.media_url || asset.storage_url || '';
+}
+
+function getAssetThumbnail(asset) {
+  return asset.thumbnail || asset.thumbnail_url || asset.preview_url || getAssetUrl(asset);
+}
+
 export function AssetLibrary({ userId }) {
   const [assets, setAssets] = useState([]);
   const [filters, setFilters] = useState({ search: '', type: '', tag: '' });
   const [isCreating, setIsCreating] = useState(false);
   const [uploadType, setUploadType] = useState('image');
   const [selected, setSelected] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState('');
 
   const refresh = useCallback(async () => {
-    if (!userId || !isSupabaseConfigured) return;
-    setAssets(await searchAssets(userId, filters));
+    if (!userId || !isSupabaseConfigured) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      setAssets(await searchAssets(userId, filters));
+    } finally {
+      setIsLoading(false);
+    }
   }, [userId, filters]);
 
   useEffect(() => {
@@ -64,11 +85,14 @@ export function AssetLibrary({ userId }) {
   }
 
   function preview(asset) {
-    if (asset.type === 'image' && asset.url) return <img src={asset.thumbnail || asset.url} alt="" />;
-    if (asset.type === 'video' && asset.url) return <video src={asset.url} controls />;
-    if (asset.type === 'audio' && asset.url) return <audio src={asset.url} controls />;
-    if (asset.thumbnail) return <img src={asset.thumbnail} alt="" />;
-    return <div className="prompt-card">{asset.prompt || asset.model || asset.type}</div>;
+    const type = getAssetType(asset);
+    const url = getAssetUrl(asset);
+    const thumbnail = getAssetThumbnail(asset);
+    if (type === 'image' && thumbnail) return <img src={thumbnail} alt={asset.name || '素材图片'} />;
+    if (type === 'video' && url) return <video src={url} poster={asset.thumbnail || asset.thumbnail_url} controls />;
+    if (type === 'audio' && url) return <audio src={url} controls />;
+    if (thumbnail) return <img src={thumbnail} alt={asset.name || '素材预览'} />;
+    return <div className="prompt-card">{asset.prompt || asset.model || type || 'asset'}</div>;
   }
 
   return (
@@ -118,7 +142,11 @@ export function AssetLibrary({ userId }) {
       {isCreating && <AssetForm onSubmit={handleCreate} onCancel={() => setIsCreating(false)} />}
       {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
-      {!isSupabaseConfigured ? (
+      {isLoading ? (
+        <div className="skeleton-grid" aria-label="素材库加载中">
+          {Array.from({ length: 6 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}
+        </div>
+      ) : !isSupabaseConfigured ? (
         <EmptyState title="等待素材存储配置" description="配置后这里会读取真实素材，并支持上传与删除。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的素材库。" />
@@ -129,10 +157,10 @@ export function AssetLibrary({ userId }) {
           {assets.map((asset) => (
             <article className="asset-card" key={asset.id}>
               <button className="card-open" type="button" onClick={() => setSelected(asset)}>预览</button>
-              {preview(asset)}
+              <div className={`library-asset ${getAssetType(asset) === 'video' ? 'video' : ''}`}>{preview(asset)}</div>
               <div>
                 <div className="card-meta">
-                  <StatusBadge status={asset.type} />
+                  <StatusBadge status={getAssetType(asset)} />
                   {asset.source && <span>{asset.source}</span>}
                 </div>
                 <h3>{asset.name}</h3>
@@ -161,7 +189,7 @@ export function AssetLibrary({ userId }) {
           </div>
           <div className="asset-preview-large">{preview(selected)}</div>
           <dl>
-            <div><dt>类型</dt><dd>{statusLabel(selected.type)}</dd></div>
+            <div><dt>类型</dt><dd>{statusLabel(getAssetType(selected))}</dd></div>
             <div><dt>模型</dt><dd>{selected.model || '—'}</dd></div>
             <div><dt>来源</dt><dd>{selected.source || '—'}</dd></div>
             <div><dt>创建时间</dt><dd>{formatDate(selected.created_at)}</dd></div>

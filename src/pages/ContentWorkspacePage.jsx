@@ -235,7 +235,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate }) {
   const linkedAssets = assetsForContent(item, assets);
   const referenceAssets = assets.filter((asset) => {
     const metadata = safeJson(asset.raw?.metadata);
-    return ['image', 'video'].includes(String(asset.type).toLowerCase())
+    return ['image', 'video'].includes(String(asset.type || asset.asset_type).toLowerCase())
       && asset.status === 'completed'
       && (metadata.role === 'reference' || asset.source === 'upload' || asset.source === 'x');
   });
@@ -765,13 +765,16 @@ function GenerationResults({ item, assets, runs, selectedId, onSelect }) {
 }
 
 function AssetPreview({ asset, compact = false }) {
-  if (asset.thumbnail || asset.url) {
-    if (String(asset.type).toLowerCase().includes('video')) {
-      return <video className={compact ? 'compact-asset-preview' : ''} src={asset.url} poster={asset.thumbnail} controls={!compact} muted />;
+  const type = asset.type || asset.asset_type || 'asset';
+  const url = asset.url || asset.output_url || asset.media_url || asset.storage_url;
+  const thumbnail = asset.thumbnail || asset.thumbnail_url || asset.preview_url;
+  if (thumbnail || url) {
+    if (String(type).toLowerCase().includes('video')) {
+      return <video className={compact ? 'compact-asset-preview' : ''} src={url} poster={thumbnail} controls={!compact} muted />;
     }
-    return <img className={compact ? 'compact-asset-preview' : ''} src={asset.thumbnail || asset.url} alt="" />;
+    return <img className={compact ? 'compact-asset-preview' : ''} src={thumbnail || url} alt={asset.name || '素材预览'} />;
   }
-  return <div className={`asset-placeholder ${compact ? 'compact-asset-preview' : ''}`}>{displayText(asset.type, 'asset')}</div>;
+  return <div className={`asset-placeholder ${compact ? 'compact-asset-preview' : ''}`}>{displayText(type, 'asset')}</div>;
 }
 
 function Info({ label, value }) {

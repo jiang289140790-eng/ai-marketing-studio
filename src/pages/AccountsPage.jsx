@@ -4,7 +4,6 @@ import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { accountCategories } from '../data/navigation';
-import { platformConnectionCards } from '../data/platform-connections';
 import {
   createSocialAccount,
   deleteSocialAccount,
@@ -31,29 +30,8 @@ function getConnectionsForAccount(account, allConnections = []) {
   return Array.from(byId.values());
 }
 
-function getPlatformConnections(connections, platform) {
-  return connections
-    .filter((connection) => connection.platform === platform)
-    .sort((a, b) => new Date(b.connected_at || b.created_at || 0) - new Date(a.connected_at || a.created_at || 0));
-}
-
-function getPermissionsLabel(connection) {
-  const permissions = connection?.permissions;
-  if (!permissions) return '—';
-  if (Array.isArray(permissions)) return permissions.length ? permissions.join(', ') : '—';
-  if (typeof permissions === 'string') return permissions || '—';
-  return Object.values(permissions).flat().filter(Boolean).join(', ') || '—';
-}
-
-function getConnectionAccountName(connection) {
-  return (
-    connection?.social_accounts?.account_name ||
-    connection?.metadata?.username ||
-    connection?.metadata?.screen_name ||
-    connection?.metadata?.chat_id ||
-    connection?.account_name ||
-    '等待授权'
-  );
+function connectionIsActive(connection) {
+  return connection?.status === 'connected' || connection?.is_connected === true;
 }
 
 function messageIsError(message) {
@@ -66,20 +44,29 @@ export function AccountsPage({ userId }) {
   const [editing, setEditing] = useState(null);
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState('');
 
   const refresh = useCallback(async () => {
-    if (!userId || !isSupabaseConfigured) return;
-    const [nextAccounts, nextConnections] = await Promise.all([
-      listSocialAccounts(userId),
-      listPlatformConnections(userId),
-    ]);
-    setAccounts(nextAccounts);
-    setConnections(nextConnections);
-    setSelectedAccount((current) => {
-      if (!current) return null;
-      return nextAccounts.find((account) => account.id === current.id) || null;
-    });
+    if (!userId || !isSupabaseConfigured) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const [nextAccounts, nextConnections] = await Promise.all([
+        listSocialAccounts(userId),
+        listPlatformConnections(userId),
+      ]);
+      setAccounts(nextAccounts);
+      setConnections(nextConnections);
+      setSelectedAccount((current) => {
+        if (!current) return null;
+        return nextAccounts.find((account) => account.id === current.id) || null;
+      });
+    } finally {
+      setIsLoading(false);
+    }
   }, [userId]);
 
   useEffect(() => {
@@ -123,60 +110,6 @@ export function AccountsPage({ userId }) {
     } catch (error) {
       setMessage(error.message);
     }
-  }
-
-  function renderPlatformConnectionCenter() {
-    return (
-      <section className="connection-center">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">Platform Connection Center</p>
-            <h2>平台连接状态</h2>
-            <p>这里展示每个平台当前已连接的账号数量。真正 OAuth / Bot 授权由后端 Edge Function 管理，前端不保存 Token。</p>
-          </div>
-        </div>
-
-        <div className="platform-connection-grid multi">
-          {platformConnectionCards.map((card) => {
-            const platformConnections = getPlatformConnections(connections, card.platform);
-            const connectedCount = platformConnections.filter((connection) => connection.status === 'connected').length;
-            const firstConnection = platformConnections[0];
-            return (
-              <article className={`platform-connection-card ${connectedCount ? 'connected' : ''}`} key={card.platform}>
-                <div className="platform-card-top">
-                  <div>
-                    <span className="platform-icon">{card.platform.slice(0, 1)}</span>
-                    <h3>{card.title}</h3>
-                  </div>
-                  <StatusBadge status={connectedCount ? 'connected' : 'not_connected'} />
-                </div>
-                <p>{card.description}</p>
-                <div className="connection-meta-grid">
-                  <span>连接数</span>
-                  <strong>{connectedCount}/{platformConnections.length}</strong>
-                  <span>权限</span>
-                  <strong>{getPermissionsLabel(firstConnection)}</strong>
-                  <span>最后同步</span>
-                  <strong>{formatDate(firstConnection?.last_sync || firstConnection?.connected_at)}</strong>
-                </div>
-                <div className="connection-record-list">
-                  {platformConnections.length ? platformConnections.map((connection) => (
-                    <div className="connection-record" key={connection.id}>
-                      <div>
-                        <strong>{getConnectionAccountName(connection)}</strong>
-                        <small>{formatDate(connection.connected_at || connection.created_at)}</small>
-                      </div>
-                      <StatusBadge status={connection.status || 'pending'} />
-                    </div>
-                  )) : <div className="connection-empty">暂无连接账号</div>}
-                </div>
-                <small>{card.priority} · {card.authType}</small>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    );
   }
 
   function renderAccountDetail(account) {
@@ -226,8 +159,6 @@ export function AccountsPage({ userId }) {
         </button>
       </div>
 
-      {renderPlatformConnectionCenter()}
-
       {(isCreating || editing) && (
         <AccountForm initialValue={editing} onSubmit={handleSave} onCancel={() => { setIsCreating(false); setEditing(null); }} />
       )}
@@ -244,7 +175,11 @@ export function AccountsPage({ userId }) {
 
       {renderAccountDetail(selectedAccount)}
 
-      {!isSupabaseConfigured ? (
+      {isLoading ? (
+        <div className="skeleton-grid" aria-label="账号矩阵加载中">
+          {Array.from({ length: 4 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}
+        </div>
+      ) : !isSupabaseConfigured ? (
         <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会读取你的真实账号、画像和平台连接状态。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的个人账号矩阵。" />
@@ -261,6 +196,7 @@ export function AccountsPage({ userId }) {
                 <th>目标受众</th>
                 <th>内容方向</th>
                 <th>发布频率</th>
+                <th>平台连接</th>
                 <th>AI画像</th>
                 <th>运营状态</th>
                 <th>操作</th>
@@ -269,6 +205,7 @@ export function AccountsPage({ userId }) {
             <tbody>
               {accounts.map((account) => {
                 const profile = account.account_profiles?.[0];
+                const accountConnections = getConnectionsForAccount(account, connections);
                 return (
                   <tr key={account.id}>
                     <td>{account.platform}</td>
@@ -284,6 +221,22 @@ export function AccountsPage({ userId }) {
                     <td>{profile?.target_audience || account.target_audience || '—'}</td>
                     <td>{profile?.content_direction || account.content_strategy || '—'}</td>
                     <td>{profile?.posting_frequency || account.posting_frequency || '—'}</td>
+                    <td>
+                      <div className="connection-dots" aria-label="账号平台连接状态">
+                        {['x', 'telegram', 'youtube'].map((platform) => {
+                          const connection = accountConnections.find((item) => String(item.platform || '').toLowerCase() === platform);
+                          return (
+                            <span
+                              className={`connection-dot ${connectionIsActive(connection) ? 'connected' : ''}`}
+                              key={platform}
+                              title={`${platform.toUpperCase()}：${connectionIsActive(connection) ? '已连接' : '未连接'}`}
+                            >
+                              {platform.slice(0, 1).toUpperCase()}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </td>
                     <td>{profile ? `已生成 · ${formatDate(profile.last_analyzed_at || profile.updated_at)}` : '等待AI分析'}</td>
                     <td><StatusBadge status={account.status} /></td>
                     <td>

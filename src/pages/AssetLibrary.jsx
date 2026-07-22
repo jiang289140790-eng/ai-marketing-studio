@@ -92,7 +92,7 @@ export function AssetLibrary({ userId }) {
     if (type === 'video' && url) return <video src={url} poster={asset.thumbnail || asset.thumbnail_url} controls />;
     if (type === 'audio' && url) return <audio src={url} controls />;
     if (thumbnail) return <img src={thumbnail} alt={asset.name || '素材预览'} />;
-    return <div className="prompt-card">{asset.prompt || asset.model || type || 'asset'}</div>;
+    return <div className="asset-placeholder library-asset-placeholder">{asset.prompt || asset.model || type || 'asset'}</div>;
   }
 
   return (

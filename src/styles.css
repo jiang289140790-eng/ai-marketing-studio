@@ -948,6 +948,175 @@ small {
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.08);
 }
 
+.aiworks-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.aiworks-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.aiworks-thumb.video {
+  aspect-ratio: 16 / 9;
+}
+
+.aiworks-thumb img,
+.aiworks-thumb video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.aiworks-thumb .asset-placeholder,
+.library-asset .library-asset-placeholder {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.asset-card-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 14px;
+}
+
+.account-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 16px;
+}
+
+.account-row-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 18px;
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(17, 24, 39, 0.75));
+  box-shadow: var(--shadow);
+}
+
+.account-card-header,
+.account-connection-row,
+.account-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.account-card-header > .status-badge {
+  margin-left: auto;
+}
+
+.account-avatar-thumb,
+.account-avatar-fallback {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.account-avatar-thumb {
+  object-fit: cover;
+}
+
+.account-avatar-fallback {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.82), rgba(34, 211, 238, 0.58));
+  color: #fff;
+  font-weight: 900;
+}
+
+.account-card-identity {
+  min-width: 0;
+}
+
+.account-card-identity h3 {
+  margin: 0 0 4px;
+  overflow: hidden;
+  color: var(--text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-card-identity small {
+  overflow-wrap: anywhere;
+}
+
+.account-connection-row {
+  justify-content: space-between;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-card-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.account-card-fields > div {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.account-card-fields span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.account-card-fields p {
+  display: -webkit-box;
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: #cbd5e1;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.account-card-footer {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.account-brain-state {
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.account-brain-state.ready {
+  background: rgba(34, 197, 94, 0.14);
+  color: #86efac;
+}
+
 .auth-fallback-link,
 .inline-error {
   font-size: 12px;

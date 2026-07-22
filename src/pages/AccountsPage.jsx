@@ -186,72 +186,64 @@ export function AccountsPage({ userId }) {
       ) : accounts.length === 0 ? (
         <EmptyState title="还没有账号" description="添加第一个自有账号、竞品账号或灵感账号，后续 AI 会基于这些账号做情报分析。" />
       ) : (
-        <div className="table-card">
-          <table>
-            <thead>
-              <tr>
-                <th>平台</th>
-                <th>角色</th>
-                <th>账号</th>
-                <th>目标受众</th>
-                <th>内容方向</th>
-                <th>发布频率</th>
-                <th>平台连接</th>
-                <th>AI画像</th>
-                <th>运营状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map((account) => {
-                const profile = account.account_profiles?.[0];
-                const accountConnections = getConnectionsForAccount(account, connections);
-                return (
-                  <tr key={account.id}>
-                    <td>{account.platform}</td>
-                    <td>{statusLabel(getAccountRole(account))}</td>
-                    <td className="account-cell">
-                      {account.avatar && <img src={account.avatar} alt="" />}
-                      <span>
-                        <strong>{account.account_name || account.username}</strong>
-                        <br />
-                        <small>{account.username || account.account_url || formatDate(account.created_at)}</small>
-                      </span>
-                    </td>
-                    <td>{profile?.target_audience || account.target_audience || '—'}</td>
-                    <td>{profile?.content_direction || account.content_strategy || '—'}</td>
-                    <td>{profile?.posting_frequency || account.posting_frequency || '—'}</td>
-                    <td>
-                      <div className="connection-dots" aria-label="账号平台连接状态">
-                        {['x', 'telegram', 'youtube'].map((platform) => {
-                          const connection = accountConnections.find((item) => String(item.platform || '').toLowerCase() === platform);
-                          return (
-                            <span
-                              className={`connection-dot ${connectionIsActive(connection) ? 'connected' : ''}`}
-                              key={platform}
-                              title={`${platform.toUpperCase()}：${connectionIsActive(connection) ? '已连接' : '未连接'}`}
-                            >
-                              {platform.slice(0, 1).toUpperCase()}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </td>
-                    <td>{profile ? `已生成 · ${formatDate(profile.last_analyzed_at || profile.updated_at)}` : '等待AI分析'}</td>
-                    <td><StatusBadge status={account.status} /></td>
-                    <td>
-                      <div className="table-actions">
-                        <button type="button" onClick={() => setSelectedAccount(account)}>详情</button>
-                        <button type="button" onClick={() => setEditing(account)}>编辑</button>
-                        {account.account_url && <a className="ghost-button" href={account.account_url} target="_blank" rel="noreferrer">打开</a>}
-                        <button type="button" onClick={() => handleDelete(account)}>删除</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="account-card-grid">
+          {accounts.map((account) => {
+            const profile = account.account_profiles?.[0];
+            const accountConnections = getConnectionsForAccount(account, connections);
+            const hasBrain = Boolean(profile || account.strategy_summary || account.brain_data);
+            return (
+              <article className="account-row-card" key={account.id}>
+                <div className="account-card-header">
+                  {account.avatar ? (
+                    <img className="account-avatar-thumb" src={account.avatar} alt="" loading="lazy" />
+                  ) : (
+                    <span className="account-avatar-fallback" aria-hidden="true">{String(account.account_name || account.username || '?').slice(0, 1).toUpperCase()}</span>
+                  )}
+                  <div className="account-card-identity">
+                    <h3>{account.account_name || account.username}</h3>
+                    <small>{account.username ? `@${String(account.username).replace(/^@/, '')}` : formatDate(account.created_at)} · {account.platform} · {statusLabel(getAccountRole(account))}</small>
+                  </div>
+                  <StatusBadge status={account.status} />
+                </div>
+
+                <div className="account-connection-row">
+                  <span>平台连接</span>
+                  <div className="connection-dots" aria-label="账号平台连接状态">
+                    {['x', 'telegram', 'youtube'].map((platform) => {
+                      const connection = accountConnections.find((item) => String(item.platform || '').toLowerCase() === platform);
+                      return (
+                        <span
+                          className={`connection-dot ${connectionIsActive(connection) ? 'connected' : ''}`}
+                          key={platform}
+                          title={`${platform.toUpperCase()}：${connectionIsActive(connection) ? '已连接' : '未连接'}`}
+                        >
+                          {platform.slice(0, 1).toUpperCase()}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="account-card-fields">
+                  <div><span>目标受众</span><p>{profile?.target_audience || account.target_audience || '—'}</p></div>
+                  <div><span>内容方向</span><p>{profile?.content_direction || account.content_strategy || '—'}</p></div>
+                  <div><span>发布频率</span><p>{profile?.posting_frequency || account.posting_frequency || '—'}</p></div>
+                </div>
+
+                <div className="account-card-footer">
+                  <span className={`account-brain-state ${hasBrain ? 'ready' : ''}`}>
+                    {hasBrain ? `AI 已画像 · ${formatDate(profile?.last_analyzed_at || profile?.updated_at)}` : '等待 AI 分析'}
+                  </span>
+                  <div className="table-actions">
+                    <button type="button" onClick={() => setSelectedAccount(account)}>详情</button>
+                    <button type="button" onClick={() => setEditing(account)}>编辑</button>
+                    {account.account_url && <a className="ghost-button" href={account.account_url} target="_blank" rel="noreferrer">打开</a>}
+                    <button type="button" onClick={() => handleDelete(account)}>删除</button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
 

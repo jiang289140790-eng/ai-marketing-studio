@@ -1,12 +1,14 @@
 export const navigationItems = [
-  { id: 'dashboard', label: '控制台', icon: '⌘' },
+  { id: 'dashboard', label: '总控台', icon: '◎' },
   { id: 'accounts', label: '账号矩阵', icon: '●' },
-  { id: 'assets', label: '素材库', icon: '■' },
-  { id: 'characters', label: '角色库', icon: '◆' },
+  { id: 'campaigns', label: 'Campaign 与策略', icon: '◇' },
   { id: 'content', label: '内容工厂', icon: '✓' },
-  { id: 'intelligence', label: '情报中心', icon: '◌' },
-  { id: 'publish', label: '发布中心', icon: '↗' },
-  { id: 'analytics', label: '数据分析', icon: '↘' },
+  { id: 'aiworks', label: 'AI 成果', icon: '✦' },
+  { id: 'assets', label: '素材库', icon: '■' },
+  { id: 'characters', label: '角色库', icon: '●' },
+  { id: 'publish', label: '发布队列', icon: '↗' },
+  { id: 'analytics', label: '分析优化', icon: '↘' },
+  { id: 'knowledge', label: '知识库', icon: '✧' },
   { id: 'settings', label: '设置', icon: '⚙' },
 ];
 

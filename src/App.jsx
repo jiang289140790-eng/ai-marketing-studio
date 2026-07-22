@@ -5,27 +5,33 @@ import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
 import { AssetLibrary } from './pages/AssetLibrary';
 import { CharacterLibrary } from './pages/CharacterLibrary';
-import { Dashboard } from './pages/Dashboard';
+import { CommandCenter } from './pages/CommandCenter';
+import { OpsDataPage } from './pages/OpsDataPage';
 
 const pageTitles = {
-  dashboard: 'AI 运营控制台',
+  dashboard: 'AI 运营总控台',
   accounts: '账号矩阵',
+  campaigns: 'Campaign 与策略',
+  content: '内容工厂',
+  aiworks: 'AI 成果',
   assets: '素材库',
   characters: '角色库',
-  content: '内容工厂',
-  intelligence: '情报中心',
-  publish: '发布中心',
-  analytics: '数据分析',
+  publish: '发布队列',
+  analytics: '分析优化',
+  knowledge: '知识库',
   settings: '设置',
 };
 
-function PlaceholderPage({ title, description }) {
+function SettingsPage() {
   return (
     <section className="page-stack">
       <div className="hero-panel">
-        <p className="eyebrow">等待迁移</p>
-        <h2>{title}</h2>
-        <p>{description}</p>
+        <p className="eyebrow">Settings</p>
+        <h2>系统设置</h2>
+        <p>
+          线上 GitHub Pages 只保留前端可见配置。平台密钥、AI Key、Telegram/X Token 等敏感信息继续放在
+          Supabase Edge Function Secrets 或后端环境变量中，不能进入前端。
+        </p>
       </div>
     </section>
   );
@@ -45,18 +51,17 @@ export default function App() {
         return <AssetLibrary {...props} />;
       case 'characters':
         return <CharacterLibrary {...props} />;
+      case 'campaigns':
       case 'content':
-        return <PlaceholderPage title="内容工厂" description="后续会把本地 Command Center 的内容生成、审核、发布准备流程迁移到这里。" />;
-      case 'intelligence':
-        return <PlaceholderPage title="情报中心" description="后续会把 Research Intelligence、竞品账号分析和内容机会发现迁移到这里。" />;
+      case 'aiworks':
       case 'publish':
-        return <PlaceholderPage title="发布中心" description="后续会把 Telegram / X 等平台发布链路迁移到这里。" />;
       case 'analytics':
-        return <PlaceholderPage title="数据分析" description="后续会把内容表现、成本、转化和策略优化闭环迁移到这里。" />;
+      case 'knowledge':
+        return <OpsDataPage type={activePage} {...props} />;
       case 'settings':
-        return <PlaceholderPage title="设置" description="这里用于后续集中管理 Supabase、平台连接和个人运营参数。" />;
+        return <SettingsPage />;
       default:
-        return <Dashboard {...props} onNavigate={setActivePage} />;
+        return <CommandCenter {...props} />;
     }
   }, [activePage, userId]);
 

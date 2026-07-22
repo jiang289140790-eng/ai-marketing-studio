@@ -363,6 +363,140 @@ a {
   gap: 14px;
 }
 
+.command-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.ops-flow {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(160px, 1fr));
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.ops-step-card {
+  display: grid;
+  min-width: 160px;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: white;
+  color: var(--dark);
+  cursor: pointer;
+  padding: 16px;
+  text-align: left;
+  box-shadow: 0 14px 40px rgba(16, 24, 40, 0.05);
+}
+
+.ops-step-card:hover {
+  border-color: rgba(99, 91, 255, 0.45);
+  transform: translateY(-1px);
+}
+
+.ops-step-card span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.ops-step-card strong {
+  font-size: 16px;
+}
+
+.ops-step-card small,
+.record-row small,
+.row-subtitle {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.mini-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-title h3 {
+  margin: 0;
+}
+
+.stack-list,
+.record-list {
+  display: grid;
+  gap: 10px;
+}
+
+.work-item,
+.record-row,
+.empty-card-inline {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--soft);
+  padding: 12px;
+}
+
+.work-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  color: var(--dark);
+}
+
+.work-item strong {
+  font-size: 24px;
+}
+
+.work-item.danger strong {
+  color: var(--danger);
+}
+
+.record-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.record-row strong,
+.record-row small,
+.row-subtitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty-card-inline {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .stat-grid.compact .stat-card strong {
   font-size: 24px;
 }
@@ -995,6 +1129,7 @@ th {
   }
 
   .stat-grid,
+  .dashboard-grid,
   .content-grid,
   .asset-grid,
   .studio-grid,
@@ -1018,6 +1153,7 @@ th {
 
   .nav-list,
   .stat-grid,
+  .dashboard-grid,
   .form-grid,
   .filter-bar,
   .content-grid,

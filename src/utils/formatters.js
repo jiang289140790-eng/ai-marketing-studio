@@ -1,13 +1,16 @@
 export function formatDate(value) {
   if (!value) return '—';
 
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+
   return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export function statusLabel(status) {
@@ -21,10 +24,19 @@ export function statusLabel(status) {
     inactive: '停用',
     needs_review: '需要检查',
     error: '异常',
+    draft: '草稿',
+    review: '待审核',
+    scheduled: '已排期',
+    publishing: '发布中',
+    published: '已发布',
     pending: '等待中',
+    queued: '排队中',
     running: '运行中',
     success: '成功',
+    completed: '已完成',
     failed: '失败',
+    approved: '已批准',
+    rejected: '已驳回',
     owned: '自有账号',
     brand: '品牌账号',
     personal: '个人账号',

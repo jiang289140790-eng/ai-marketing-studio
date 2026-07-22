@@ -61,7 +61,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
           视觉需求、角色与 LoRA、参考素材、生成结果、版权确认和最终审核动作。
         </p>
         <div className="button-row">
-          <ExecutionButton actionName="让 Content Agent 生成内容" reason="请先从已批准策略进入内容包，避免创建孤立内容。">生成内容包</ExecutionButton>
+          <ExecutionButton actionName="让 Content Agent 生成内容" reason="请在下方选择具体内容卡片执行，避免创建孤立内容。">生成内容包</ExecutionButton>
           <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>打开素材库</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>打开角色库</button>
         </div>
@@ -103,6 +103,12 @@ function ContentPackageCard({ item, expanded, onToggle, data, assets, onNavigate
   const missingCharacterReason = character ? null : '无法生成角色素材：当前内容包还没有选择角色。';
   const missingLoraReason = character && !character.lora ? '无法加载 LoRA：该角色详情中还没有绑定 LoRA。' : null;
   const missingAssetReason = linkedAssets.length ? null : '无法创建最终预览：还没有参考素材或生成结果。';
+  const approvedAsset = linkedAssets.find((asset) => asset.status === 'completed' && (asset.raw?.approved_for_publishing === true || asset.rightsStatus === true)) || linkedAssets.find((asset) => asset.status === 'completed');
+  const finalizeReason = !item.body
+    ? '缺少最终正文，不能送入发布队列。'
+    : !approvedAsset
+      ? '缺少已完成并确认可用的最终素材，不能送入发布队列。'
+      : undefined;
 
   return (
     <article className="content-package-card">
@@ -172,7 +178,22 @@ function ContentPackageCard({ item, expanded, onToggle, data, assets, onNavigate
               >
                 提交图片生成
               </ExecutionButton>
-              <ExecutionButton actionName="提交视频生成" className="ghost-button" reason="视频生成暂不在第一批线上执行；需要先接入可信 Media Gateway。">提交视频生成</ExecutionButton>
+              <ExecutionButton
+                action="generate_character_video"
+                actionName="提交视频生成"
+                className="ghost-button"
+                resourceType="content_package"
+                resourceId={item.id}
+                payload={{
+                  content_package_id: item.id,
+                  character_id: character?.id,
+                  reference_asset_id: linkedAssets[0]?.id,
+                  mode: linkedAssets[0]?.type === 'video' ? 'reference_video' : 'reference_image',
+                }}
+                reason={missingCharacterReason || missingLoraReason || missingAssetReason || undefined}
+              >
+                提交视频生成
+              </ExecutionButton>
             </div>
           </section>
 
@@ -201,7 +222,15 @@ function ContentPackageCard({ item, expanded, onToggle, data, assets, onNavigate
               actionName="终审通过并创建发布任务"
               resourceType="content_package"
               resourceId={item.id}
-              payload={{ content_package_id: item.id }}
+              payload={{
+                content_package_id: item.id,
+                selected_asset_id: approvedAsset?.id,
+                final_body: item.body,
+                final_cta: item.cta,
+                scheduled_at: item.scheduledAt,
+                platform_account_id: item.accountId,
+              }}
+              reason={finalizeReason}
             >
               终审通过，送入发布队列
             </ExecutionButton>

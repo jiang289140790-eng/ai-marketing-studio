@@ -46,6 +46,15 @@ export const RESOURCE_TABLES: Record<string, string> = {
   platform_connection: 'platform_connections',
 };
 
+const OWNERSHIP_PARENT_FIELDS = [
+  { field: 'campaign_id', resourceType: 'campaign' },
+  { field: 'strategy_plan_id', resourceType: 'strategy' },
+  { field: 'content_package_id', resourceType: 'content_package' },
+  { field: 'content_id', resourceType: 'content' },
+  { field: 'account_id', resourceType: 'account' },
+  { field: 'platform_connection_id', resourceType: 'platform_connection' },
+];
+
 export type GatewayErrorCode =
   | 'AUTH_REQUIRED'
   | 'RESOURCE_NOT_FOUND'
@@ -153,18 +162,42 @@ export function assertUuid(value: unknown, field: string, required = false): str
   return text;
 }
 
-export async function verifyResourceOwnership(client: ReturnType<typeof createServiceClient>, userId: string, resourceType?: string, resourceId?: string | null) {
+export async function verifyResourceOwnership(
+  client: ReturnType<typeof createServiceClient>,
+  userId: string,
+  resourceType?: string,
+  resourceId?: string | null,
+  visited = new Set<string>(),
+) {
   if (!resourceType || !resourceId) return;
   const table = RESOURCE_TABLES[resourceType];
   if (!table) throw new GatewayError('INVALID_INPUT', '不支持的资源类型。', 400);
+  const visitKey = `${resourceType}:${resourceId}`;
+  if (visited.has(visitKey)) {
+    throw new GatewayError('RESOURCE_FORBIDDEN', '无法确认资源归属。', 403);
+  }
+  visited.add(visitKey);
 
   const { data, error } = await client.from(table).select('*').eq('id', resourceId).maybeSingle();
   if (error) throw new GatewayError('RESOURCE_NOT_FOUND', '无法读取目标资源。', 404);
   if (!data) throw new GatewayError('RESOURCE_NOT_FOUND', '目标资源不存在。', 404);
 
-  if ('user_id' in data && data.user_id && String(data.user_id) !== userId) {
-    throw new GatewayError('RESOURCE_FORBIDDEN', '你无权操作该资源。', 403);
+  if ('user_id' in data) {
+    if (data.user_id && String(data.user_id) === userId) return;
+    if (data.user_id && String(data.user_id) !== userId) {
+      throw new GatewayError('RESOURCE_FORBIDDEN', '你无权操作该资源。', 403);
+    }
   }
+
+  for (const parent of OWNERSHIP_PARENT_FIELDS) {
+    const parentId = data[parent.field];
+    if (parentId && !(parent.resourceType === resourceType && String(parentId) === String(resourceId))) {
+      await verifyResourceOwnership(client, userId, parent.resourceType, String(parentId), visited);
+      return;
+    }
+  }
+
+  throw new GatewayError('RESOURCE_FORBIDDEN', '无法确认资源属于当前用户，已拒绝执行。', 403);
 }
 
 export async function enforceRateLimit(client: ReturnType<typeof createServiceClient>, userId: string) {

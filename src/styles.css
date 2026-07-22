@@ -351,6 +351,70 @@ small {
   color: #fecaca;
 }
 
+.error-banner {
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  border-radius: 18px;
+  background: rgba(127, 29, 29, 0.24);
+  color: #fecaca;
+  padding: 14px 18px;
+}
+
+.error-banner strong,
+.error-banner span {
+  display: block;
+}
+
+.error-banner ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+.campaign-form-card {
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-grid label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.form-grid textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.form-grid select[multiple] {
+  min-height: 96px;
+}
+
+.checkbox-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
 .config-pill,
 .status-badge {
   display: inline-flex;

@@ -29,6 +29,23 @@ Deno.serve(async (request) => {
     await enforceRateLimit(client, user.id);
     await verifyResourceOwnership(client, user.id, resourceType, resourceId);
 
+    const { data: existingRun, error: existingRunError } = await client
+      .from('ops_runs')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    if (existingRunError) throw existingRunError;
+    if (existingRun) {
+      return jsonResponse(request, {
+        ok: existingRun.status !== 'failed',
+        run_id: existingRun.id,
+        status: existingRun.status,
+        idempotent: true,
+        run: publicRun(existingRun),
+      }, existingRun.status === 'failed' ? 409 : 200);
+    }
+
     const inputSummary = {
       action,
       resourceType: resourceType || null,
@@ -38,7 +55,7 @@ Deno.serve(async (request) => {
 
     const { data: run, error: insertError } = await client
       .from('ops_runs')
-      .upsert({
+      .insert({
         user_id: user.id,
         action,
         resource_type: resourceType || null,
@@ -48,7 +65,7 @@ Deno.serve(async (request) => {
         input_summary: inputSummary,
         idempotency_key: idempotencyKey,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id,idempotency_key', ignoreDuplicates: false })
+      })
       .select()
       .single();
 

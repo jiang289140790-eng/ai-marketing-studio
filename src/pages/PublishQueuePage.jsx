@@ -90,7 +90,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
   const connection = findById(connections, task.platform_connection_id);
   const account = findById(accounts, task.account_id || connection?.account_id);
   const asset = findById(assets, task.asset_id || task.final_asset_id || content?.assetId);
-  const platformConnected = connection?.status === 'connected';
+  const platformConnected = connection?.status === 'connected' || connection?.is_connected === true;
 
   return (
     <article className="strategy-card">

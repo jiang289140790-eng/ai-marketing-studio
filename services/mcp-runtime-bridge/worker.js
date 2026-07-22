@@ -27,9 +27,20 @@ export async function updateRun(client, runId, patch) {
   if (error) throw error;
 }
 
+export async function getRun(runId) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(runId || ''))) {
+    return { ok: false, code: 'INVALID_INPUT', message: 'run_id 不是有效 ID。' };
+  }
+  const client = createSupabaseAdmin();
+  const { data, error } = await client.from('ops_runs').select('*').eq('id', runId).maybeSingle();
+  if (error) return { ok: false, code: 'RESOURCE_NOT_FOUND', message: error.message };
+  if (!data) return { ok: false, code: 'RESOURCE_NOT_FOUND', message: '执行记录不存在。' };
+  return { ok: true, run: data };
+}
+
 export async function executeAction(body) {
   const client = createSupabaseAdmin();
-  const { run_id: runId, action, payload = {} } = body;
+  const { run_id: runId, user_id: userId, action, resource_type: resourceType, resource_id: resourceId, payload = {} } = body;
   const notConfigured = NOT_CONFIGURED_ACTIONS[action];
   if (notConfigured) {
     await updateRun(client, runId, {
@@ -59,8 +70,18 @@ export async function executeAction(body) {
       started_at: new Date().toISOString(),
     });
 
-    const args = definition.transform ? definition.transform(payload) : payload;
+    const actionContext = {
+      __ops_user_id: userId,
+      __ops_run_id: runId,
+      __ops_resource_type: resourceType || null,
+      __ops_resource_id: resourceId || null,
+    };
+    const args = {
+      ...(definition.transform ? definition.transform(payload, actionContext) : payload),
+      ...actionContext,
+    };
     const result = await callMcpTool(definition.tool, args);
+    await stampUserOwnership(client, userId, action, result);
     const status = result.status || result.ok;
     const failed = status === 'error' || status === 'failed' || result.error;
 
@@ -80,6 +101,51 @@ export async function executeAction(body) {
       retryable: true,
     });
   }
+}
+
+async function stampUserOwnership(client, userId, action, result = {}) {
+  if (!userId || !result || typeof result !== 'object') return;
+  const updates = [];
+
+  if (result.campaign?.id || result.campaign_id) {
+    updates.push(stampTable(client, 'campaigns', result.campaign?.id || result.campaign_id, userId));
+  }
+  if (result.plan?.id || result.strategy_id) {
+    updates.push(stampTable(client, 'strategy_plans', result.plan?.id || result.strategy_id, userId));
+  }
+  if (Array.isArray(result.created_packages)) {
+    for (const item of result.created_packages) {
+      if (item?.id) updates.push(stampTable(client, 'content_packages', item.id, userId));
+    }
+  }
+  if (Array.isArray(result.content_package_ids)) {
+    for (const id of result.content_package_ids) updates.push(stampTable(client, 'content_packages', id, userId));
+  }
+  if (result.content_package_id) {
+    updates.push(stampTable(client, 'content_packages', result.content_package_id, userId));
+  }
+  if (result.asset_id) {
+    updates.push(stampTable(client, 'asset_library', result.asset_id, userId));
+    updates.push(stampTable(client, 'assets', result.asset_id, userId));
+  }
+  if (result.publish_task_id) {
+    updates.push(stampTable(client, 'publish_tasks', result.publish_task_id, userId));
+  }
+  if (result.connection_id) {
+    updates.push(stampTable(client, 'platform_connections', result.connection_id, userId));
+  }
+
+  const settled = await Promise.allSettled(updates);
+  const failed = settled.filter((item) => item.status === 'rejected');
+  if (failed.length) {
+    console.warn(`[ops bridge] ownership stamping warnings for ${action}: ${failed.length}`);
+  }
+}
+
+async function stampTable(client, table, id, userId) {
+  if (!id) return;
+  const { error } = await client.from(table).update({ user_id: userId }).eq('id', id);
+  if (error && !/column .*user_id|Could not find/i.test(error.message || '')) throw error;
 }
 
 function summarizeResult(result) {

@@ -49,13 +49,24 @@ export async function readRows(key, options = {}) {
   if (orderBy) query = query.order(orderBy, { ascending });
 
   const { data, error } = await query;
-  if (error) return [];
+  if (error) {
+    const detail = classifyReadError(error);
+    throw new Error(`${FRIENDLY_SOURCE[key] || table} 读取失败：${detail}`);
+  }
   return data || [];
 }
 
 export async function loadKeys(keys) {
-  const entries = await Promise.all(keys.map(async (key) => [key, await readRows(key)]));
-  return Object.fromEntries(entries);
+  const errors = [];
+  const entries = await Promise.all(keys.map(async (key) => {
+    try {
+      return [key, await readRows(key)];
+    } catch (error) {
+      errors.push({ key, message: error.message });
+      return [key, []];
+    }
+  }));
+  return { ...Object.fromEntries(entries), __errors: errors };
 }
 
 export async function loadCommandCenterData() {
@@ -198,4 +209,12 @@ export function normalizeStatus(value) {
   if (['failed', 'error', 'rejected', 'expired'].includes(status)) return 'failed';
   if (['running', 'generating', 'publishing', 'queued'].includes(status)) return 'running';
   return status || 'pending';
+}
+
+function classifyReadError(error) {
+  const message = error?.message || String(error);
+  if (/does not exist|schema cache|Could not find/i.test(message)) return `数据表或字段不存在：${message}`;
+  if (/permission denied|row-level security|rls|not authorized|JWT/i.test(message)) return `权限或 RLS 拒绝：${message}`;
+  if (/Failed to fetch|network|timeout/i.test(message)) return `网络错误：${message}`;
+  return message;
 }

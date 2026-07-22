@@ -4,9 +4,10 @@ import { setImmediate } from 'node:timers';
 import { verifyGatewaySignature, sanitizeError } from './auth.js';
 import { validateActionRequest } from './schemas.js';
 import { listMcpTools } from './mcp-client.js';
-import { executeAction } from './worker.js';
+import { executeAction, getRun } from './worker.js';
 
 const PORT = Number(process.env.MCP_RUNTIME_BRIDGE_PORT || 8787);
+const HOST = process.env.MCP_RUNTIME_BRIDGE_HOST || '0.0.0.0';
 const BRIDGE_SECRET = process.env.OPS_MCP_BRIDGE_SECRET || '';
 
 const server = http.createServer(async (request, response) => {
@@ -16,7 +17,12 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && request.url?.startsWith('/v1/runs/')) {
-      return sendJson(response, 501, { ok: false, code: 'NOT_IMPLEMENTED', message: '运行状态请通过 Supabase ops-status 查询。' });
+      const probe = request.headers['x-ops-probe'] || '{}';
+      if (!verifyGatewaySignature({ body: String(probe), signature: request.headers['x-ops-signature'], secret: BRIDGE_SECRET })) {
+        return sendJson(response, 401, { ok: false, code: 'AUTH_REQUIRED', message: 'Bridge 签名验证失败。' });
+      }
+      const runId = decodeURIComponent(request.url.split('/').pop() || '');
+      return sendJson(response, 200, await getRun(runId));
     }
 
     if (request.method === 'POST' && request.url === '/v1/actions') {
@@ -36,8 +42,8 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`AI Marketing Studio MCP Runtime Bridge listening on http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`AI Marketing Studio MCP Runtime Bridge listening on http://${HOST}:${PORT}`);
 });
 
 async function health(request) {

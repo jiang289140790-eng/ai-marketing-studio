@@ -115,6 +115,7 @@ export function CommandCenter({ userId, onNavigate }) {
       </div>
 
       <ExecutionStatus />
+      <DataReadErrors errors={data.__errors} />
 
       <div className="ops-alert-grid">
         <WorkItem label="待审批策略" value={summary.pendingStrategies} page="campaigns" onNavigate={onNavigate} />
@@ -159,6 +160,21 @@ export function CommandCenter({ userId, onNavigate }) {
         </section>
       </div>
     </section>
+  );
+}
+
+function DataReadErrors({ errors = [] }) {
+  if (!errors.length) return null;
+  return (
+    <div className="error-banner">
+      <strong>数据读取异常</strong>
+      <span>部分统计可能不完整，请优先检查 Supabase 表结构、RLS 或网络。</span>
+      <ul>
+        {errors.slice(0, 5).map((error) => (
+          <li key={`${error.key}-${error.message}`}>{error.message}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

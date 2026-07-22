@@ -1,4 +1,4 @@
-import { requireSupabase } from './supabase-client';
+import { fetchWithSafeHeaders, requireSupabase, supabaseAnonKey, supabaseUrl } from './supabase-client';
 
 export const EXECUTION_ACTIONS = new Set([
   'create_campaign',
@@ -38,9 +38,7 @@ export const asyncActions = new Set([
 
 export async function getExecutionStatus() {
   try {
-    const client = requireSupabase();
-    const { data, error } = await client.functions.invoke('ops-health', { method: 'GET' });
-    if (error) throw error;
+    const data = await callGatewayFunction('ops-health', { method: 'GET' });
     const status = data?.status || {};
     const connected = Boolean(status.edge_function && status.bridge && status.mcp);
     return {
@@ -63,28 +61,20 @@ export async function executeAction({ action, resourceType, resourceId, payload 
   if (!EXECUTION_ACTIONS.has(action)) {
     throw new Error('不允许的执行动作。');
   }
-  const client = requireSupabase();
   const key = idempotencyKey || makeIdempotencyKey({ action, resourceType, resourceId, payload });
-  const { data, error } = await client.functions.invoke('ops-execute', {
-    body: {
+  const data = await callGatewayFunction('ops-execute', {
+    method: 'POST',
+    headers: {
+      'x-idempotency-key': key,
+    },
+    body: JSON.stringify({
       action,
       resourceType,
       resourceId,
       payload,
       idempotencyKey: key,
-    },
-    headers: {
-      'x-idempotency-key': key,
-    },
+    }),
   });
-  if (error) {
-    const context = error.context || {};
-    const message = context.message || data?.message || error.message || '执行失败。';
-    const wrapped = new Error(message);
-    wrapped.code = context.code || data?.code;
-    wrapped.runId = data?.run_id;
-    throw wrapped;
-  }
   if (!data?.ok) {
     const wrapped = new Error(data?.message || '执行失败。');
     wrapped.code = data?.code;
@@ -95,9 +85,7 @@ export async function executeAction({ action, resourceType, resourceId, payload 
 }
 
 export async function getRunStatus(runId) {
-  const client = requireSupabase();
-  const { data, error } = await client.functions.invoke(`ops-status?run_id=${encodeURIComponent(runId)}`, { method: 'GET' });
-  if (error) throw error;
+  const data = await callGatewayFunction(`ops-status?run_id=${encodeURIComponent(runId)}`, { method: 'GET' });
   if (!data?.ok) throw new Error(data?.message || '无法读取执行状态。');
   return data.run;
 }
@@ -125,4 +113,31 @@ function makeIdempotencyKey({ action, resourceType, resourceId, payload }) {
     hash = ((hash << 5) - hash + stable.charCodeAt(index)) | 0;
   }
   return `${action}:${resourceType || 'none'}:${resourceId || 'none'}:${Math.abs(hash)}`;
+}
+
+async function callGatewayFunction(nameWithQuery, init = {}) {
+  const client = requireSupabase();
+  const { data: sessionData } = await client.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
+  if (!accessToken) throw new Error('请先登录后再执行。');
+
+  const url = `${supabaseUrl}/functions/v1/${nameWithQuery}`;
+  const response = await fetchWithSafeHeaders(url, {
+    ...init,
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    const wrapped = new Error(data?.message || `执行网关请求失败：${response.status}`);
+    wrapped.code = data?.code;
+    wrapped.runId = data?.run_id;
+    throw wrapped;
+  }
+  return data;
 }

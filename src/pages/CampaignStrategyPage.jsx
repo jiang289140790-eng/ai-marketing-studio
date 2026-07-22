@@ -3,6 +3,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ExecutionButton } from '../components/ExecutionButton';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
+import { getExecutionStatus } from '../services/execution-gateway';
 import { countWhere, displayText, findById, loadCampaignData } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
@@ -32,6 +33,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
   const [data, setData] = useState(EMPTY);
   const [form, setForm] = useState(INITIAL_FORM);
   const [loading, setLoading] = useState(false);
+  const [gateway, setGateway] = useState({ loading: true, connected: false });
 
   const reload = useCallback(() => {
     if (!userId || !isSupabaseConfigured) return Promise.resolve();
@@ -45,6 +47,16 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
     reload();
   }, [reload]);
 
+  useEffect(() => {
+    let mounted = true;
+    getExecutionStatus().then((status) => {
+      if (mounted) setGateway({ loading: false, ...status });
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const strategiesByCampaign = useMemo(() => {
     const map = new Map();
     data.strategies.forEach((strategy) => {
@@ -57,6 +69,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
   const ownedAccounts = data.accounts.filter((account) => ['owned', 'brand', 'personal'].includes(account.account_role || account.account_type || account.account_category || 'owned'));
   const campaignPayload = buildCampaignPayload(form, ownedAccounts);
   const canCreate = Boolean(form.name.trim() && form.goal.trim());
+  const createHint = !canCreate ? '请先填写名称和目标' : !gateway.connected ? '执行服务暂未连接，请查看上方连接状态' : '';
 
   if (!isSupabaseConfigured) {
     return <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会读取 Campaign 和 Agent 策略。" />;
@@ -90,12 +103,14 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
             actionName="创建 Campaign"
             payload={campaignPayload}
             ready={canCreate}
-            reason={!canCreate ? '请先填写名称和目标。' : undefined}
+            reason={!canCreate ? '请先填写名称和目标' : undefined}
+            showGatewayHint={canCreate}
             onCompleted={reload}
           >
             创建 Campaign
           </ExecutionButton>
         </div>
+        {createHint && <div className="form-hint">{createHint}</div>}
 
         <div className="form-grid">
           <label>
@@ -108,7 +123,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
           </label>
           <label className="wide">
             <span>目标</span>
-            <textarea value={form.goal} onChange={(event) => setForm({ ...form, goal: event.target.value })} placeholder="例如：30 天内提升 X 账号关注和 Telegram 引流" />
+            <textarea value={form.goal} onChange={(event) => setForm({ ...form, goal: event.target.value })} placeholder="例如：30 天内提升 X 账号关注并给 Telegram 引流" />
           </label>
           <label className="wide">
             <span>内容主题</span>
@@ -309,6 +324,7 @@ function buildCampaignPayload(form, accounts) {
       username: account?.username || account?.account_name,
     };
   });
+
   return {
     name: form.name.trim(),
     goal: form.goal.trim(),

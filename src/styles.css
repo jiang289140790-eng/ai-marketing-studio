@@ -26,11 +26,13 @@
 
 html {
   background: var(--bg);
+  overflow-x: hidden;
 }
 
 body {
   margin: 0;
   min-width: 320px;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at 20% 0%, rgba(124, 58, 237, 0.22), transparent 34rem),
     radial-gradient(circle at 82% 20%, rgba(34, 211, 238, 0.16), transparent 28rem),
@@ -52,7 +54,9 @@ a {
 .app-shell {
   display: grid;
   min-height: 100vh;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 292px minmax(0, 1fr);
+  width: 100%;
+  max-width: 100vw;
 }
 
 .sidebar {
@@ -65,6 +69,7 @@ a {
   background: rgba(2, 6, 23, 0.96);
   color: white;
   padding: 24px 18px;
+  min-width: 0;
   scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
 }
 
@@ -73,6 +78,7 @@ a {
   align-items: center;
   gap: 12px;
   margin-bottom: 28px;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -90,6 +96,9 @@ a {
 .brand strong,
 .brand span {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand span,
@@ -130,6 +139,18 @@ small {
   gap: 12px;
   padding: 12px 14px;
   text-align: left;
+  min-width: 0;
+  white-space: normal;
+}
+
+.brand-copy,
+.nav-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nav-icon {
+  flex: 0 0 auto;
 }
 
 .nav-item:hover,
@@ -154,6 +175,8 @@ small {
 
 .main-shell {
   min-width: 0;
+  width: 100%;
+  overflow-x: hidden;
   padding: 28px 32px 60px;
 }
 
@@ -322,7 +345,8 @@ small {
   color: #fbbf24;
 }
 
-.execution-status {
+.execution-status,
+.execution-status-card {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -337,6 +361,73 @@ small {
   display: block;
 }
 
+.execution-status-card {
+  display: grid;
+  gap: 14px;
+}
+
+.execution-status-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.execution-status-head h3,
+.execution-status-head p {
+  margin: 0;
+}
+
+.execution-status-summary {
+  margin: 0;
+  color: #fde68a;
+}
+
+.gateway-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.gateway-status-grid div {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.32);
+  padding: 12px;
+}
+
+.gateway-status-grid span,
+.gateway-status-grid strong {
+  display: block;
+}
+
+.gateway-status-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gateway-status-grid strong {
+  margin-top: 6px;
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+.gateway-details summary {
+  cursor: pointer;
+  color: #a5f3fc;
+  font-weight: 800;
+}
+
+.gateway-details pre {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.5);
+  color: #cbd5e1;
+  padding: 12px;
+}
+
 .notice {
   border: 1px solid rgba(245, 158, 11, 0.28);
   border-radius: 18px;
@@ -349,6 +440,10 @@ small {
 .notice.error,
 .inline-error {
   color: #fecaca;
+}
+
+.inline-hint {
+  color: #fde68a;
 }
 
 .error-banner {
@@ -375,6 +470,16 @@ small {
   background: var(--panel);
   box-shadow: var(--shadow);
   padding: 22px;
+}
+
+.form-hint {
+  margin: 12px 0 0;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: 14px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+  padding: 10px 12px;
+  font-weight: 800;
 }
 
 .form-grid {
@@ -772,14 +877,15 @@ textarea {
 
 @media (max-width: 1180px) {
   .app-shell {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 260px minmax(0, 1fr);
   }
 
   .command-hero,
   .dashboard-grid,
   .stat-grid,
   .stat-grid.compact,
-  .ops-alert-grid {
+  .ops-alert-grid,
+  .gateway-status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -814,7 +920,8 @@ textarea {
   .stat-grid,
   .stat-grid.compact,
   .ops-alert-grid,
-  .business-grid {
+  .business-grid,
+  .gateway-status-grid {
     grid-template-columns: 1fr;
   }
 }

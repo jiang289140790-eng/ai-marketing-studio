@@ -14,7 +14,7 @@ export function useExecutionAction({ action, resourceType, resourceId, payload, 
       setState((previous) => ({
         ...previous,
         status: status.connected && ready ? 'ready' : 'unavailable',
-        error: status.connected ? '' : status.reason,
+        error: '',
       }));
     });
     return () => {

@@ -5,7 +5,7 @@ export function Sidebar({ activePage, onNavigate }) {
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">AI</div>
-        <div>
+        <div className="brand-copy">
           <strong>AI Marketing OS</strong>
           <span>Command Center</span>
         </div>
@@ -22,8 +22,8 @@ export function Sidebar({ activePage, onNavigate }) {
                 onClick={() => onNavigate(item.id)}
                 type="button"
               >
-                <span>{item.icon}</span>
-                {item.label}
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
               </button>
             ))}
           </div>

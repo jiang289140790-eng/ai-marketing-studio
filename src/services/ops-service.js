@@ -24,6 +24,30 @@ const TABLES = {
   comfyWorkflows: 'comfy_workflows',
 };
 
+const ORDER_FIELDS = {
+  accounts: 'created_at',
+  accountProfiles: 'updated_at',
+  accountReports: 'created_at',
+  platformConnections: 'last_sync',
+  campaigns: 'created_at',
+  strategies: 'created_at',
+  contentPackages: 'created_at',
+  legacyContent: 'created_at',
+  assets: 'created_at',
+  legacyAssets: 'created_at',
+  characters: 'created_at',
+  publishTasks: 'created_at',
+  publishMetrics: 'last_sync',
+  contentMetrics: 'collected_at',
+  knowledge: 'created_at',
+  insights: 'created_at',
+  contentMemory: 'created_at',
+  strategyMemory: 'created_at',
+  agentRuns: 'created_at',
+  workflowRuns: 'created_at',
+  comfyWorkflows: 'created_at',
+};
+
 const FRIENDLY_SOURCE = {
   contentPackages: '内容包',
   legacyContent: '历史内容',
@@ -39,7 +63,7 @@ export async function readRows(key, options = {}) {
 
   const client = requireSupabase();
   const limit = options.limit || 80;
-  const orderBy = options.orderBy || 'created_at';
+  const orderBy = options.orderBy || ORDER_FIELDS[key] || null;
   const ascending = Boolean(options.ascending);
 
   let query = client.from(table).select('*').limit(limit);

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useExecutionAction } from '../hooks/useExecutionAction';
 import { getUnavailableReason } from '../services/execution-gateway';
 
@@ -11,20 +12,33 @@ export function ExecutionButton({
   className = 'primary-button',
   reason,
   ready = true,
+  showGatewayHint = false,
   onCompleted,
   ...props
 }) {
+  const [clickHint, setClickHint] = useState('');
   const execution = useExecutionAction({ action, resourceType, resourceId, payload, ready: ready && Boolean(action), onCompleted });
-  const disabledReason = reason || (!action ? getUnavailableReason(actionName || String(children)) : execution.gateway.reason);
-  const disabled = Boolean(reason) || !execution.canRun;
+  const actionLabel = actionName || String(children);
+  const localReason = reason || (!action ? getUnavailableReason(actionLabel) : '');
+  const gatewayReason = execution.gateway.connected ? '' : '执行服务暂未连接，请查看上方连接状态';
+  const disabledReason = localReason || gatewayReason;
+  const disabled = Boolean(localReason) || !execution.canRun;
   const label = buttonLabel(children, execution.state.status);
 
+  function handleDisabledClick() {
+    if (!disabled) return;
+    setClickHint(disabledReason || '当前暂不可执行');
+    window.setTimeout(() => setClickHint(''), 2400);
+  }
+
   return (
-    <span className="execution-action">
+    <span className="execution-action" onMouseDown={handleDisabledClick} onClick={handleDisabledClick}>
       <button className={className} type="button" disabled={disabled} title={disabled ? disabledReason : ''} onClick={execution.run} {...props}>
         {label}
       </button>
-      {disabled && <small>{disabledReason}</small>}
+      {localReason && <small>{localReason}</small>}
+      {!localReason && showGatewayHint && gatewayReason && <small>{gatewayReason}</small>}
+      {clickHint && <small className="inline-hint">{clickHint}</small>}
       {!disabled && execution.state.run?.id && <small>run_id：{execution.state.run.id}</small>}
       {execution.state.status !== 'ready' && execution.state.status !== 'unavailable' && (
         <small>{execution.state.status} · {execution.state.run?.progress ?? 0}%</small>

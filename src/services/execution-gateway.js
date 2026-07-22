@@ -40,12 +40,14 @@ export async function getExecutionStatus() {
   try {
     const data = await callGatewayFunction('ops-health', { method: 'GET' });
     const status = data?.status || {};
-    const connected = Boolean(status.edge_function && status.bridge && status.mcp);
+    const connected = Boolean(status.edge_function && status.bridge_configured && status.bridge && status.mcp);
+
     return {
       connected,
       status,
       label: connected ? '执行网关已连接' : '执行网关未完整连接',
       reason: connected ? '' : buildHealthReason(status),
+      details: buildHealthDetails(status),
     };
   } catch (error) {
     return {
@@ -53,6 +55,13 @@ export async function getExecutionStatus() {
       status: null,
       label: '执行网关未连接',
       reason: error?.message || 'ops-health 尚未部署，或当前登录状态无法访问执行网关。',
+      details: [
+        ['Supabase', '已连接'],
+        ['Edge Function', '不可访问'],
+        ['MCP Bridge', '等待 Edge Function'],
+        ['AI Marketing Studio MCP', '等待 Bridge'],
+        ['X MCP', '等待 Bridge'],
+      ],
     };
   }
 }
@@ -61,6 +70,7 @@ export async function executeAction({ action, resourceType, resourceId, payload 
   if (!EXECUTION_ACTIONS.has(action)) {
     throw new Error('不允许的执行动作。');
   }
+
   const key = idempotencyKey || makeIdempotencyKey({ action, resourceType, resourceId, payload });
   const data = await callGatewayFunction('ops-execute', {
     method: 'POST',
@@ -75,12 +85,14 @@ export async function executeAction({ action, resourceType, resourceId, payload 
       idempotencyKey: key,
     }),
   });
+
   if (!data?.ok) {
     const wrapped = new Error(data?.message || '执行失败。');
     wrapped.code = data?.code;
     wrapped.runId = data?.run_id;
     throw wrapped;
   }
+
   return data;
 }
 
@@ -98,12 +110,24 @@ export function isTerminalStatus(status) {
   return ['completed', 'failed', 'cancelled'].includes(status);
 }
 
-function buildHealthReason(status) {
+export function buildHealthReason(status) {
   if (!status) return 'ops-health 尚未返回状态。';
   if (!status.bridge_configured) return 'Supabase Edge Function 尚未配置 OPS_MCP_BRIDGE_URL 或 OPS_MCP_BRIDGE_SECRET。';
   if (!status.bridge) return 'MCP Runtime Bridge 暂不可访问。';
   if (!status.mcp) return 'AI Marketing Studio MCP 暂不可用。';
   return '执行网关未完整连接。';
+}
+
+function buildHealthDetails(status = {}) {
+  const yesNo = (value, yes = '已连接', no = '未连接') => (value ? yes : no);
+
+  return [
+    ['Supabase', '已连接'],
+    ['Edge Function', yesNo(status.edge_function, '已部署', '不可访问')],
+    ['MCP Bridge', status.bridge_configured ? yesNo(status.bridge, '已连接', '不可访问') : '未配置'],
+    ['AI Marketing Studio MCP', status.bridge ? yesNo(status.mcp, '已连接', '等待 MCP') : '等待 Bridge'],
+    ['X MCP', status.bridge ? yesNo(status.x_mcp || status.x_tools, '已连接', '等待 MCP') : '等待 Bridge'],
+  ];
 }
 
 function makeIdempotencyKey({ action, resourceType, resourceId, payload }) {
@@ -131,6 +155,7 @@ async function callGatewayFunction(nameWithQuery, init = {}) {
       ...(init.headers || {}),
     },
   });
+
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
   if (!response.ok) {

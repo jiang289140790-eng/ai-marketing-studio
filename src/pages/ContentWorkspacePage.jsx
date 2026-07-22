@@ -77,7 +77,6 @@ const VIDEO_REQUIREMENT_FIELDS = [
 export function ContentWorkspacePage({ userId, onNavigate }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) return undefined;
@@ -90,7 +89,6 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
 
   const contentPackages = useMemo(() => getContentPackages(data), [data]);
   const assets = useMemo(() => getAssets(data), [data]);
-  const selectedItem = contentPackages.find((item) => item.id === selectedId) || null;
 
   if (!isSupabaseConfigured) {
     return <EmptyState title="等待 Supabase 配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
@@ -129,40 +127,31 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
             item={item}
             data={data}
             assets={assets}
-            onOpen={() => setSelectedId(item.id)}
+            onNavigate={onNavigate}
           />
         )) : (
           <EmptyState title="暂无内容包" description="当前数据库没有可审核内容。Content Factory 生成后，会进入这里继续素材生成和终审。" />
         )}
       </div>
 
-      {selectedItem && (
-        <ContentDetailDrawer
-          item={selectedItem}
-          data={data}
-          assets={assets}
-          onClose={() => setSelectedId(null)}
-          onNavigate={onNavigate}
-        />
-      )}
     </section>
   );
 }
 
-function ContentPackageCard({ item, data, assets, onOpen }) {
+function ContentPackageCard({ item, data, assets, onNavigate }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
-  const character = findById(data.characters, item.characterId);
   const linkedAssets = assetsForContent(item, assets);
+  const [studioOpen, setStudioOpen] = useState(true);
 
   return (
     <article className="content-package-card">
-      <div className="section-head">
+      <div className="content-card-header section-head">
         <div>
           <p className="eyebrow">{item.sourceLabel}</p>
           <h3>{item.title}</h3>
-          <p>{truncate(displayText(item.body, '等待生成正文'), 180)}</p>
+          <p className="body-preview">{truncate(displayText(item.body, '等待生成正文'), 220)}</p>
         </div>
         <div className="badge-stack">
           <StatusBadge status={item.reviewStatus || item.status} />
@@ -172,36 +161,52 @@ function ContentPackageCard({ item, data, assets, onOpen }) {
 
       <div className="content-card-meta">
         <Info label="Campaign" value={campaign?.name || campaign?.title} />
-        <Info label="关联策略" value={strategy?.name || strategy?.title} />
+        <Info label="平台" value={item.platform} />
         <Info label="目标账号" value={account?.account_name || account?.username || account?.account_url} />
-        <Info label="状态" value={item.status} />
-        <Info label="审核状态" value={item.reviewStatus} />
-        <Info label="Hook" value={item.hook} />
-        <Info label="CTA" value={item.cta} />
-        <Info label="标签" value={item.tags} />
-        <Info label="角色" value={character?.display_name || character?.name} />
-        <Info label="LoRA" value={getLoraInfo(character, item).name || getLoraInfo(character, item).model} />
-        <Info label="素材数量" value={linkedAssets.length} />
-        <Info label="更新时间" value={formatDate(item.updatedAt || item.createdAt)} />
+        <Info label="素材" value={linkedAssets.length} />
+        <Info label="创建" value={formatDate(item.createdAt)} />
       </div>
 
-      <div className="content-card-body">
-        <strong>正文摘要</strong>
-        <p>{truncate(displayText(item.body, '暂无正文'), 260)}</p>
+      <div className="asset-strip" aria-label="内容素材预览">
+        {linkedAssets.slice(0, 4).map((asset) => (
+          <div className="asset-thumb" key={asset.id}>
+            <AssetPreview asset={asset} compact />
+            <span>{asset.name}</span>
+          </div>
+        ))}
+        {!linkedAssets.length && <span className="muted-line">暂无素材，进入下方工作室添加参考或生成新素材。</span>}
       </div>
 
-      <div className="button-row">
-        <button className="primary-button" type="button" onClick={onOpen}>查看详情</button>
-        <button className="ghost-button" type="button" onClick={onOpen}>继续编辑</button>
-        <button className="ghost-button" type="button" onClick={onOpen}>生成素材</button>
-        <button className="ghost-button" type="button" onClick={onOpen}>审核</button>
-        <button className="ghost-button" type="button" onClick={onOpen}>查看生成结果</button>
+      <div className="button-row content-card-quick-actions">
+        <button className="ghost-button" type="button" onClick={() => setStudioOpen((current) => !current)}>
+          {studioOpen ? '收起工作室' : '查看详情与生成工作室'}
+        </button>
+        <ExecutionButton
+          action="save_draft"
+          actionName="让 Content Agent 整理文案与素材"
+          className="ghost-button"
+          resourceType="content_package"
+          resourceId={item.id}
+          payload={{ content_package_id: item.id, campaign_id: item.campaignId, strategy_id: strategy?.id, mode: 'organize_copy_and_assets' }}
+        >
+          让 Content Agent 整理文案与素材
+        </ExecutionButton>
       </div>
+
+      <details
+        className="generation-studio"
+        open={studioOpen}
+        onToggle={(event) => setStudioOpen(event.currentTarget.open)}
+      >
+        <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
+        <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
+        <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} />
+      </details>
     </article>
   );
 }
 
-function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
+function ContentPackageStudio({ item, data, assets, onNavigate }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
@@ -219,12 +224,20 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
     feedback: '',
   }));
   const [xUrl, setXUrl] = useState('');
+  const [referenceSource, setReferenceSource] = useState(item.sourceAccount || referenceAccount?.account_name || '');
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [forceRemote, setForceRemote] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [selectedGeneratedId, setSelectedGeneratedId] = useState('');
   const selectedCharacter = findById(data.characters, selectedCharacterId) || findById(data.characters, item.characterId);
   const lora = getLoraInfo(selectedCharacter, item);
   const linkedAssets = assetsForContent(item, assets);
-  const referenceAssets = assets.filter((asset) => ['image', 'video'].includes(String(asset.type).toLowerCase()));
+  const referenceAssets = assets.filter((asset) => {
+    const metadata = safeJson(asset.raw?.metadata);
+    return ['image', 'video'].includes(String(asset.type).toLowerCase())
+      && asset.status === 'completed'
+      && (metadata.role === 'reference' || asset.source === 'upload' || asset.source === 'x');
+  });
   const selectedAssets = assets.filter((asset) => selectedAssetIds.includes(asset.id));
   const runs = runsForContent(item, data.workflowRuns || []);
   const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id) === String(item.id));
@@ -266,18 +279,12 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
     video_requirements: item.videoRequirements,
     target_platform: item.platform,
     aspect_ratio: imageReq.aspect_ratio || videoReq.aspect_ratio || '9:16',
+    reference_source: referenceSource,
+    force_remote: forceRemote,
   };
 
   return (
-    <div className="content-drawer-backdrop" role="presentation">
-      <aside className="content-drawer" aria-label="内容详情">
-        <div className="drawer-header">
-          <div>
-            <p className="eyebrow">内容详情 / 生成 / 审核</p>
-            <h2>{item.title}</h2>
-          </div>
-          <button className="ghost-button" type="button" onClick={onClose}>关闭</button>
-        </div>
+    <div className="inline-content-studio" aria-label={`${item.title} 的内容生成工作室`}>
 
         <section className="workspace-block">
           <h3>基础信息</h3>
@@ -408,6 +415,16 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
 
         <section className="workspace-block">
           <h3>素材来源</h3>
+          <div className="studio-controls-grid">
+            <label>来源账号（可选）
+              <input value={referenceSource} onChange={(event) => setReferenceSource(event.target.value)} placeholder="例如 @maisiewzil" />
+            </label>
+            <label>生成方式
+              <select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
+                {VIDEO_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="asset-source-grid">
             <div>
               <h4>从素材库选择</h4>
@@ -467,6 +484,10 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
                 <input type="checkbox" checked={rightsConfirmed} onChange={(event) => setRightsConfirmed(event.target.checked)} />
                 我确认有权将该素材作为本次生成参考
               </label>
+              <label className="consent-row">
+                <input type="checkbox" checked={forceRemote} onChange={(event) => setForceRemote(event.target.checked)} />
+                实际提交到 AutoDL（可能产生费用）；不勾选只创建安全预演任务
+              </label>
             </div>
           </div>
         </section>
@@ -479,7 +500,7 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
               actionName="上传到素材库"
               resourceType="content_package"
               resourceId={item.id}
-              payload={{ content_package_id: item.id, campaign_id: item.campaignId, character_id: selectedCharacter?.id, files: selectedFiles.map(fileToPayload), rights_asserted: rightsConfirmed }}
+              payload={{ content_package_id: item.id, campaign_id: item.campaignId, character_id: selectedCharacter?.id, files: selectedFiles.map(fileToPayload), rights_asserted: rightsConfirmed, reference_source: referenceSource }}
               reason={!selectedFiles.length ? '请先选择本地图片或视频' : !rightsConfirmed ? '请先确认素材使用权限' : undefined}
             >
               上传到素材库
@@ -490,7 +511,7 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
               className="ghost-button"
               resourceType="content_package"
               resourceId={item.id}
-              payload={{ content_package_id: item.id, campaign_id: item.campaignId, character_id: selectedCharacter?.id, url: xUrl, rights_asserted: rightsConfirmed }}
+              payload={{ content_package_id: item.id, campaign_id: item.campaignId, character_id: selectedCharacter?.id, url: xUrl, rights_asserted: rightsConfirmed, reference_source: referenceSource }}
               reason={!parsedX ? '请填写有效的 X 贴文链接' : !rightsConfirmed ? '请先确认素材使用权限' : undefined}
             >
               从 X 链接导入
@@ -521,7 +542,13 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
 
         <section className="workspace-block">
           <h3>生成结果回传</h3>
-          <GenerationResults item={item} assets={linkedAssets} runs={runs} />
+          <GenerationResults
+            item={item}
+            assets={linkedAssets}
+            runs={runs}
+            selectedId={selectedGeneratedId}
+            onSelect={setSelectedGeneratedId}
+          />
         </section>
 
         <section className="workspace-block approval-block">
@@ -552,6 +579,7 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
             resourceId={item.id}
             payload={{
               content_package_id: item.id,
+              selected_asset_id: selectedGeneratedId || null,
               selected_asset_ids: selectedAssetIds,
               final_body: draft.body,
               final_cta: draft.cta,
@@ -565,7 +593,6 @@ function ContentDetailDrawer({ item, data, assets, onClose, onNavigate }) {
           </ExecutionButton>
           {publishTask && <p className="muted-line">已关联发布任务：{publishTask.id} · {displayText(publishTask.status)}</p>}
         </section>
-      </aside>
     </div>
   );
 }
@@ -619,7 +646,13 @@ function ModeNotice({ title, text, selectedAssets }) {
   );
 }
 
-function GenerationResults({ item, assets, runs }) {
+function GenerationResults({ item, assets, runs, selectedId, onSelect }) {
+  const generatedAssets = assets.filter((asset) => {
+    const metadata = safeJson(asset.raw?.metadata);
+    return metadata.role === 'generated' || (asset.source && asset.source !== 'upload');
+  });
+  const selectedAsset = generatedAssets.find((asset) => String(asset.id) === String(selectedId));
+
   return (
     <div className="generation-result-layout">
       <div>
@@ -644,9 +677,27 @@ function GenerationResults({ item, assets, runs }) {
       </div>
       <div>
         <h4>已回传素材</h4>
-        {assets.length ? (
-          <div className="asset-selector-grid">
-            {assets.map((asset) => (
+        {generatedAssets.length ? (
+          <>
+            <div className="result-review-toolbar">
+              <label>生成结果
+                <select value={selectedId} onChange={(event) => onSelect(event.target.value)}>
+                  <option value="">请选择生成结果</option>
+                  {generatedAssets.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {asset.type} · {asset.status}{asset.raw?.approved_for_publishing ? ' · 已确认可用' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="button-row">
+                <ExecutionButton action="poll_asset_status" actionName="回传生成内容" className="ghost-button" resourceType="asset" resourceId={selectedAsset?.id} payload={{ asset_id: selectedAsset?.id, content_package_id: item.id }} reason={!selectedAsset ? '请先选择生成结果' : undefined}>回传生成内容</ExecutionButton>
+                <ExecutionButton action="review_generated_asset" actionName="确认这个内容能用" resourceType="asset" resourceId={selectedAsset?.id} payload={{ asset_id: selectedAsset?.id, content_package_id: item.id, approved: true }} reason={!selectedAsset ? '请先选择生成结果' : undefined}>确认这个内容能用</ExecutionButton>
+                <ExecutionButton action="regenerate_asset" actionName="重新生成" className="ghost-button" resourceType="asset" resourceId={selectedAsset?.id} payload={{ asset_id: selectedAsset?.id, content_package_id: item.id }} reason={!selectedAsset ? '请先选择生成结果' : undefined}>重新生成</ExecutionButton>
+              </div>
+            </div>
+            <div className="asset-selector-grid">
+            {generatedAssets.map((asset) => (
               <article key={asset.id} className="asset-result-card">
                 <AssetPreview asset={asset} />
                 <strong>{asset.name}</strong>
@@ -657,21 +708,22 @@ function GenerationResults({ item, assets, runs }) {
                 </div>
               </article>
             ))}
-          </div>
+            </div>
+          </>
         ) : <div className="empty-card-inline">暂无生成结果。成功后会同时保存到素材库，并回到这张内容卡。</div>}
       </div>
     </div>
   );
 }
 
-function AssetPreview({ asset }) {
+function AssetPreview({ asset, compact = false }) {
   if (asset.thumbnail || asset.url) {
     if (String(asset.type).toLowerCase().includes('video')) {
-      return <video src={asset.url} poster={asset.thumbnail} controls muted />;
+      return <video className={compact ? 'compact-asset-preview' : ''} src={asset.url} poster={asset.thumbnail} controls={!compact} muted />;
     }
-    return <img src={asset.thumbnail || asset.url} alt="" />;
+    return <img className={compact ? 'compact-asset-preview' : ''} src={asset.thumbnail || asset.url} alt="" />;
   }
-  return <div className="asset-placeholder">{displayText(asset.type, 'asset')}</div>;
+  return <div className={`asset-placeholder ${compact ? 'compact-asset-preview' : ''}`}>{displayText(asset.type, 'asset')}</div>;
 }
 
 function Info({ label, value }) {
@@ -705,8 +757,22 @@ function runsForContent(item, runs) {
 
 function getLoraInfo(character, item) {
   const source = item?.loraInfo || character?.lora_info || character?.lora || {};
-  if (typeof source === 'string') return { name: source };
+  if (typeof source === 'string') {
+    const parsed = safeJson(source);
+    return Object.keys(parsed).length ? parsed : { name: source };
+  }
   return source || {};
+}
+
+function safeJson(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function hasLora(lora) {

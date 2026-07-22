@@ -32,12 +32,12 @@ export function WorkflowModelConfigPage({ userId }) {
         <h2>Workflow、LoRA、角色和素材生成能力集中管理</h2>
         <p>
           不单独创建 LoRA 页面。LoRA 进入角色库详情，Workflow 作为模型配置参与内容工作台的素材生成。
-          这里只做配置总览，不展示密钥。
+          这里只做配置总览，不显示密钥、内网地址或复杂模型参数。
         </p>
       </div>
 
       <div className="stat-grid compact">
-        <StatCard label="可用 Workflow" value={data.comfyWorkflows.length} hint="用于图片/视频生成" />
+        <StatCard label="可用 Workflow" value={data.comfyWorkflows.length} hint="用于图片 / 视频生成" />
         <StatCard label="角色" value={data.characters.length} hint="可绑定 LoRA" />
         <StatCard label="模型资产" value={modelAssets.length} hint="Workflow / LoRA" />
         <StatCard label="最近生成任务" value={data.workflowRuns.length} hint="素材生产记录" />

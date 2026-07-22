@@ -6,8 +6,8 @@ export function Sidebar({ activePage, onNavigate }) {
       <div className="brand">
         <div className="brand-mark">AI</div>
         <div>
-          <strong>AI Marketing</strong>
-          <span>Studio</span>
+          <strong>AI Marketing OS</strong>
+          <span>Command Center</span>
         </div>
       </div>
 
@@ -29,6 +29,11 @@ export function Sidebar({ activePage, onNavigate }) {
           </div>
         ))}
       </nav>
+
+      <div className="sidebar-note">
+        <span>安全边界</span>
+        <p>线上站点只做低权限前端控制台。MCP、平台 Token、ComfyUI 与发布执行必须通过可信服务端。</p>
+      </div>
     </aside>
   );
 }

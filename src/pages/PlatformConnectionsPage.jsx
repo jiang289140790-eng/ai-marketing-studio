@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
+import { ExecutionButton } from '../components/ExecutionButton';
 import { StatusBadge } from '../components/StatusBadge';
 import { platformConnectionCards } from '../data/platform-connections';
 import { displayText, loadPlatformConnectionData } from '../services/ops-service';
@@ -36,8 +37,11 @@ export function PlatformConnectionsPage({ userId }) {
     <section className="page-stack">
       <div className="hero-panel">
         <p className="eyebrow">平台连接</p>
-        <h2>这里只显示连接状态，不保存或展示任何 Token</h2>
-        <p>OAuth、Bot Token、Client Secret 和平台发布动作必须由 Edge Function、可信服务端或 MCP 执行，浏览器只看状态。</p>
+        <h2>统一查看 X、Telegram、Instagram、YouTube、TikTok、Discord 的连接状态</h2>
+        <p>
+          每个平台可以保留多个账号连接。这里不显示、不保存前端 Token；OAuth、Bot Token、Client Secret、发布执行和状态同步必须由 Edge Function、
+          可信 API 或本地 MCP Runtime 处理。
+        </p>
       </div>
 
       <div className="platform-connection-grid multi">
@@ -72,6 +76,10 @@ export function PlatformConnectionsPage({ userId }) {
                     <StatusBadge status={connection.status || 'pending'} />
                   </div>
                 )) : <div className="connection-empty">暂无连接账号</div>}
+              </div>
+              <div className="button-row">
+                <ExecutionButton actionName={`连接 ${card.title}`} className="ghost-button">连接新账号</ExecutionButton>
+                <ExecutionButton actionName={`检查 ${card.title} 状态`} className="ghost-button">检查状态</ExecutionButton>
               </div>
             </article>
           );

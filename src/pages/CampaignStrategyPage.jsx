@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
+import { ExecutionButton } from '../components/ExecutionButton';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { countWhere, displayText, findById, loadCampaignData } from '../services/ops-service';
@@ -49,15 +50,15 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
     <section className="page-stack">
       <div className="hero-panel">
         <p className="eyebrow">Campaign 与策略</p>
-        <h2>目标由你定，策略由 Agent 生成，你只做审批</h2>
+        <h2>只填写运营目标，Strategy Agent 负责把目标变成可执行计划</h2>
         <p>
-          Campaign 创建时只需要目标、平台、账号、主题和成功指标。Strategy Agent 会读取账号矩阵、参考账号分析、
-          知识记忆和历史表现，生成待审批策略；批准后再进入内容工作台。
+          Campaign 只保留真正需要你判断的内容：目标、平台、自有账号、参考账号、主题、成功指标和时间范围。
+          策略生成后先等待你审批；审批通过后，才会创建内容包并进入内容工作台。
         </p>
         <div className="button-row">
-          <button className="primary-button" type="button" disabled>新建 Campaign（需接入 Agent 动作）</button>
+          <ExecutionButton actionName="创建 Campaign">新建 Campaign</ExecutionButton>
+          <ExecutionButton actionName="让 Strategy Agent 生成策略" className="ghost-button">生成策略</ExecutionButton>
           <button className="ghost-button" type="button" onClick={() => onNavigate('accounts')}>选择账号矩阵</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>查看内容工作台</button>
         </div>
       </div>
 
@@ -112,7 +113,7 @@ function CampaignCard({ campaign, strategies, accounts, onNavigate }) {
       <div className="nested-list">
         {strategies.length ? strategies.map((strategy) => (
           <StrategyCard key={strategy.id} strategy={strategy} accounts={accounts} compact onNavigate={onNavigate} />
-        )) : <div className="empty-card-inline">还没有 Agent 策略。后续接入动作后，可由 Strategy Agent 自动生成。</div>}
+        )) : <div className="empty-card-inline">还没有 Agent 策略。连接执行服务后，可以由 Strategy Agent 自动生成。</div>}
       </div>
     </article>
   );
@@ -145,8 +146,8 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate }) {
       </div>
 
       <div className="button-row">
-        <button className="primary-button" type="button" disabled>批准策略（需接入 Agent 动作）</button>
-        <button className="ghost-button" type="button" disabled>驳回并重生成</button>
+        <ExecutionButton actionName="批准策略并创建内容包">批准策略</ExecutionButton>
+        <ExecutionButton actionName="驳回并重新生成策略" className="ghost-button">驳回并重生成</ExecutionButton>
         <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>查看关联内容</button>
       </div>
     </article>

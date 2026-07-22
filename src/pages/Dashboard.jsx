@@ -71,7 +71,7 @@ export function Dashboard({ userId, onNavigate }) {
       <div className="hero-panel">
         <p className="eyebrow">Command Center</p>
         <h2>AI Marketing Studio 线上控制台</h2>
-        <p>这次先把本地系统里的三个核心资产区合并到线上：账号矩阵、素材库、角色库。后续再继续迁移内容工厂、情报中心、发布中心和分析闭环。</p>
+        <p>当前线上站点以 Command Center 为核心，集中展示账号矩阵、素材库、角色库、策略、内容工作台和发布审批。</p>
         <div className="button-row">
           <button className="primary-button" type="button" onClick={() => onNavigate('accounts')}>打开账号矩阵</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>打开素材库</button>

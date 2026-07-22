@@ -24,6 +24,15 @@ const TABLES = {
   comfyWorkflows: 'comfy_workflows',
 };
 
+const FRIENDLY_SOURCE = {
+  contentPackages: '内容包',
+  legacyContent: '历史内容',
+  assets: '素材',
+  legacyAssets: '历史素材',
+  accountProfiles: '账号画像',
+  accountReports: '账号智能报告',
+};
+
 export async function readRows(key, options = {}) {
   const table = TABLES[key];
   if (!table) return [];
@@ -53,6 +62,7 @@ export async function loadCommandCenterData() {
   return loadKeys([
     'accounts',
     'accountProfiles',
+    'accountReports',
     'campaigns',
     'strategies',
     'contentPackages',
@@ -61,6 +71,7 @@ export async function loadCommandCenterData() {
     'legacyAssets',
     'characters',
     'publishTasks',
+    'publishMetrics',
     'contentMetrics',
     'knowledge',
     'insights',
@@ -81,7 +92,7 @@ export async function loadContentWorkspaceData() {
 }
 
 export async function loadPublishQueueData() {
-  return loadKeys(['publishTasks', 'platformConnections', 'accounts', 'legacyContent', 'contentPackages', 'assets', 'legacyAssets']);
+  return loadKeys(['publishTasks', 'publishMetrics', 'platformConnections', 'accounts', 'legacyContent', 'contentPackages', 'assets', 'legacyAssets']);
 }
 
 export async function loadPlatformConnectionData() {
@@ -89,7 +100,7 @@ export async function loadPlatformConnectionData() {
 }
 
 export async function loadSystemStatusData() {
-  return loadKeys(['agentRuns', 'workflowRuns', 'publishTasks', 'contentMetrics']);
+  return loadKeys(['agentRuns', 'workflowRuns', 'publishTasks', 'publishMetrics', 'contentMetrics']);
 }
 
 export async function loadWorkflowConfigData() {
@@ -97,11 +108,9 @@ export async function loadWorkflowConfigData() {
 }
 
 export function getContentPackages(data) {
-  const primary = data.contentPackages || [];
-  const legacy = (data.legacyContent || []).map((item) => ({
-    ...item,
-    sourceType: '内容库',
-  }));
+  const primary = (data.contentPackages || []).map((item) => ({ ...item, sourceLabel: FRIENDLY_SOURCE.contentPackages }));
+  const legacy = (data.legacyContent || []).map((item) => ({ ...item, sourceLabel: FRIENDLY_SOURCE.legacyContent }));
+
   return [...primary, ...legacy].map((item) => ({
     id: item.id,
     title: item.title || item.name || '未命名内容',
@@ -109,6 +118,7 @@ export function getContentPackages(data) {
     strategyId: item.strategy_plan_id || item.source_analysis_id,
     platform: item.platform || item.target_platform || '未指定平台',
     status: item.status || 'draft',
+    approvalStatus: item.approval_status,
     accountId: item.account_id || item.social_account_id,
     referenceAccountId: item.reference_account_id,
     body: item.content_text || item.final_text || item.body || item.summary || '',
@@ -116,10 +126,13 @@ export function getContentPackages(data) {
     cta: item.cta || '',
     tags: item.tags || item.hashtags || [],
     keywords: item.keywords || [],
+    languageStyle: item.language_style || item.tone || item.copy_style || '',
+    assetRequirement: item.asset_requirement || item.visual_brief || item.media_brief || '',
     assetId: item.asset_id || item.final_asset_id,
     characterId: item.character_id,
     scheduledAt: item.scheduled_at || item.scheduled_time || item.publish_time,
     createdAt: item.created_at,
+    sourceLabel: item.sourceLabel,
     raw: item,
   }));
 }
@@ -133,6 +146,9 @@ export function getAssets(data) {
     thumbnail: item.thumbnail,
     status: item.status || item.generation_status || 'completed',
     prompt: item.prompt || item.generation_prompt || '',
+    model: item.model || item.checkpoint || '',
+    workflow: item.workflow || item.workflow_name || '',
+    rightsStatus: item.rights_status || item.rights_confirmed || item.rights_asserted,
     characterId: item.character_id,
     contentId: item.content_id || item.content_package_id,
     campaignId: item.campaign_id,
@@ -169,9 +185,17 @@ export function findById(rows, id) {
 
 export function displayText(value, fallback = '—') {
   if (value == null || value === '') return fallback;
-  if (Array.isArray(value)) return value.filter(Boolean).join('、') || fallback;
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => displayText(item, '')).filter(Boolean).join('、') || fallback;
   if (typeof value === 'object') {
-    return value.title || value.name || value.summary || value.description || fallback;
+    return value.title || value.name || value.summary || value.description || value.result || fallback;
   }
   return String(value);
+}
+
+export function normalizeStatus(value) {
+  const status = String(value || '').toLowerCase();
+  if (['success', 'completed', 'published', 'connected', 'approved', 'active'].includes(status)) return 'success';
+  if (['failed', 'error', 'rejected', 'expired'].includes(status)) return 'failed';
+  if (['running', 'generating', 'publishing', 'queued'].includes(status)) return 'running';
+  return status || 'pending';
 }

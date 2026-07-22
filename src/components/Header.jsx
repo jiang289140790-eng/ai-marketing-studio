@@ -15,10 +15,9 @@ export function Header({ title }) {
 
     try {
       await loginWithGitHub();
-
       window.setTimeout(() => {
         setIsSigningIn(false);
-        setSignInError('如果页面没有自动跳转，请点击下方“继续 GitHub 授权”。');
+        setSignInError('如果没有自动跳转，请点击下方“继续 GitHub 授权”。');
       }, 1800);
     } catch (error) {
       setIsSigningIn(false);
@@ -34,7 +33,7 @@ export function Header({ title }) {
       </div>
 
       <div className="header-actions">
-        {!isSupabaseConfigured && <span className="config-pill">等待 Supabase 配置</span>}
+        {!isSupabaseConfigured && <span className="config-pill warning">等待 Supabase 配置</span>}
         {user ? (
           <>
             <span className="status-badge connected">已登录</span>

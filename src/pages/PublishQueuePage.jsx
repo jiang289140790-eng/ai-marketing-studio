@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
+import { ExecutionButton } from '../components/ExecutionButton';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import {
@@ -15,6 +16,7 @@ import { formatDate } from '../utils/formatters';
 
 const EMPTY = {
   publishTasks: [],
+  publishMetrics: [],
   platformConnections: [],
   accounts: [],
   legacyContent: [],
@@ -51,17 +53,16 @@ export function PublishQueuePage({ userId, onNavigate }) {
     <section className="page-stack">
       <div className="hero-panel">
         <p className="eyebrow">发布队列</p>
-        <h2>最终安全审批点：终审通过也不会自动发布</h2>
+        <h2>最终安全审批：内容终审通过，也不会直接发布到外部平台</h2>
         <p>
-          内容工作台送入队列后，仍需要在这里批准发布。点击“批准发布”只改变审批状态；
-          真正调用平台接口还需要再次确认，并且必须通过可信服务端执行。
+          发布队列是最后一道安全门。这里区分“批准发布计划”和“真正执行发布”。执行发布必须二次确认，并且必须通过可信服务端调用平台适配器。
         </p>
       </div>
 
       <div className="stat-grid compact">
         <StatCard label="发布任务" value={loading ? '-' : data.publishTasks.length} hint="等待人工检查" />
         <StatCard label="待批准" value={loading ? '-' : countWhere(data.publishTasks, (item) => ['pending', 'draft', 'scheduled'].includes(item.approval_status || item.status))} hint="不会自动发布" />
-        <StatCard label="已批准" value={loading ? '-' : countWhere(data.publishTasks, (item) => item.approval_status === 'approved')} hint="可进入执行前检查" />
+        <StatCard label="已批准" value={loading ? '-' : countWhere(data.publishTasks, (item) => item.approval_status === 'approved')} hint="仍需二次执行确认" />
         <StatCard label="失败" value={loading ? '-' : countWhere(data.publishTasks, (item) => item.status === 'failed')} hint="保留错误信息" />
       </div>
 
@@ -89,6 +90,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
   const connection = findById(connections, task.platform_connection_id);
   const account = findById(accounts, task.account_id || connection?.account_id);
   const asset = findById(assets, task.asset_id || task.final_asset_id || content?.assetId);
+  const platformConnected = connection?.status === 'connected';
 
   return (
     <article className="strategy-card">
@@ -107,8 +109,6 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
         <Info label="平台连接" value={connection?.status || '未绑定'} />
         <Info label="排期时间" value={formatDate(task.scheduled_time || task.publish_time || content?.scheduledAt)} />
         <Info label="内容状态" value={content?.status || task.status} />
-        <Info label="创建来源" value={task.source || task.created_by || '内容工作台'} />
-        <Info label="关联 Campaign" value={task.campaign_id || content?.campaignId} />
         <Info label="发布结果" value={task.external_id || task.error_message || task.status} />
       </div>
 
@@ -120,10 +120,10 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
 
       <div className="button-row">
         <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>返回内容工作台修改</button>
-        <button className="ghost-button" type="button" disabled>发布前检查</button>
-        <button className="primary-button" type="button" disabled>批准发布</button>
-        <button className="primary-button" type="button" disabled>执行发布（二次确认）</button>
-        <button className="ghost-button" type="button" disabled>失败后重试</button>
+        <ExecutionButton actionName="发布前安全检查" className="ghost-button">发布前检查</ExecutionButton>
+        <ExecutionButton actionName="批准发布计划" reason={platformConnected ? undefined : '无法批准：该平台账号未连接或连接状态不可用。'}>批准发布计划</ExecutionButton>
+        <ExecutionButton actionName="二次确认并执行发布" reason="执行发布必须通过可信服务端调用 Platform Adapter，不能在 GitHub Pages 前端执行。">二次确认执行发布</ExecutionButton>
+        <ExecutionButton actionName="失败后重试发布" className="ghost-button">失败后重试</ExecutionButton>
       </div>
     </article>
   );

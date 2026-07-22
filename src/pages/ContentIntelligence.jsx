@@ -167,34 +167,41 @@ export function ContentIntelligence({ userId }) {
       </div>
 
       <div className="studio-grid">
-        <form className="form-card" onSubmit={handleCreateViralContent}>
-          <p className="eyebrow">Content Opportunity</p>
-          <h3>保存内容机会</h3>
-          <label>
-            来源账号
-            <select value={viralForm.social_account_id} onChange={(event) => setViralField('social_account_id', event.target.value)} required>
-              <option value="">从账号矩阵选择账号</option>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.username || account.account_name} · {account.platform}</option>)}
-            </select>
-          </label>
-          <label>平台<select value={viralForm.platform} onChange={(event) => setViralField('platform', event.target.value)}>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
-          <label>内容类型<select value={viralForm.content_type} onChange={(event) => setViralField('content_type', event.target.value)}>{contentTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
-          <label>标题<input value={viralForm.title} onChange={(event) => setViralField('title', event.target.value)} required /></label>
-          <label>内容URL<input value={viralForm.url} onChange={(event) => setViralField('url', event.target.value)} /></label>
-          <label>媒体URL<input value={viralForm.media_url} onChange={(event) => setViralField('media_url', event.target.value)} /></label>
-          <label>发布时间<input type="datetime-local" value={viralForm.published_at} onChange={(event) => setViralField('published_at', event.target.value)} /></label>
-          <div className="form-grid">
-            <label>Views<input type="number" value={viralForm.views} onChange={(event) => setViralField('views', event.target.value)} /></label>
-            <label>Likes<input type="number" value={viralForm.likes} onChange={(event) => setViralField('likes', event.target.value)} /></label>
-            <label>Comments<input type="number" value={viralForm.comments} onChange={(event) => setViralField('comments', event.target.value)} /></label>
+        <form className="form-card intelligence-form" onSubmit={handleCreateViralContent}>
+          <div className="form-card-heading">
+            <p className="eyebrow">Content Opportunity</p>
+            <h3>保存内容机会</h3>
+            <p>记录值得学习的内容，后续交给分析 Agent 提炼爆点与复刻建议。</p>
           </div>
-          <label>为什么爆<textarea value={viralForm.viral_reason} onChange={(event) => setViralField('viral_reason', event.target.value)} /></label>
-          <label>AI 推荐<textarea value={viralForm.ai_recommendation} onChange={(event) => setViralField('ai_recommendation', event.target.value)} /></label>
-          <label>正文<textarea value={viralForm.content_text} onChange={(event) => setViralField('content_text', event.target.value)} /></label>
-          <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId}>保存内容机会</button>
+          <div className="intelligence-fields">
+            <label className="wide">
+              来源账号
+              <select value={viralForm.social_account_id} onChange={(event) => setViralField('social_account_id', event.target.value)} required>
+                <option value="">从账号矩阵选择账号</option>
+                {accounts.map((account) => <option key={account.id} value={account.id}>{account.username || account.account_name} · {account.platform}</option>)}
+              </select>
+            </label>
+            <label>平台<select value={viralForm.platform} onChange={(event) => setViralField('platform', event.target.value)}>{platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>
+            <label>内容类型<select value={viralForm.content_type} onChange={(event) => setViralField('content_type', event.target.value)}>{contentTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
+            <label className="wide">标题<input value={viralForm.title} onChange={(event) => setViralField('title', event.target.value)} required /></label>
+            <label>内容 URL<input value={viralForm.url} onChange={(event) => setViralField('url', event.target.value)} /></label>
+            <label>媒体 URL<input value={viralForm.media_url} onChange={(event) => setViralField('media_url', event.target.value)} /></label>
+            <label className="wide published-field">发布时间<input type="datetime-local" value={viralForm.published_at} onChange={(event) => setViralField('published_at', event.target.value)} /></label>
+            <div className="intelligence-metrics wide">
+              <label>Views<input type="number" min="0" value={viralForm.views} onChange={(event) => setViralField('views', event.target.value)} /></label>
+              <label>Likes<input type="number" min="0" value={viralForm.likes} onChange={(event) => setViralField('likes', event.target.value)} /></label>
+              <label>Comments<input type="number" min="0" value={viralForm.comments} onChange={(event) => setViralField('comments', event.target.value)} /></label>
+            </div>
+            <label>为什么爆<textarea value={viralForm.viral_reason} onChange={(event) => setViralField('viral_reason', event.target.value)} /></label>
+            <label>AI 推荐<textarea value={viralForm.ai_recommendation} onChange={(event) => setViralField('ai_recommendation', event.target.value)} /></label>
+            <label className="wide">正文<textarea className="content-textarea" value={viralForm.content_text} onChange={(event) => setViralField('content_text', event.target.value)} /></label>
+            <div className="form-actions wide">
+              <button className="primary-button" type="submit" disabled={!isSupabaseConfigured || !userId}>保存内容机会</button>
+            </div>
+          </div>
         </form>
 
-        <article className="form-card">
+        <article className="form-card account-source-card">
           <p className="eyebrow">Account Source of Truth</p>
           <h3>账号从哪里来？</h3>
           <p>内容情报只消费账号矩阵中的 social_accounts。新增竞品号、灵感号，请回到“账号矩阵”添加，避免重复账号和分析数据分裂。</p>

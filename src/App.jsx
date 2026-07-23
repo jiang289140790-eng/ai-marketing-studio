@@ -1,9 +1,8 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { useAuth } from './contexts/auth-context';
 import { AccountsPage } from './pages/AccountsPage';
-import { AIWorksPage } from './pages/AIWorksPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { AssetLibrary } from './pages/AssetLibrary';
 import { CampaignStrategyPage } from './pages/CampaignStrategyPage';
@@ -12,11 +11,13 @@ import { CommandCenter } from './pages/CommandCenter';
 import { ContentWorkspacePage } from './pages/ContentWorkspacePage';
 import { ContentIntelligence } from './pages/ContentIntelligence';
 import { DailyReport } from './pages/DailyReport';
-import { PlatformConnectionsPage } from './pages/PlatformConnectionsPage';
 import { PublishQueuePage } from './pages/PublishQueuePage';
-import { SystemOverviewPage } from './pages/SystemOverviewPage';
-import { WorkflowModelConfigPage } from './pages/WorkflowModelConfigPage';
-import { KnowledgeVaultPage } from './pages/KnowledgeVaultPage';
+
+const AIWorksPage = lazy(() => import('./pages/AIWorksPage').then((module) => ({ default: module.AIWorksPage })));
+const PlatformConnectionsPage = lazy(() => import('./pages/PlatformConnectionsPage').then((module) => ({ default: module.PlatformConnectionsPage })));
+const SystemOverviewPage = lazy(() => import('./pages/SystemOverviewPage').then((module) => ({ default: module.SystemOverviewPage })));
+const WorkflowModelConfigPage = lazy(() => import('./pages/WorkflowModelConfigPage').then((module) => ({ default: module.WorkflowModelConfigPage })));
+const KnowledgeVaultPage = lazy(() => import('./pages/KnowledgeVaultPage').then((module) => ({ default: module.KnowledgeVaultPage })));
 
 const pageTitles = {
   dashboard: 'AI Command Center',
@@ -84,7 +85,7 @@ export default function App() {
         <Header title={pageTitles[activePage] || pageTitles.dashboard} />
         {authLoading && <div className="notice">正在恢复登录状态...</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
-        {page}
+        <Suspense fallback={<div className="notice">正在加载页面...</div>}>{page}</Suspense>
       </div>
     </div>
   );

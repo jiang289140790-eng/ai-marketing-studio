@@ -113,7 +113,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
 
       <div className="button-row">
         <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>返回内容工作台修改</button>
-        <ExecutionButton action="execute_publish" actionName="发布前检查" className="ghost-button" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: true, preflight_only: true }} reason={baseFailure}>发布前检查</ExecutionButton>
+        <ExecutionButton action="execute_publish" actionName="发布前检查" className="ghost-button" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: true, preflight_only: true }} reason={baseFailure} executionUnavailableReason="发布前检查暂不可执行：执行服务暂未连接">发布前检查</ExecutionButton>
         <ExecutionButton action="approve_publish" actionName="批准发布计划" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, action: 'approve' }} reason={baseFailure}>批准发布计划</ExecutionButton>
         <ExecutionButton action="execute_publish" actionName="二次确认并执行发布" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: false, human_confirmed: humanConfirmed }} reason={executionReason}>二次确认并执行发布</ExecutionButton>
         {currentStatus === 'failed' && <ExecutionButton action="execute_publish" actionName="失败后重试" className="ghost-button" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: false, retry: true, human_confirmed: humanConfirmed }} reason={executionReason}>失败后重试</ExecutionButton>}
@@ -148,8 +148,8 @@ function buildPreflightChecks(task, content, connection, account) {
 
   return [
     { label: '内容已审核', ok: contentApproved, detail: contentApproved ? '内容终审已通过' : '请先在内容工作台完成终审' },
-    { label: '账号已连接', ok: connectionActive && Boolean(account || connection?.account_id), detail: connectionActive ? '有效连接记录已找到' : '平台账号未连接或连接失效' },
-    { label: '具备发布权限', ok: publishPermission, detail: publishPermission ? '授权范围包含发布能力' : '权限记录未证明可以发布' },
+    { label: '账号已连接', ok: connectionActive && Boolean(account || connection?.account_id), detail: connectionActive ? '有效连接记录已找到' : '请先连接发布账号' },
+    { label: '具备发布权限', ok: publishPermission, detail: publishPermission ? '授权范围包含发布能力' : '当前账号缺少发布权限' },
     { label: '内容格式有效', ok: formatValid, detail: formatValid ? `${body.length}/${maxLength} 字符` : body ? `正文超过 ${maxLength} 字符限制` : '正文为空' },
   ];
 }

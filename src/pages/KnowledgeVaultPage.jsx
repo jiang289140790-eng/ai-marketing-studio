@@ -30,7 +30,13 @@ function getContent(item) {
 
 function readableValue(value) {
   if (value == null) return '';
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try { return readableValue(JSON.parse(trimmed)); } catch { /* 保留普通文本 */ }
+    }
+    return value;
+  }
   if (Array.isArray(value)) return value.map((entry) => readableValue(entry)).filter(Boolean).join('；');
   if (typeof value === 'object') {
     return Object.entries(value)
@@ -62,12 +68,23 @@ function getSearchText(item) {
 
 function autoTitle(item) {
   const explicit = String(item.title || '').trim();
-  if (explicit && !/^(未命名|untitled|knowledge|new entry|记录)/i.test(explicit)) return explicit;
+  if (explicit && !/^(未命名(?:记录)?|untitled|knowledge|new entry|记录|运营记录|分析记录)$/i.test(explicit)) return explicit;
   const meta = item.metadata || {};
   const account = item.account_name || item.source_account || meta.account_name || meta.handle;
   const topic = item.topic || meta.topic || meta.subject || getTags(item)[0];
   const groupLabel = TYPE_FILTERS.find((filter) => filter.id === getTypeGroup(item))?.label || '知识';
-  return [account, topic, groupLabel].filter(Boolean).join(' · ') || `${groupLabel}运营记录`;
+  const contentHint = getContent(item).replace(/\s+/g, ' ').trim().slice(0, 36);
+  return [account, topic, groupLabel].filter(Boolean).join(' · ') || (contentHint ? `${groupLabel} · ${contentHint}` : `${groupLabel}知识条目`);
+}
+
+function getSource(item) {
+  const meta = item.metadata || {};
+  return String(item.source || item.source_type || meta.source || meta.origin || '').trim();
+}
+
+function getAccount(item) {
+  const meta = item.metadata || {};
+  return String(item.account_name || item.source_account || meta.account_name || meta.handle || item.account_id || '').trim();
 }
 
 function getBusinessDetails(item) {
@@ -87,6 +104,8 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
   const [items, setItems] = useState([]);
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [accountFilter, setAccountFilter] = useState('all');
   const [expandedId, setExpandedId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -109,10 +128,18 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
     return result;
   }, {}), [items]);
 
+  const sourceOptions = useMemo(() => [...new Set(items.map(getSource).filter(Boolean))].sort(), [items]);
+  const accountOptions = useMemo(() => [...new Set(items.map(getAccount).filter(Boolean))].sort(), [items]);
+
   const filteredItems = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    return items.filter((item) => (activeType === 'all' || getTypeGroup(item) === activeType) && (!needle || getSearchText(item).includes(needle)));
-  }, [activeType, items, query]);
+    return items.filter((item) => (
+      (activeType === 'all' || getTypeGroup(item) === activeType)
+      && (sourceFilter === 'all' || getSource(item) === sourceFilter)
+      && (accountFilter === 'all' || getAccount(item) === accountFilter)
+      && (!needle || getSearchText(item).includes(needle))
+    ));
+  }, [accountFilter, activeType, items, query, sourceFilter]);
 
   if (!userId) return <EmptyState title="请先登录" description="登录后才能读取 Knowledge Vault 与 Agent 运营记忆。" />;
 
@@ -139,6 +166,10 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
 
       <div className="knowledge-toolbar">
         <label className="knowledge-search"><span aria-hidden="true">⌕</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、Hook、关键词、策略或研究报告…" /></label>
+        <div className="knowledge-selectors">
+          <label><span>来源</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">全部来源</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
+          <label><span>账号</span><select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)}><option value="all">全部账号</option>{accountOptions.map((account) => <option key={account} value={account}>{account}</option>)}</select></label>
+        </div>
         <div className="knowledge-type-filters" aria-label="知识类型筛选">
           {TYPE_FILTERS.map((filter) => {
             const count = filter.id === 'all' ? items.length : (counts[filter.id] || 0);

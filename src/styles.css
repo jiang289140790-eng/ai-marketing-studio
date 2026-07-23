@@ -1264,6 +1264,21 @@ small {
   width: 100%;
 }
 
+.knowledge-selectors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.knowledge-selectors label {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .knowledge-type-filters {
   display: flex;
   flex-wrap: wrap;
@@ -2629,9 +2644,64 @@ textarea {
   border-radius: 14px;
   padding: 10px;
 }
-.platform-capability-grid .available span { color: #86efac; }
-.platform-capability-grid .unavailable span { color: #fca5a5; }
+.platform-capability-grid .capability-available span { color: #86efac; }
+.platform-capability-grid .capability-partial span,
+.platform-capability-grid .capability-needs_validation span { color: #fde68a; }
+.platform-capability-grid .capability-needs_bridge span { color: #fbbf24; }
+.platform-capability-grid .capability-not_connected span,
+.platform-capability-grid .capability-not_supported span,
+.platform-capability-grid .capability-preparing span { color: #94a3b8; }
 .platform-readiness-note { color: #fde68a !important; font-size: 13px; }
+
+.platform-capability-matrix-panel {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(15, 23, 42, 0.76);
+}
+
+.platform-capability-table-wrap { overflow-x: auto; }
+.platform-capability-table { width: 100%; border-collapse: collapse; min-width: 760px; }
+.platform-capability-table th,
+.platform-capability-table td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.platform-capability-table th { color: #e2e8f0; }
+.capability-pill { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; font-size: 12px; font-weight: 800; }
+.capability-pill.capability-available { color: #86efac; }
+.capability-pill.capability-partial,
+.capability-pill.capability-needs_validation { color: #fde68a; }
+.capability-pill.capability-needs_bridge { color: #fbbf24; }
+.capability-pill.capability-not_connected,
+.capability-pill.capability-not_supported,
+.capability-pill.capability-preparing { color: #94a3b8; }
+
+.production-guide {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(34, 211, 238, 0.24);
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.3);
+}
+
+.production-guide-head,
+.production-next-action { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.production-guide-head h4 { margin: 4px 0 0; }
+.production-current-status { border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 900; }
+.production-current-status.completed { color: #86efac; background: rgba(34, 197, 94, 0.12); }
+.production-current-status.pending { color: #cbd5e1; background: rgba(148, 163, 184, 0.12); }
+.production-current-status.blocked,
+.production-current-status.needs_bridge { color: #fde68a; background: rgba(245, 158, 11, 0.14); }
+.production-stepper { display: grid; grid-template-columns: repeat(8, minmax(110px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.production-step { display: flex; gap: 8px; min-width: 110px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; opacity: 0.72; }
+.production-step > span { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: rgba(148, 163, 184, 0.14); font-weight: 900; }
+.production-step div { display: grid; gap: 3px; }
+.production-step small { color: var(--muted); }
+.production-step.completed { border-color: rgba(34, 197, 94, 0.35); }
+.production-step.current { opacity: 1; border-color: rgba(34, 211, 238, 0.7); box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.12); }
+.production-step.blocked,
+.production-step.needs_bridge { border-color: rgba(245, 158, 11, 0.45); }
+.production-next-action > div { display: grid; gap: 4px; }
+.production-next-action span { color: var(--muted); font-size: 12px; }
 
 .publish-status-flow {
   display: flex;
@@ -2724,6 +2794,9 @@ textarea {
   .platform-capability-grid,
   .publish-check-list,
   .knowledge-business-details { grid-template-columns: 1fr; }
+  .production-guide-head,
+  .production-next-action { align-items: flex-start; flex-direction: column; }
+  .knowledge-selectors { display: grid; }
   .connected-account-list > div { align-items: flex-start; flex-direction: column; }
   .connected-account-list span { text-align: left; }
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useExecutionAction } from '../hooks/useExecutionAction';
-import { getUnavailableReason } from '../services/execution-gateway';
+import { classifyDisabledReason, getUnavailableReason } from '../services/execution-gateway';
 
 export function ExecutionButton({
   children,
@@ -13,15 +13,18 @@ export function ExecutionButton({
   reason,
   ready = true,
   showGatewayHint = false,
+  executionUnavailableReason,
   onCompleted,
   ...props
 }) {
   const [clickHint, setClickHint] = useState('');
   const execution = useExecutionAction({ action, resourceType, resourceId, payload, ready: ready && Boolean(action), onCompleted });
   const actionLabel = actionName || String(children);
-  const localReason = reason || (!action ? getUnavailableReason(actionLabel) : '');
-  const gatewayReason = execution.gateway.connected ? '' : '执行服务暂未连接，请查看 Command Center 的执行网关状态。';
-  const disabledReason = localReason || gatewayReason;
+  const localReason = String(reason || '').trim();
+  const gatewayReason = execution.gateway.connected ? '' : (executionUnavailableReason || getUnavailableReason(actionLabel));
+  const unsupportedReason = action ? '' : `${actionLabel} 尚未接入安全执行网关。`;
+  const disabledReason = localReason || gatewayReason || unsupportedReason;
+  const disabledKind = classifyDisabledReason(disabledReason);
   const disabled = Boolean(localReason) || !execution.canRun;
   const label = buttonLabel(children, execution.state.status);
 
@@ -32,7 +35,7 @@ export function ExecutionButton({
   }
 
   return (
-    <span className="execution-action" onMouseDown={handleDisabledClick} onClick={handleDisabledClick}>
+    <span className="execution-action" data-disabled-kind={disabledKind || undefined} onMouseDown={handleDisabledClick} onClick={handleDisabledClick}>
       <button className={className} type="button" disabled={disabled} title={disabled ? disabledReason : ''} onClick={execution.run} {...props}>
         {label}
       </button>

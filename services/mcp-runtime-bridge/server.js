@@ -9,11 +9,14 @@ import { executeAction, getRun } from './worker.js';
 const PORT = Number(process.env.MCP_RUNTIME_BRIDGE_PORT || 8787);
 const HOST = process.env.MCP_RUNTIME_BRIDGE_HOST || '0.0.0.0';
 const BRIDGE_SECRET = process.env.OPS_MCP_BRIDGE_SECRET || '';
+const REQUEST_TIMEOUT_MS = Number(process.env.BRIDGE_REQUEST_TIMEOUT_MS || 60_000);
 
 const server = http.createServer(async (request, response) => {
   try {
     if (request.method === 'GET' && request.url === '/health') {
-      return sendJson(response, 200, await health(request));
+      const result = await health(request);
+      audit('health', { ok: result.ok, mcp: result.mcp });
+      return sendJson(response, result.ok ? 200 : 503, result);
     }
 
     if (request.method === 'GET' && request.url?.startsWith('/v1/runs/')) {
@@ -32,18 +35,23 @@ const server = http.createServer(async (request, response) => {
       }
       const body = validateActionRequest(JSON.parse(rawBody));
       const bridgeRunId = randomUUID();
+      audit('action_accepted', { action: body.action, run_id: body.run_id, bridge_run_id: bridgeRunId, resource_type: body.resource_type || null });
       setImmediate(() => executeAction(body));
       return sendJson(response, 202, { ok: true, status: 'queued', progress: 5, bridge_run_id: bridgeRunId });
     }
 
     return sendJson(response, 404, { ok: false, code: 'RESOURCE_NOT_FOUND', message: '接口不存在。' });
   } catch (error) {
+    audit('request_failed', { method: request.method, path: request.url, error: sanitizeError(error) });
     return sendJson(response, 500, { ok: false, code: 'MCP_UNAVAILABLE', message: sanitizeError(error), retryable: true });
   }
 });
 
+server.requestTimeout = REQUEST_TIMEOUT_MS;
+server.headersTimeout = Math.min(REQUEST_TIMEOUT_MS, 30_000);
+
 server.listen(PORT, HOST, () => {
-  console.log(`AI Marketing Studio MCP Runtime Bridge listening on http://${HOST}:${PORT}`);
+  audit('bridge_started', { host: HOST, port: PORT });
 });
 
 async function health(request) {
@@ -90,4 +98,8 @@ function readBody(request, limit) {
     request.on('end', () => resolve(body));
     request.on('error', reject);
   });
+}
+
+function audit(event, details = {}) {
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), service: 'mcp-runtime-bridge', event, ...details }));
 }

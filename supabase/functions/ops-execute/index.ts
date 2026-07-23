@@ -3,6 +3,7 @@ import {
   assertUuid,
   createServiceClient,
   enforceRateLimit,
+  GatewayError,
   handleGatewayError,
   jsonResponse,
   parseJsonBody,
@@ -24,6 +25,7 @@ Deno.serve(async (request) => {
     const resourceType = typeof body.resourceType === 'string' ? body.resourceType : undefined;
     const resourceId = assertUuid(body.resourceId, 'resourceId', false);
     const payload = typeof body.payload === 'object' && body.payload !== null ? body.payload : {};
+    validatePublishPayload(action, payload);
     const idempotencyKey = String(body.idempotencyKey || request.headers.get('x-idempotency-key') || `${action}:${resourceType || 'none'}:${resourceId || 'none'}:${user.id}`);
 
     await enforceRateLimit(client, user.id);
@@ -150,3 +152,11 @@ Deno.serve(async (request) => {
     return handleGatewayError(request, error);
   }
 });
+
+function validatePublishPayload(action: string, payload: Record<string, unknown>) {
+  if (action !== 'execute_publish') return;
+  const isPreflight = payload.preflight_only === true;
+  if (isPreflight && payload.dry_run === true) return;
+  if (!isPreflight && payload.dry_run === false && payload.human_confirmed === true) return;
+  throw new GatewayError('INVALID_INPUT', '发布前检查必须使用 dry-run；真实发布必须完成人工二次确认。', 400, false);
+}

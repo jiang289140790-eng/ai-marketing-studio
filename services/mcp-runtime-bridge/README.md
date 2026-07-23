@@ -22,6 +22,8 @@ It cannot run on GitHub Pages and should not depend on a browser tab being open.
 
 Optional:
 
+- `MCP_TOOL_TIMEOUT_MS`（默认 45000）
+- `BRIDGE_REQUEST_TIMEOUT_MS`（默认 60000）
 - `MCP_RUNTIME_BRIDGE_HOST` (default `0.0.0.0`)
 - `MCP_RUNTIME_BRIDGE_PORT`
 - `MARKETING_STUDIO_MCP_COMMAND`
@@ -30,6 +32,8 @@ Optional:
 - `AUTODL_BASE_URL`
 - `COMFYUI_BASE_URL`
 - `ALLOW_REAL_PUBLISH=false`
+
+当前 `X_MCP_ENABLED` 仅用于健康状态标记；X MCP 的远程 transport 与工具注册仍需在真实 Bridge 环境中完成，不能仅凭该标记视为已接通。
 
 After deployment, configure these Supabase Edge Function secrets:
 

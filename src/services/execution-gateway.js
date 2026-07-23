@@ -114,8 +114,16 @@ export async function getRunStatus(runId) {
   return data.run;
 }
 
-export function getUnavailableReason(actionName) {
-  return `${actionName} 暂不可执行：执行网关或 MCP Runtime Bridge 尚未连接。`;
+export function getUnavailableReason() {
+  return '执行服务暂未连接，请查看 Command Center 的执行网关状态。';
+}
+
+export function classifyDisabledReason(reason) {
+  const message = String(reason || '').trim();
+  if (!message) return '';
+  if (message.startsWith('请先填写')) return 'form';
+  if (message.includes('执行服务暂未连接')) return 'execution';
+  return 'business';
 }
 
 export function isTerminalStatus(status) {

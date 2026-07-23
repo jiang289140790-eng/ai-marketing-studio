@@ -51,6 +51,8 @@ export function PlatformConnectionsPage({ userId }) {
 
       {message && <div className="notice error">{message}</div>}
 
+      {!isLoading && <PlatformCapabilityMatrix byPlatform={byPlatform} />}
+
       {isLoading ? (
         <div className="skeleton-grid" aria-label="平台连接加载中">
           {Array.from({ length: 6 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}
@@ -81,6 +83,8 @@ export function PlatformConnectionsPage({ userId }) {
                 <span>已识别账号</span><strong>{relatedAccounts.length}</strong>
                 <span>最后同步</span><strong>{formatDate(latest?.last_sync || latest?.last_synced_at || latest?.connected_at)}</strong>
                 <span>授权范围</span><strong>{permissions.length ? permissions.join('、') : '未上报'}</strong>
+                <span>需要的权限</span><strong>{card.requiredPermissions.join('、')}</strong>
+                <span>当前阻塞原因</span><strong>{getBlockingReason(card, connected, permissions)}</strong>
               </div>
 
               {relatedAccounts.length > 0 && (
@@ -96,9 +100,9 @@ export function PlatformConnectionsPage({ userId }) {
               )}
 
               <div className="platform-capability-grid" aria-label={`${card.title} 能力状态`}>
-                {capabilities.map(([label, available, detail]) => (
-                  <div className={available ? 'available' : 'unavailable'} key={label}>
-                    <span>{available ? '✓' : '—'} {label}</span>
+                {capabilities.map(({ label, state: capabilityState, detail }) => (
+                  <div className={`capability-${capabilityState}`} key={label}>
+                    <span>{capabilityIcon(capabilityState)} {label}</span>
                     <small>{detail}</small>
                   </div>
                 ))}
@@ -112,6 +116,43 @@ export function PlatformConnectionsPage({ userId }) {
       </div>}
     </section>
   );
+}
+
+function PlatformCapabilityMatrix({ byPlatform }) {
+  return (
+    <section className="platform-capability-matrix-panel">
+      <div className="section-head">
+        <div><p className="eyebrow">CAPABILITY MATRIX</p><h3>平台能力矩阵</h3></div>
+        <span>连接状态来自 Supabase，能力状态来自当前服务端实现与验证结果。</span>
+      </div>
+      <div className="platform-capability-table-wrap">
+        <table className="platform-capability-table">
+          <thead><tr><th>平台</th><th>连接</th><th>采集</th><th>发布</th><th>数据回收</th><th>Webhook</th></tr></thead>
+          <tbody>
+            {platformConnectionCards.map((card) => {
+              const connected = (byPlatform.get(String(card.platform).toLowerCase()) || []).filter(isConnected);
+              const connectionLabel = card.implemented ? connected.length ? `已接 · ${connected.length}` : '未连接' : '准备中';
+              return (
+                <tr key={card.platform}>
+                  <th>{card.title}</th>
+                  <td>{connectionLabel}</td>
+                  <CapabilityCell value={card.capabilities.collect} />
+                  <CapabilityCell value={card.capabilities.publish} />
+                  <CapabilityCell value={card.capabilities.analytics} />
+                  <CapabilityCell value={card.capabilities.webhook} />
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function CapabilityCell({ value }) {
+  const [state, label] = value;
+  return <td><span className={`capability-pill capability-${state}`}>{capabilityIcon(state)} {label}</span></td>;
 }
 
 function isConnected(connection) {
@@ -138,18 +179,32 @@ function collectPermissions(rows) {
   )).map((value) => String(value)).filter(Boolean))];
 }
 
-function getCapabilities(card, connected, permissions) {
+function getCapabilities(card, connected, _permissions) {
   const hasConnection = connected.length > 0;
-  const scopes = permissions.join(' ').toLowerCase();
-  const canPublish = hasConnection && /(write|publish|tweet\.write|posts\.write|messages)/.test(scopes);
-  const canRead = hasConnection && (permissions.length === 0 || /(read|tweet\.read|posts|messages|channel)/.test(scopes));
-  const supportsWebhook = hasConnection && String(card.platform).toLowerCase() === 'telegram';
-
-  return [
-    ['OAuth / 授权', hasConnection, hasConnection ? '已发现有效连接' : '尚未完成'],
-    ['内容采集', canRead, canRead ? '权限记录允许读取' : '等待读取权限'],
-    ['内容发布', canPublish, canPublish ? '权限记录允许发布' : '等待发布权限'],
-    ['数据回传', canRead, canRead ? '可由服务端同步' : '等待服务端适配'],
-    ['Webhook', supportsWebhook, supportsWebhook ? 'Telegram 服务端入口已预留' : '当前未启用'],
+  const rows = [
+    ['连接状态', hasConnection ? 'available' : card.implemented ? 'not_connected' : 'preparing', hasConnection ? `已连接 ${connected.length} 个账号` : card.implemented ? '尚未发现有效连接' : '准备中'],
+    ['内容采集', ...card.capabilities.collect],
+    ['内容发布', ...card.capabilities.publish],
+    ['数据回收', ...card.capabilities.analytics],
+    ['Webhook', ...card.capabilities.webhook],
   ];
+  return rows.map(([label, state, detail]) => ({
+    label,
+    state: !hasConnection && card.implemented && state === 'available' ? 'not_connected' : state,
+    detail: !hasConnection && card.implemented && state === 'available' ? '请先连接账号' : detail,
+  }));
+}
+
+function getBlockingReason(card, connected, permissions) {
+  if (!card.implemented) return card.blockingReason;
+  if (!connected.length) return '请先完成平台账号授权连接。';
+  if (!permissions.length) return `${card.blockingReason} 当前连接尚未上报权限范围。`;
+  return card.blockingReason;
+}
+
+function capabilityIcon(state) {
+  if (state === 'available') return '✓';
+  if (state === 'partial') return '◐';
+  if (state === 'needs_bridge' || state === 'needs_validation') return '!';
+  return '—';
 }

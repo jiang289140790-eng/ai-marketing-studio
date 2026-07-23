@@ -18,11 +18,17 @@ export const ACTION_REGISTRY = {
   execute_publish: {
     tool: 'execute_publish',
     async: true,
-    transform: (payload) => ({
-      ...payload,
-      dry_run: process.env.ALLOW_REAL_PUBLISH === 'true' ? payload?.dry_run !== false : true,
-      real_publish_enabled: process.env.ALLOW_REAL_PUBLISH === 'true',
-    }),
+    transform: (payload) => {
+      const realPublishEnabled = process.env.ALLOW_REAL_PUBLISH === 'true';
+      const humanConfirmed = payload?.human_confirmed === true;
+      const realPublishRequested = payload?.dry_run === false && payload?.preflight_only !== true;
+      return {
+        ...payload,
+        dry_run: !(realPublishEnabled && humanConfirmed && realPublishRequested),
+        human_confirmed: humanConfirmed,
+        real_publish_enabled: realPublishEnabled,
+      };
+    },
   },
   analyze_account: { tool: 'analyze_account_intelligence', async: true },
 };

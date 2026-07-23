@@ -180,6 +180,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
             item={item}
             data={data}
             assets={assets}
+            gateway={gateway}
             onNavigate={onNavigate}
           />
         )) : (
@@ -191,13 +192,16 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
   );
 }
 
-function ContentPackageCard({ item, data, assets, onNavigate }) {
+function ContentPackageCard({ item, data, assets, gateway, onNavigate }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
   const character = findById(data.characters, item.characterId);
   const lora = getLoraInfo(character, item);
   const linkedAssets = assetsForContent(item, assets);
+  const workflowRuns = runsForContent(item, data.workflowRuns || []);
+  const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id || '') === String(item.id));
+  const productionGuide = buildProductionGuide({ item, character, lora, linkedAssets, workflowRuns, publishTask, gateway });
   const [studioOpen, setStudioOpen] = useState(false);
   const sectionIds = {
     studio: `content-${item.id}-studio`,
@@ -210,6 +214,14 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
   function openSection(target) {
     setStudioOpen(true);
     window.setTimeout(() => document.getElementById(sectionIds[target])?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  }
+
+  function followNextStep() {
+    if (productionGuide.nextAction.page) {
+      onNavigate(productionGuide.nextAction.page);
+      return;
+    }
+    openSection(productionGuide.nextAction.target || 'studio');
   }
 
   return (
@@ -248,6 +260,8 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
         <Info label="标签" value={item.tags} />
       </div>
 
+      <ProductionSteps guide={productionGuide} onNext={followNextStep} />
+
       <div className="asset-strip" aria-label="内容素材预览">
         {linkedAssets.slice(0, 4).map((asset) => (
           <div className="asset-thumb" key={asset.id}>
@@ -278,6 +292,32 @@ function ContentPackageCard({ item, data, assets, onNavigate }) {
         <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} sectionIds={sectionIds} />
       </details>
     </article>
+  );
+}
+
+function ProductionSteps({ guide, onNext }) {
+  return (
+    <section className="production-guide" aria-label="内容生产步骤">
+      <div className="production-guide-head">
+        <div>
+          <p className="eyebrow">PRODUCTION STATUS</p>
+          <h4>当前步骤：{guide.current.label}</h4>
+        </div>
+        <span className={`production-current-status ${guide.current.status}`}>{productionStatusLabel(guide.current.status)}</span>
+      </div>
+      <div className="production-stepper">
+        {guide.steps.map((step, index) => (
+          <div className={`production-step ${step.status} ${step.id === guide.current.id ? 'current' : ''}`} key={step.id}>
+            <span>{index + 1}</span>
+            <div><strong>{step.label}</strong><small>{productionStatusLabel(step.status)}</small></div>
+          </div>
+        ))}
+      </div>
+      <div className="production-next-action">
+        <div><span>当前阻塞原因</span><strong>{guide.reason}</strong></div>
+        <button className="ghost-button" type="button" onClick={onNext}>{guide.nextAction.label}</button>
+      </div>
+    </section>
   );
 }
 
@@ -942,6 +982,51 @@ function contentMatchesWorkflow(item, filter, data, assets) {
   }
 
   return false;
+}
+
+function buildProductionGuide({ item, character, lora, linkedAssets, workflowRuns, publishTask, gateway }) {
+  const copyDone = Boolean(item.copyConfirmed || item.approvedForPublishing || (item.body && item.cta));
+  const roleDone = Boolean(character && hasLora(lora));
+  const referenceDone = Boolean(item.referenceAssetIds?.length || linkedAssets.some((asset) => (
+    asset.raw?.metadata?.role === 'reference' || ['upload', 'x', 'reference'].includes(String(asset.source || '').toLowerCase())
+  )));
+  const imageDone = linkedAssets.some((asset) => String(asset.type || '').toLowerCase().includes('image'));
+  const videoDone = linkedAssets.some((asset) => String(asset.type || '').toLowerCase().includes('video'));
+  const completedRun = workflowRuns.some((run) => ['completed', 'success'].includes(String(run.status || '').toLowerCase()));
+  const activeRun = workflowRuns.some((run) => ['queued', 'running', 'generating'].includes(String(run.status || '').toLowerCase()));
+  const resultDone = Boolean(imageDone || videoDone || completedRun || item.assetConfirmed);
+  const finalDone = Boolean(item.approvedForPublishing || item.reviewStatus === 'approved' || item.approvalStatus === 'approved');
+  const publishDone = Boolean(publishTask);
+  const bridgeUnavailable = !gateway?.loading && !gateway?.connected;
+
+  const blocked = (ready, fallback = 'blocked') => ready ? 'pending' : fallback;
+  const steps = [
+    { id: 'copy', label: '文案确认', status: copyDone ? 'completed' : 'pending', target: 'copy', reason: '文案尚未确认', action: '继续编辑文案' },
+    { id: 'role', label: '角色 / LoRA 确认', status: roleDone ? 'completed' : blocked(copyDone), target: 'media', reason: '该内容还没有绑定角色或角色 LoRA', action: '选择角色或配置 LoRA' },
+    { id: 'reference', label: '素材引用', status: referenceDone ? 'completed' : blocked(roleDone), target: 'media', reason: '还没有选择参考素材', action: '选择或导入参考素材' },
+    { id: 'image', label: '图片生成', status: imageDone ? 'completed' : !roleDone ? 'blocked' : bridgeUnavailable ? 'needs_bridge' : 'pending', target: 'media', reason: bridgeUnavailable ? '执行服务暂未连接' : '图片尚未生成', action: bridgeUnavailable ? '查看执行网关状态' : '打开图片生成', page: bridgeUnavailable ? 'dashboard' : undefined },
+    { id: 'video', label: '视频生成', status: videoDone ? 'completed' : !roleDone ? 'blocked' : bridgeUnavailable ? 'needs_bridge' : 'pending', target: 'media', reason: bridgeUnavailable ? '执行服务暂未连接' : '视频尚未生成', action: bridgeUnavailable ? '查看执行网关状态' : '打开视频生成', page: bridgeUnavailable ? 'dashboard' : undefined },
+    { id: 'results', label: '结果回传', status: resultDone ? 'completed' : activeRun ? 'pending' : bridgeUnavailable ? 'needs_bridge' : 'blocked', target: 'results', reason: activeRun ? '生成任务仍在运行' : bridgeUnavailable ? '执行服务暂未连接' : '还没有可回传的生成结果', action: bridgeUnavailable ? '查看执行网关状态' : '查看生成结果', page: bridgeUnavailable ? 'dashboard' : undefined },
+    { id: 'approval', label: '终审', status: finalDone ? 'completed' : resultDone ? 'pending' : 'blocked', target: 'approval', reason: resultDone ? '内容还没有完成终审' : '请先确认文案和生成素材', action: '进入内容终审' },
+    { id: 'publish', label: '发布队列', status: publishDone ? 'completed' : finalDone ? 'pending' : 'blocked', target: 'approval', reason: finalDone ? '尚未创建发布任务' : '请先完成内容终审', action: finalDone ? '创建发布任务' : '进入内容终审' },
+  ];
+  const current = steps.find((step) => step.status !== 'completed') || steps[steps.length - 1];
+
+  return {
+    steps,
+    current,
+    reason: current.status === 'completed' ? '生产流程已完成' : current.reason,
+    nextAction: { label: current.action, target: current.target, page: current.page },
+  };
+}
+
+function productionStatusLabel(status) {
+  return {
+    completed: '已完成',
+    pending: '待处理',
+    blocked: '被阻塞',
+    needs_bridge: '需要 Bridge',
+  }[status] || '待处理';
 }
 
 function getLoraInfo(character, item) {

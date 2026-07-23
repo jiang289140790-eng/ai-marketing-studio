@@ -66,7 +66,7 @@ async function health(request) {
       bridge: true,
       mcp: tools.length > 0,
       tools: tools.map((tool) => tool.name).slice(0, 50),
-      x_mcp: process.env.X_MCP_ENABLED ? 'configured' : 'unknown',
+      x_mcp: isEnabled(process.env.X_MCP_ENABLED) ? 'configured' : 'unknown',
       autodl: process.env.AUTODL_BASE_URL ? 'configured' : 'unknown',
       comfyui: process.env.COMFYUI_BASE_URL ? 'configured' : 'unknown',
       publish_adapter: 'dry-run-required',
@@ -74,6 +74,10 @@ async function health(request) {
   } catch (error) {
     return { ok: false, bridge: true, mcp: false, error: sanitizeError(error) };
   }
+}
+
+function isEnabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function sendJson(response, status, body) {

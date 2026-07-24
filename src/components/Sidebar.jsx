@@ -3,6 +3,7 @@ import { navigationSections } from '../data/navigation';
 
 export function Sidebar({ activePage, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
 
   function navigate(pageId) {
     onNavigate(pageId);
@@ -13,7 +14,9 @@ export function Sidebar({ activePage, onNavigate }) {
     <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
       <div className="sidebar-top">
         <div className="brand">
-          <div className="brand-mark">AI</div>
+          <div className="brand-mark">
+            <img src={logoSrc} alt="AI Marketing Studio logo" />
+          </div>
           <div className="brand-copy">
             <strong>AI Marketing OS</strong>
             <span>Command Center</span>

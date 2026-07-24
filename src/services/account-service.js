@@ -1,7 +1,15 @@
 import { requireSupabase } from './supabase-client';
 
 export function getAccountRole(account = {}) {
-  return account.account_role || account.account_type || account.account_category || 'owned';
+  const roles = [
+    account.account_role,
+    account.account_type,
+    account.account_category,
+  ].map((role) => String(role || '').trim()).filter(Boolean);
+
+  return roles.find((role) => ['competitor', 'inspiration'].includes(role.toLowerCase()))
+    || roles[0]
+    || 'owned';
 }
 
 function normalizeAccountRole(payload = {}) {

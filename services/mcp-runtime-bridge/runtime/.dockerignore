@@ -1,0 +1,11 @@
+**/.env
+**/.env.*
+**/node_modules
+**/.git
+**/*.log
+**/test
+**/tests
+**/docs
+**/migrations
+**/supabase
+**/.runtime-build

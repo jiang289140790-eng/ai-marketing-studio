@@ -140,13 +140,14 @@ export function buildHealthReason(status) {
 
 function buildHealthDetails(status = {}) {
   const yesNo = (value, yes = '已连接', no = '未连接') => (value ? yes : no);
+  const xMcpConnected = status.x_mcp === 'connected' && status.x_tools === true;
 
   return [
     ['Supabase', '已连接'],
     ['Edge Function', yesNo(status.edge_function, '已部署', '不可访问')],
     ['MCP Bridge', status.bridge_configured ? yesNo(status.bridge, '已连接', '不可访问') : '未配置'],
     ['AI Marketing Studio MCP', status.bridge ? yesNo(status.mcp, '已连接', '等待 MCP') : '等待 Bridge'],
-    ['X MCP', status.bridge ? yesNo(status.x_mcp || status.x_tools, '已连接', '等待 MCP') : '等待 Bridge'],
+    ['X MCP', status.bridge ? yesNo(xMcpConnected, '已连接', '尚未接入') : '等待 Bridge'],
   ];
 }
 

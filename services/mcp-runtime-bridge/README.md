@@ -28,12 +28,20 @@ Optional:
 - `MCP_RUNTIME_BRIDGE_PORT`
 - `MARKETING_STUDIO_MCP_COMMAND`
 - `MARKETING_STUDIO_MCP_ARGS`
-- `X_MCP_ENABLED`
 - `AUTODL_BASE_URL`
 - `COMFYUI_BASE_URL`
 - `ALLOW_REAL_PUBLISH=false`
 
-当前 `X_MCP_ENABLED` 仅用于健康状态标记；X MCP 的远程 transport 与工具注册仍需在真实 Bridge 环境中完成，不能仅凭该标记视为已接通。
+当前 Bridge 尚未实现 X MCP 的远程 transport 与工具注册，因此 health 会准确返回
+`x_mcp: "unknown"` 与 `x_tools: false`。只有真实 X MCP tools 可列出后，才能改为已连接；
+任何布尔环境变量都不能把它变成绿灯。
+
+`MARKETING_STUDIO_MCP_ARGS` 必须是 JSON 字符串数组，例如：
+
+```text
+MARKETING_STUDIO_MCP_COMMAND=node
+MARKETING_STUDIO_MCP_ARGS=["/app/marketing-studio-mcp/server.js"]
+```
 
 After deployment, configure these Supabase Edge Function secrets:
 
@@ -49,6 +57,10 @@ docker run -p 8787:8787 --env-file .env ai-marketing-studio-mcp-runtime-bridge
 
 The service must be placed behind HTTPS before Supabase Edge Functions call it.
 For a cloud VM, use Caddy, Nginx, Cloudflare Tunnel, Render, Railway, or Fly.io to provide HTTPS.
+
+The single-directory Dockerfile only builds the Bridge. For a complete production image
+that also contains the AI Marketing Studio MCP server, use
+`runtime/Prepare-RuntimeBundle.ps1` and build the generated private runtime bundle.
 
 ## Verification
 

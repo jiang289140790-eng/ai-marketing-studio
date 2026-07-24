@@ -10,10 +10,11 @@ export async function getMcpClient() {
   if (clientPromise) return clientPromise;
 
   const mcpDir = process.env.MARKETING_STUDIO_MCP_DIR || 'E:\\projects\\video-generator\\mcp-servers\\marketing-studio';
-  const serverPath = path.join(mcpDir, 'server.js');
+  const command = process.env.MARKETING_STUDIO_MCP_COMMAND || process.execPath;
+  const args = parseMcpArgs(process.env.MARKETING_STUDIO_MCP_ARGS, mcpDir);
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [serverPath],
+    command,
+    args,
     cwd: mcpDir,
     env: {
       ...process.env,
@@ -24,6 +25,20 @@ export async function getMcpClient() {
   const client = new Client({ name: 'ai-marketing-studio-runtime-bridge', version: '0.1.0' }, { capabilities: {} });
   clientPromise = client.connect(transport).then(() => client);
   return clientPromise;
+}
+
+function parseMcpArgs(rawArgs, mcpDir) {
+  if (!rawArgs) return [path.join(mcpDir, 'server.js')];
+  let parsed;
+  try {
+    parsed = JSON.parse(rawArgs);
+  } catch {
+    throw new Error('MARKETING_STUDIO_MCP_ARGS 必须是 JSON 字符串数组。');
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error('MARKETING_STUDIO_MCP_ARGS 必须是非空字符串组成的 JSON 数组。');
+  }
+  return parsed;
 }
 
 export async function listMcpTools() {

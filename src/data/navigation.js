@@ -39,6 +39,8 @@ export const navigationSections = [
   },
 ];
 
+navigationSections[3].items.push({ id: 'prompts', label: 'Prompt 库', icon: '✎' });
+
 export const navigationItems = navigationSections.flatMap((section) => section.items);
 
 export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];

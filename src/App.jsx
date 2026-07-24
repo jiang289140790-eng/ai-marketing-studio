@@ -12,6 +12,7 @@ import { ContentWorkspacePage } from './pages/ContentWorkspacePage';
 import { ContentIntelligence } from './pages/ContentIntelligence';
 import { DailyReport } from './pages/DailyReport';
 import { PublishQueuePage } from './pages/PublishQueuePage';
+import { PromptLibrary } from './pages/PromptLibrary';
 
 const AIWorksPage = lazy(() => import('./pages/AIWorksPage').then((module) => ({ default: module.AIWorksPage })));
 const PlatformConnectionsPage = lazy(() => import('./pages/PlatformConnectionsPage').then((module) => ({ default: module.PlatformConnectionsPage })));
@@ -37,6 +38,8 @@ const pageTitles = {
   workflows: '工作流与模型配置',
 };
 
+pageTitles.prompts = 'Prompt 库';
+
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard');
   const { error: authError, loading: authLoading, session, userId } = useAuth();
@@ -59,6 +62,8 @@ export default function App() {
         return <AssetLibrary {...props} />;
       case 'characters':
         return <CharacterLibrary {...props} />;
+      case 'prompts':
+        return <PromptLibrary {...props} />;
       case 'aiworks':
         return <AIWorksPage {...props} />;
       case 'analytics':

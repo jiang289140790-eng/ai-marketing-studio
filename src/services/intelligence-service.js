@@ -1,5 +1,5 @@
 import { generateAI } from './ai-gateway-service';
-import { upsertAccountProfile } from './account-service';
+import { getAccountRole, upsertAccountProfile } from './account-service';
 import { requireSupabase } from './supabase-client';
 
 const viralContentSelect = '*, social_accounts:social_account_id(id,account_name,username,platform,account_role,target_audience,content_strategy,posting_frequency)';
@@ -434,21 +434,40 @@ export async function listCompetitorAccounts(userId, filters = {}) {
     .from('social_accounts')
     .select('*, account_profiles(*)')
     .eq('user_id', userId)
-    .in('account_role', ['competitor', 'inspiration'])
     .order('created_at', { ascending: false });
 
   if (filters.platform) query = query.eq('platform', filters.platform);
-  if (filters.category) query = query.eq('account_role', filters.category);
-  if (filters.search) query = query.or(`username.ilike.%${filters.search}%,account_name.ilike.%${filters.search}%,target_audience.ilike.%${filters.search}%,content_strategy.ilike.%${filters.search}%`);
 
   const { data, error } = await query;
   if (error) throw error;
-  return (data || []).map(normalizeSocialAccountForIntelligence);
+
+  const intelligenceRoles = new Set(['competitor', 'inspiration']);
+  const category = String(filters.category || '').trim().toLowerCase();
+  const search = String(filters.search || '').trim().toLowerCase();
+
+  return (data || [])
+    .filter((account) => {
+      const role = String(getAccountRole(account)).trim().toLowerCase();
+      if (!intelligenceRoles.has(role)) return false;
+      if (category && role !== category) return false;
+      if (!search) return true;
+
+      return [
+        account.username,
+        account.account_name,
+        account.target_audience,
+        account.content_strategy,
+      ].some((value) => String(value || '').toLowerCase().includes(search));
+    })
+    .map(normalizeSocialAccountForIntelligence);
 }
 
 export async function createCompetitorAccount(userId, payload) {
   const client = requireSupabase();
-  const accountRole = payload.account_role || payload.account_type || 'competitor';
+  const accountRole = getAccountRole({
+    ...payload,
+    account_role: payload.account_role || payload.account_type || payload.account_category || 'competitor',
+  });
   const { data, error } = await client
     .from('social_accounts')
     .insert({
@@ -861,7 +880,7 @@ function normalizeSocialAccountForIntelligence(account) {
     ...account,
     username: account.username || account.account_name,
     url: account.account_url,
-    category: account.account_role || account.account_type || account.account_category,
+    category: getAccountRole(account),
     audience: profile.target_audience || account.target_audience,
     followers: Number(account.followers || 0),
     content_strategy: profile.content_direction || account.content_strategy,

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { accountCategories, apiStatuses, platforms } from '../data/navigation';
+import { getAccountRole } from '../services/account-service';
 
 export function AccountForm({ initialValue, onSubmit, onCancel }) {
-  const initialRole = initialValue?.account_role || initialValue?.account_type || initialValue?.account_category;
+  const initialRole = initialValue ? getAccountRole(initialValue) : '';
   const normalizedInitialRole = initialRole === 'brand' || initialRole === 'personal' ? 'owned' : initialRole;
   const [form, setForm] = useState({
     platform: 'X',
@@ -43,7 +44,7 @@ export function AccountForm({ initialValue, onSubmit, onCancel }) {
       className="form-card"
       onSubmit={(event) => {
         event.preventDefault();
-        const role = form.account_role || form.account_type || form.account_category || 'owned';
+        const role = getAccountRole(form);
         onSubmit({
           ...form,
           username: form.username || form.account_name,

@@ -1,7 +1,11 @@
 import { requireSupabase } from './supabase-client';
 
+export function getAccountRole(account = {}) {
+  return account.account_role || account.account_type || account.account_category || 'owned';
+}
+
 function normalizeAccountRole(payload = {}) {
-  const role = payload.account_role || payload.account_type || payload.account_category || 'owned';
+  const role = getAccountRole(payload);
   if (role === 'brand' || role === 'personal') return 'owned';
   return role;
 }

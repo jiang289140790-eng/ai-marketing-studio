@@ -85,6 +85,11 @@ export function ContentIntelligence({ userId }) {
     };
   }, [accounts, viralContents, analyses]);
 
+  const intelligenceAccountIds = useMemo(
+    () => new Set(accounts.map((account) => account.id)),
+    [accounts],
+  );
+
   function setViralField(field, value) {
     setViralForm((current) => {
       const next = { ...current, [field]: value };
@@ -98,6 +103,10 @@ export function ContentIntelligence({ userId }) {
 
   async function handleCreateViralContent(event) {
     event.preventDefault();
+    if (!intelligenceAccountIds.has(viralForm.social_account_id)) {
+      setMessage('请选择账号矩阵中的竞品账号或灵感账号。');
+      return;
+    }
     try {
       await createViralContent(userId, viralForm);
       setViralForm(defaultViral);

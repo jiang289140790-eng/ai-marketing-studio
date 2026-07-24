@@ -3,6 +3,7 @@ import { EmptyState } from '../components/EmptyState';
 import { StatusBadge } from '../components/StatusBadge';
 import { platformConnectionCards } from '../data/platform-connections';
 import { displayText, loadPlatformConnectionData, normalizeList } from '../services/ops-service';
+import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 
@@ -10,6 +11,7 @@ export function PlatformConnectionsPage({ userId }) {
   const [data, setData] = useState({ platformConnections: [], accounts: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [gateway, setGateway] = useState({ loading: true, connected: false, status: null, reason: '' });
 
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) {
@@ -22,6 +24,15 @@ export function PlatformConnectionsPage({ userId }) {
       .catch((error) => setMessage(error.message))
       .finally(() => setIsLoading(false));
     return undefined;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return undefined;
+    let cancelled = false;
+    getExecutionStatus({ force: true }).then((status) => {
+      if (!cancelled) setGateway({ loading: false, ...status });
+    });
+    return () => { cancelled = true; };
   }, [userId]);
 
   const byPlatform = useMemo(() => {
@@ -51,7 +62,8 @@ export function PlatformConnectionsPage({ userId }) {
 
       {message && <div className="notice error">{message}</div>}
 
-      {!isLoading && <PlatformCapabilityMatrix byPlatform={byPlatform} />}
+      {!isLoading && <ConnectionLayerSummary byPlatform={byPlatform} gateway={gateway} />}
+      {!isLoading && <PlatformCapabilityMatrix byPlatform={byPlatform} gateway={gateway} />}
 
       {isLoading ? (
         <div className="skeleton-grid" aria-label="平台连接加载中">
@@ -64,7 +76,8 @@ export function PlatformConnectionsPage({ userId }) {
           const latest = [...rows].sort(byLatestSync)[0];
           const relatedAccounts = accountsForPlatform(data.accounts, card.platform, rows);
           const permissions = collectPermissions(rows);
-          const capabilities = getCapabilities(card, connected, permissions);
+          const capabilities = getCapabilities(card, connected, permissions, gateway);
+          const runtimeReady = platformRuntimeReady(card.platform, gateway);
           const state = !card.implemented ? 'preparing' : connected.length ? 'connected' : 'not_connected';
 
           return (
@@ -80,6 +93,7 @@ export function PlatformConnectionsPage({ userId }) {
 
               <div className="connection-meta-grid">
                 <span>真实连接</span><strong>{connected.length}/{rows.length}</strong>
+                <span>执行能力</span><strong>{runtimeReady ? '服务端已就绪' : '尚未完全就绪'}</strong>
                 <span>已识别账号</span><strong>{relatedAccounts.length}</strong>
                 <span>最后同步</span><strong>{formatDate(latest?.last_sync || latest?.last_synced_at || latest?.connected_at)}</strong>
                 <span>授权范围</span><strong>{permissions.length ? permissions.join('、') : '未上报'}</strong>
@@ -118,7 +132,21 @@ export function PlatformConnectionsPage({ userId }) {
   );
 }
 
-function PlatformCapabilityMatrix({ byPlatform }) {
+function ConnectionLayerSummary({ byPlatform, gateway }) {
+  const authorized = [...byPlatform.values()].flat().filter(isConnected).length;
+  const xReady = platformRuntimeReady('X', gateway);
+  return (
+    <section className="connection-layer-summary">
+      <div><span>账号授权</span><strong>{authorized} 条有效记录</strong><small>来自 Supabase platform_connections</small></div>
+      <b>→</b>
+      <div><span>安全执行网关</span><strong>{gateway.loading ? '检查中' : gateway.connected ? '已连接' : '未完全连接'}</strong><small>{gateway.reason || 'Edge Function 与 MCP Bridge 状态'}</small></div>
+      <b>→</b>
+      <div><span>X MCP 工具</span><strong>{gateway.loading ? '检查中' : xReady ? '可调用' : '尚未接入'}</strong><small>读取、分析和同步必须同时具备工具能力</small></div>
+    </section>
+  );
+}
+
+function PlatformCapabilityMatrix({ byPlatform, gateway }) {
   return (
     <section className="platform-capability-matrix-panel">
       <div className="section-head">
@@ -131,15 +159,13 @@ function PlatformCapabilityMatrix({ byPlatform }) {
           <tbody>
             {platformConnectionCards.map((card) => {
               const connected = (byPlatform.get(String(card.platform).toLowerCase()) || []).filter(isConnected);
-              const connectionLabel = card.implemented ? connected.length ? `已接 · ${connected.length}` : '未连接' : '准备中';
+              const connectionLabel = card.implemented ? connected.length ? `已授权 · ${connected.length}` : '未授权' : '准备中';
+              const capabilities = getCapabilities(card, connected, collectPermissions(connected), gateway);
               return (
                 <tr key={card.platform}>
                   <th>{card.title}</th>
                   <td>{connectionLabel}</td>
-                  <CapabilityCell value={card.capabilities.collect} />
-                  <CapabilityCell value={card.capabilities.publish} />
-                  <CapabilityCell value={card.capabilities.analytics} />
-                  <CapabilityCell value={card.capabilities.webhook} />
+                  {capabilities.slice(1).map((capability) => <CapabilityCell key={capability.label} value={[capability.state, capability.detail]} />)}
                 </tr>
               );
             })}
@@ -179,20 +205,35 @@ function collectPermissions(rows) {
   )).map((value) => String(value)).filter(Boolean))];
 }
 
-function getCapabilities(card, connected, _permissions) {
+function getCapabilities(card, connected, _permissions, gateway) {
   const hasConnection = connected.length > 0;
+  const runtimeReady = platformRuntimeReady(card.platform, gateway);
+  const runtimeCapability = (value) => {
+    const [state] = value;
+    if (!hasConnection && card.implemented) return ['not_connected', '请先完成账号授权'];
+    if (['available', 'partial', 'needs_validation', 'needs_bridge'].includes(state) && !runtimeReady) {
+      return ['needs_bridge', '账号已授权，执行工具尚未就绪'];
+    }
+    return value;
+  };
   const rows = [
     ['连接状态', hasConnection ? 'available' : card.implemented ? 'not_connected' : 'preparing', hasConnection ? `已连接 ${connected.length} 个账号` : card.implemented ? '尚未发现有效连接' : '准备中'],
-    ['内容采集', ...card.capabilities.collect],
-    ['内容发布', ...card.capabilities.publish],
-    ['数据回收', ...card.capabilities.analytics],
-    ['Webhook', ...card.capabilities.webhook],
+    ['内容采集', ...runtimeCapability(card.capabilities.collect)],
+    ['内容发布', ...runtimeCapability(card.capabilities.publish)],
+    ['数据回收', ...runtimeCapability(card.capabilities.analytics)],
+    ['Webhook', ...runtimeCapability(card.capabilities.webhook)],
   ];
   return rows.map(([label, state, detail]) => ({
     label,
     state: !hasConnection && card.implemented && state === 'available' ? 'not_connected' : state,
     detail: !hasConnection && card.implemented && state === 'available' ? '请先连接账号' : detail,
   }));
+}
+
+function platformRuntimeReady(platform, gateway) {
+  if (!gateway?.connected) return false;
+  if (String(platform).toLowerCase() !== 'x') return true;
+  return gateway.status?.x_mcp === 'connected' && gateway.status?.x_tools === true;
 }
 
 function getBlockingReason(card, connected, permissions) {

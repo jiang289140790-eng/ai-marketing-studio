@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { ContextAIBox } from '../components/ContextAIBox';
 import { PromptForm } from '../components/PromptForm';
+import { useConfirmation } from '../contexts/confirmation-context';
 import { platforms, promptCategories } from '../data/navigation';
 import { listCharacters } from '../services/character-service';
 import { createPrompt, deletePrompt, listPrompts, updatePrompt } from '../services/prompt-service';
@@ -9,7 +10,8 @@ import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 import { buildContentContext } from '../services/context-ai-service';
 
-export function PromptLibrary({ userId }) {
+export function PromptLibrary({ userId, detailId, onNavigate }) {
+  const { confirm } = useConfirmation();
   const [prompts, setPrompts] = useState([]);
   const [characters, setCharacters] = useState([]);
   const [filters, setFilters] = useState({ search: '', category: '', platform: '', character: '' });
@@ -33,6 +35,11 @@ export function PromptLibrary({ userId }) {
     refresh().catch((error) => setMessage(error.message));
   }, [refresh]);
 
+  useEffect(() => {
+    if (!detailId || !prompts.length) return;
+    setSelected(prompts.find((prompt) => String(prompt.id) === String(detailId)) || null);
+  }, [detailId, prompts]);
+
   async function handleSave(payload) {
     try {
       if (editing) {
@@ -49,9 +56,19 @@ export function PromptLibrary({ userId }) {
   }
 
   async function handleDelete(prompt) {
+    const accepted = await confirm({
+      title: '删除 Prompt？',
+      message: `将删除“${prompt.title || '未命名 Prompt'}”。已经生成的内容不会受到影响。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!accepted) return;
     try {
       await deletePrompt(prompt.id);
-      if (selected?.id === prompt.id) setSelected(null);
+      if (selected?.id === prompt.id) {
+        setSelected(null);
+        onNavigate('prompts');
+      }
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -125,7 +142,10 @@ export function PromptLibrary({ userId }) {
         <div className="analysis-list">
           {prompts.map((prompt) => (
             <article className="analysis-card" key={prompt.id}>
-              <button className="card-open" type="button" onClick={() => setSelected(prompt)}>查看</button>
+              <button className="card-open" type="button" onClick={() => {
+                setSelected(prompt);
+                onNavigate('prompts', prompt.id);
+              }}>查看</button>
               <div className="card-meta">
                 <span>{promptCategories.find((category) => category.value === prompt.category)?.label || prompt.category}</span>
                 <span>{prompt.platform || '通用平台'}</span>
@@ -150,7 +170,10 @@ export function PromptLibrary({ userId }) {
               <p className="eyebrow">Prompt Detail</p>
               <h2>{selected.title}</h2>
             </div>
-            <button className="ghost-button" type="button" onClick={() => setSelected(null)}>关闭</button>
+            <button className="ghost-button" type="button" onClick={() => {
+              setSelected(null);
+              onNavigate('prompts');
+            }}>关闭</button>
           </div>
           <p className="draft-preview">{selected.content}</p>
         </aside>

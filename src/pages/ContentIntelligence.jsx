@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
+import { useConfirmation } from '../contexts/confirmation-context';
 import { contentTypes, platforms } from '../data/navigation';
 import {
   analyzeViralContentWithAI,
@@ -38,7 +39,8 @@ function getAnalysisScore(analysis) {
   return Number(analysis.analysis_result?.ai_score || analysis.fit_score || 0).toFixed(0);
 }
 
-export function ContentIntelligence({ userId }) {
+export function ContentIntelligence({ userId, detailId, onNavigate }) {
+  const { confirm } = useConfirmation();
   const [accounts, setAccounts] = useState([]);
   const [viralContents, setViralContents] = useState([]);
   const [analyses, setAnalyses] = useState([]);
@@ -71,6 +73,11 @@ export function ContentIntelligence({ userId }) {
       setLoading(false);
     });
   }, [refresh]);
+
+  useEffect(() => {
+    if (!detailId || loading) return;
+    window.setTimeout(() => document.getElementById(`intelligence-${detailId}`)?.scrollIntoView({ block: 'center' }), 0);
+  }, [detailId, loading, viralContents]);
 
   const stats = useMemo(() => {
     const topItem = [...viralContents].sort((a, b) => Number(b.engagement_score || 0) - Number(a.engagement_score || 0))[0];
@@ -146,15 +153,42 @@ export function ContentIntelligence({ userId }) {
     }
   }
 
+  async function handleDelete(item) {
+    const accepted = await confirm({
+      title: '删除内容机会？',
+      message: `将删除“${item.title || '未命名内容机会'}”。对应的分析记录可能无法继续追溯来源。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!accepted) return;
+    try {
+      await deleteViralContent(item.id);
+      if (String(detailId) === String(item.id)) onNavigate('intelligence');
+      setMessage('内容机会已删除。');
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   return (
     <section className="page-stack">
-      <div className="section-head">
+      <div className="hero-panel intelligence-hero">
         <div>
           <p className="eyebrow">Content Intelligence</p>
           <h2>内容情报中心</h2>
-          <p>这里不再创建账号。请先在账号矩阵添加竞品/灵感账号，然后在这里选择账号、保存爆款内容、触发 Analysis Agent。</p>
+          <p>从账号矩阵发现值得学习的内容，交给 AI 拆解爆点，再把分析结果转成可审核的内容草稿。</p>
         </div>
+        <button className="ghost-button" type="button" onClick={() => onNavigate('accounts')}>管理情报账号</button>
       </div>
+
+      <section className="intelligence-pipeline" aria-label="内容情报工作流">
+        <div><span>1</span><strong>发现机会</strong><small>选择竞品或灵感账号，保存原始内容与数据</small></div>
+        <b>→</b>
+        <div><span>2</span><strong>AI 拆解</strong><small>提炼 Hook、结构、用户心理和可复刻策略</small></div>
+        <b>→</b>
+        <div><span>3</span><strong>生成草稿</strong><small>把验证后的分析转成内容库草稿继续生产</small></div>
+      </section>
 
       <div className="stat-grid">
         <StatCard label="情报账号" value={loading ? '—' : stats.accounts} hint="social_accounts: competitor / inspiration" />
@@ -182,8 +216,12 @@ export function ContentIntelligence({ userId }) {
         </select>
       </div>
 
-      <div className="studio-grid">
-        <form className="form-card intelligence-form" onSubmit={handleCreateViralContent}>
+      <details className="form-card intelligence-create-panel">
+        <summary>
+          <span><strong>添加新的内容机会</strong><small>从 X、Instagram 或其他平台录入一条值得分析的内容</small></span>
+          <span className="primary-button">开始录入</span>
+        </summary>
+        <form className="intelligence-form" onSubmit={handleCreateViralContent}>
           <div className="form-card-heading">
             <p className="eyebrow">Content Opportunity</p>
             <h3>保存内容机会</h3>
@@ -216,18 +254,7 @@ export function ContentIntelligence({ userId }) {
             </div>
           </div>
         </form>
-
-        <article className="form-card account-source-card">
-          <p className="eyebrow">Account Source of Truth</p>
-          <h3>账号从哪里来？</h3>
-          <p>内容情报只消费账号矩阵中的 social_accounts。新增竞品号、灵感号，请回到“账号矩阵”添加，避免重复账号和分析数据分裂。</p>
-          <div className="tag-row">
-            <span className="tag">social_accounts</span>
-            <span className="tag">account_profiles</span>
-            <span className="tag">Analysis Agent</span>
-          </div>
-        </article>
-      </div>
+      </details>
 
       {message && <div className="notice">{message}</div>}
 
@@ -250,9 +277,14 @@ export function ContentIntelligence({ userId }) {
       ) : viralContents.length === 0 ? (
         <EmptyState title="暂无内容机会" description="先在账号矩阵添加竞品/灵感账号，再保存值得学习的内容。" />
       ) : (
-        <div className="analysis-list">
+        <section className="intelligence-stage-panel">
+          <div className="section-head compact-head">
+            <div><p className="eyebrow">OPPORTUNITY INBOX</p><h3>待分析内容机会</h3></div>
+            <span>{viralContents.length} 条</span>
+          </div>
+          <div className="intelligence-card-grid">
           {viralContents.map((item) => (
-            <article className="analysis-card" key={item.id}>
+            <article className={`analysis-card ${String(detailId) === String(item.id) ? 'route-selected' : ''}`} id={`intelligence-${item.id}`} key={item.id}>
               <div className="card-meta">
                 <span className="tag">{item.platform}</span>
                 <span>{item.social_accounts?.username || item.social_accounts?.account_name || '未关联账号'}</span>
@@ -270,19 +302,26 @@ export function ContentIntelligence({ userId }) {
               <p><strong>为什么爆：</strong>{item.viral_reason || '待分析'}</p>
               <p><strong>AI建议：</strong>{item.ai_recommendation || '点击 AI分析 后补全'}</p>
               <div className="status-actions">
+                <button className="ghost-button" type="button" onClick={() => onNavigate('intelligence', item.id)}>打开直达链接</button>
                 {item.url && <a className="ghost-button" href={item.url} target="_blank" rel="noreferrer">打开内容</a>}
                 <button type="button" onClick={() => handleAnalyze(item)} disabled={analyzingId === item.id}>
                   {analyzingId === item.id ? 'AI分析中...' : 'AI分析'}
                 </button>
-                <button type="button" onClick={() => deleteViralContent(item.id).then(refresh)}>删除内容</button>
+                <button type="button" onClick={() => handleDelete(item)}>删除内容</button>
               </div>
             </article>
           ))}
-        </div>
+          </div>
+        </section>
       )}
 
       {analyses.length > 0 && (
-        <div className="analysis-list">
+        <section className="intelligence-stage-panel">
+          <div className="section-head compact-head">
+            <div><p className="eyebrow">ANALYSIS READY</p><h3>已完成的 AI 拆解</h3></div>
+            <span>{analyses.length} 条</span>
+          </div>
+          <div className="intelligence-card-grid">
           {analyses.slice(0, 6).map((analysis) => (
             <article className="analysis-card" key={analysis.id}>
               <div className="card-meta">
@@ -307,7 +346,8 @@ export function ContentIntelligence({ userId }) {
               </div>
             </article>
           ))}
-        </div>
+          </div>
+        </section>
       )}
     </section>
   );

@@ -1,19 +1,20 @@
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { useAuth } from './contexts/auth-context';
-import { AccountsPage } from './pages/AccountsPage';
-import { AnalyticsPage } from './pages/AnalyticsPage';
-import { AssetLibrary } from './pages/AssetLibrary';
-import { CampaignStrategyPage } from './pages/CampaignStrategyPage';
-import { CharacterLibrary } from './pages/CharacterLibrary';
-import { CommandCenter } from './pages/CommandCenter';
-import { ContentWorkspacePage } from './pages/ContentWorkspacePage';
-import { ContentIntelligence } from './pages/ContentIntelligence';
-import { DailyReport } from './pages/DailyReport';
-import { PublishQueuePage } from './pages/PublishQueuePage';
-import { PromptLibrary } from './pages/PromptLibrary';
+import { useAppRoute } from './utils/app-route';
 
+const CommandCenter = lazy(() => import('./pages/CommandCenter').then((module) => ({ default: module.CommandCenter })));
+const AccountsPage = lazy(() => import('./pages/AccountsPage').then((module) => ({ default: module.AccountsPage })));
+const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((module) => ({ default: module.AnalyticsPage })));
+const AssetLibrary = lazy(() => import('./pages/AssetLibrary').then((module) => ({ default: module.AssetLibrary })));
+const CampaignStrategyPage = lazy(() => import('./pages/CampaignStrategyPage').then((module) => ({ default: module.CampaignStrategyPage })));
+const CharacterLibrary = lazy(() => import('./pages/CharacterLibrary').then((module) => ({ default: module.CharacterLibrary })));
+const ContentWorkspacePage = lazy(() => import('./pages/ContentWorkspacePage').then((module) => ({ default: module.ContentWorkspacePage })));
+const ContentIntelligence = lazy(() => import('./pages/ContentIntelligence').then((module) => ({ default: module.ContentIntelligence })));
+const DailyReport = lazy(() => import('./pages/DailyReport').then((module) => ({ default: module.DailyReport })));
+const PublishQueuePage = lazy(() => import('./pages/PublishQueuePage').then((module) => ({ default: module.PublishQueuePage })));
+const PromptLibrary = lazy(() => import('./pages/PromptLibrary').then((module) => ({ default: module.PromptLibrary })));
 const AIWorksPage = lazy(() => import('./pages/AIWorksPage').then((module) => ({ default: module.AIWorksPage })));
 const PlatformConnectionsPage = lazy(() => import('./pages/PlatformConnectionsPage').then((module) => ({ default: module.PlatformConnectionsPage })));
 const SystemOverviewPage = lazy(() => import('./pages/SystemOverviewPage').then((module) => ({ default: module.SystemOverviewPage })));
@@ -41,11 +42,11 @@ const pageTitles = {
 pageTitles.prompts = 'Prompt 库';
 
 export default function App() {
-  const [activePage, setActivePage] = useState('dashboard');
+  const { page: activePage, detailId, navigate } = useAppRoute();
   const { error: authError, loading: authLoading, session, userId } = useAuth();
 
   const page = useMemo(() => {
-    const props = { userId, onNavigate: setActivePage };
+    const props = { userId, onNavigate: navigate, detailId };
 
     switch (activePage) {
       case 'campaigns':
@@ -81,11 +82,11 @@ export default function App() {
       default:
         return <CommandCenter {...props} />;
     }
-  }, [activePage, userId]);
+  }, [activePage, detailId, navigate, userId]);
 
   return (
     <div className="app-shell">
-      <Sidebar activePage={activePage} onNavigate={setActivePage} />
+      <Sidebar activePage={activePage} onNavigate={navigate} />
       <div className="main-shell">
         <Header title={pageTitles[activePage] || pageTitles.dashboard} />
         {authLoading && <div className="notice">正在恢复登录状态...</div>}

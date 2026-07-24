@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CharacterForm } from '../components/CharacterForm';
 import { EmptyState } from '../components/EmptyState';
+import { useConfirmation } from '../contexts/confirmation-context';
 import { createCharacter, deleteCharacter, listCharacters, updateCharacter } from '../services/character-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
 import { hasLoraConfig, loraDisplayName, parseLoraConfig } from '../utils/lora';
 
-export function CharacterLibrary({ userId }) {
+export function CharacterLibrary({ userId, detailId, onNavigate }) {
+  const { confirm } = useConfirmation();
   const [characters, setCharacters] = useState([]);
   const [filters, setFilters] = useState({ search: '', tag: '' });
   const [isCreating, setIsCreating] = useState(false);
@@ -22,6 +24,11 @@ export function CharacterLibrary({ userId }) {
   useEffect(() => {
     refresh().catch((error) => setMessage(error.message));
   }, [refresh]);
+
+  useEffect(() => {
+    if (!detailId || !characters.length) return;
+    setSelected(characters.find((character) => String(character.id) === String(detailId)) || null);
+  }, [characters, detailId]);
 
   async function handleSave(payload) {
     try {
@@ -41,9 +48,19 @@ export function CharacterLibrary({ userId }) {
   }
 
   async function handleDelete(character) {
+    const accepted = await confirm({
+      title: '删除角色？',
+      message: `将删除“${character.name || '未命名角色'}”及其当前 LoRA 绑定信息。已有生成结果不会被删除。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!accepted) return;
     try {
       await deleteCharacter(character.id);
-      if (selected?.id === character.id) setSelected(null);
+      if (selected?.id === character.id) {
+        setSelected(null);
+        onNavigate('characters');
+      }
       setMessage('角色已删除。');
       await refresh();
     } catch (error) {
@@ -105,7 +122,10 @@ export function CharacterLibrary({ userId }) {
             const lora = parseLoraConfig(character.lora);
             return (
               <article className="character-card" key={character.id}>
-                <button className="card-open" type="button" onClick={() => setSelected(character)}>查看详情</button>
+                <button className="card-open" type="button" onClick={() => {
+                  setSelected(character);
+                  onNavigate('characters', character.id);
+                }}>查看详情</button>
                 <div className="character-card-media">
                   {character.avatar
                     ? <img src={character.avatar} alt={`${character.name} 角色头像`} />
@@ -141,7 +161,10 @@ export function CharacterLibrary({ userId }) {
 
       {selected && (
         <div className="character-detail-overlay" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setSelected(null);
+          if (event.target === event.currentTarget) {
+            setSelected(null);
+            onNavigate('characters');
+          }
         }}>
           <aside className="detail-panel character-detail-panel">
             <div className="section-head">
@@ -149,7 +172,10 @@ export function CharacterLibrary({ userId }) {
                 <p className="eyebrow">Character Detail</p>
                 <h2>{selected.name}</h2>
               </div>
-              <button className="ghost-button" type="button" onClick={() => setSelected(null)}>关闭</button>
+              <button className="ghost-button" type="button" onClick={() => {
+                setSelected(null);
+                onNavigate('characters');
+              }}>关闭</button>
             </div>
             {selected.avatar && <img className="character-detail-avatar" src={selected.avatar} alt={`${selected.name} 角色头像`} />}
             <CharacterLoraDetails value={selected.lora} />

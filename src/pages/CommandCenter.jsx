@@ -202,7 +202,7 @@ export function CommandCenter({ userId, onNavigate }) {
       <div className="stat-grid compact">
         <StatCard label="活跃 Campaign" value={loading ? '-' : summary.activeCampaigns} hint="当前运营目标" />
         <StatCard label="待你审批" value={loading ? '-' : summary.pendingStrategies + summary.pendingContent + summary.pendingPublish} hint="策略、内容与发布" />
-        <StatCard label="已连接平台" value={loading ? '-' : summary.connectedAccounts} hint="可执行的平台连接" />
+        <StatCard label="授权连接记录" value={loading ? '-' : summary.connectedAccounts} hint="账号授权不等于 MCP / 发布能力" />
         <StatCard label="知识库条目" value={loading ? '-' : summary.knowledge.length} hint="Knowledge Vault 与运营记忆" />
       </div>
 

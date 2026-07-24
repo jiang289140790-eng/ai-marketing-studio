@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AssetForm } from '../components/AssetForm';
 import { EmptyState } from '../components/EmptyState';
 import { StatusBadge } from '../components/StatusBadge';
+import { useConfirmation } from '../contexts/confirmation-context';
 import { assetTypes } from '../data/navigation';
 import { createAsset, deleteAsset, searchAssets, uploadAsset } from '../services/asset-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
@@ -19,7 +20,8 @@ function getAssetThumbnail(asset) {
   return asset.thumbnail || asset.thumbnail_url || asset.preview_url || getAssetUrl(asset);
 }
 
-export function AssetLibrary({ userId }) {
+export function AssetLibrary({ userId, detailId, onNavigate }) {
+  const { confirm } = useConfirmation();
   const [assets, setAssets] = useState([]);
   const [filters, setFilters] = useState({ search: '', type: '', tag: '' });
   const [isCreating, setIsCreating] = useState(false);
@@ -44,6 +46,11 @@ export function AssetLibrary({ userId }) {
   useEffect(() => {
     refresh().catch((error) => setMessage(error.message));
   }, [refresh]);
+
+  useEffect(() => {
+    if (!detailId || !assets.length) return;
+    setSelected(assets.find((asset) => String(asset.id) === String(detailId)) || null);
+  }, [assets, detailId]);
 
   async function handleCreate(payload) {
     try {
@@ -74,9 +81,19 @@ export function AssetLibrary({ userId }) {
   }
 
   async function handleDelete(asset) {
+    const accepted = await confirm({
+      title: '删除素材？',
+      message: `将删除“${asset.name || '未命名素材'}”。引用该素材的内容包可能需要重新选择素材。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!accepted) return;
     try {
       await deleteAsset(asset.id);
-      if (selected?.id === asset.id) setSelected(null);
+      if (selected?.id === asset.id) {
+        setSelected(null);
+        onNavigate('assets');
+      }
       setMessage('资产已删除。');
       await refresh();
     } catch (error) {
@@ -156,7 +173,10 @@ export function AssetLibrary({ userId }) {
         <div className="asset-grid">
           {assets.map((asset) => (
             <article className="asset-card" key={asset.id}>
-              <button className="card-open" type="button" onClick={() => setSelected(asset)}>预览</button>
+              <button className="card-open" type="button" onClick={() => {
+                setSelected(asset);
+                onNavigate('assets', asset.id);
+              }}>预览</button>
               <div className={`library-asset ${getAssetType(asset) === 'video' ? 'video' : ''}`}>{preview(asset)}</div>
               <div>
                 <div className="card-meta">
@@ -185,7 +205,10 @@ export function AssetLibrary({ userId }) {
               <p className="eyebrow">Asset Preview</p>
               <h2>{selected.name}</h2>
             </div>
-            <button className="ghost-button" type="button" onClick={() => setSelected(null)}>关闭</button>
+            <button className="ghost-button" type="button" onClick={() => {
+              setSelected(null);
+              onNavigate('assets');
+            }}>关闭</button>
           </div>
           <div className="asset-preview-large">{preview(selected)}</div>
           <dl>

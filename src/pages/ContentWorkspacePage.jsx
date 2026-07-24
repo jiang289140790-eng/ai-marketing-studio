@@ -91,7 +91,7 @@ const VIDEO_REQUIREMENT_FIELDS = [
   ['negative_prompt', 'negative prompt'],
 ];
 
-export function ContentWorkspacePage({ userId, onNavigate }) {
+export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
   const [activeWorkflow, setActiveWorkflow] = useState('all');
@@ -133,6 +133,11 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
     if (hideTests && activeWorkflow !== 'test' && isTestContent(item)) return false;
     return contentMatchesWorkflow(item, activeWorkflow, data, assets);
   }), [activeWorkflow, assets, contentPackages, data, hideTests]);
+  const visiblePackages = useMemo(() => (
+    detailId
+      ? contentPackages.filter((item) => String(item.id) === String(detailId))
+      : filteredPackages
+  ), [contentPackages, detailId, filteredPackages]);
 
   if (!isSupabaseConfigured) {
     return <EmptyState title="等待 Supabase 配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
@@ -186,7 +191,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
       </div>
 
       <div className="content-workspace-list">
-        {filteredPackages.length ? filteredPackages.map((item) => (
+        {visiblePackages.length ? visiblePackages.map((item) => (
           <ContentPackageCard
             key={`${item.sourceKey}-${item.id}`}
             item={item}
@@ -196,6 +201,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
             userId={userId}
             onNavigate={onNavigate}
             onRefresh={refreshData}
+            initialOpen={String(detailId) === String(item.id)}
           />
         )) : (
           <EmptyState title="没有匹配的内容包" description="请更换工作流筛选，或关闭“隐藏测试内容”后再查看。" />
@@ -206,7 +212,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
   );
 }
 
-function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, onRefresh }) {
+function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, onRefresh, initialOpen = false }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
@@ -216,7 +222,7 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
   const workflowRuns = runsForContent(item, data.workflowRuns || []);
   const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id || '') === String(item.id));
   const productionGuide = buildProductionGuide({ item, character, lora, linkedAssets, workflowRuns, publishTask, gateway });
-  const [studioOpen, setStudioOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(initialOpen);
   const sectionIds = {
     studio: `content-${item.id}-studio`,
     copy: `content-${item.id}-copy`,
@@ -227,8 +233,13 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
 
   function openSection(target) {
     setStudioOpen(true);
+    onNavigate('workspace', item.id);
     window.setTimeout(() => document.getElementById(sectionIds[target])?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   }
+
+  useEffect(() => {
+    setStudioOpen(initialOpen);
+  }, [initialOpen]);
 
   function followNextStep() {
     if (productionGuide.nextAction.page) {
@@ -253,53 +264,53 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
         </div>
       </div>
 
-      <div className="content-card-meta">
-        <Info label="Campaign" value={campaign?.name || campaign?.title} />
-        <Info label="策略" value={strategy?.name || strategy?.title} />
-        <Info label="平台" value={item.platform} />
-        <Info label="目标账号" value={account?.account_name || account?.username || account?.account_url} />
-        <Info label="状态" value={item.status} />
-        <Info label="审核状态" value={item.reviewStatus || item.approvalStatus} />
-        <Info label="角色" value={character?.display_name || character?.name} />
-        <Info label="LoRA" value={lora.name || lora.model || lora.filename} />
-        <Info label="素材" value={linkedAssets.length} />
-        <Info label="创建" value={formatDate(item.createdAt)} />
-        <Info label="最近更新" value={formatDate(item.updatedAt)} />
-      </div>
-
-      <div className="content-copy-summary">
-        <Info label="Hook" value={item.hook} />
-        <Info label="正文摘要" value={truncate(item.body, 160)} />
-        <Info label="CTA" value={item.cta} />
-        <Info label="标签" value={item.tags} />
-      </div>
-
       <ProductionSteps guide={productionGuide} onNext={followNextStep} />
 
-      <div className="asset-strip" aria-label="内容素材预览">
-        {linkedAssets.slice(0, 4).map((asset) => (
-          <div className="asset-thumb" key={asset.id}>
-            <AssetPreview asset={asset} compact />
-            <span>{asset.name}</span>
-          </div>
-        ))}
-        {!linkedAssets.length && <span className="muted-line">暂无素材，进入下方工作室添加参考或生成新素材。</span>}
-      </div>
+      <details className="content-card-context">
+        <summary>查看内容、策略与素材概览</summary>
+        <div className="content-card-meta">
+          <Info label="Campaign" value={campaign?.name || campaign?.title} />
+          <Info label="策略" value={strategy?.name || strategy?.title} />
+          <Info label="平台" value={item.platform} />
+          <Info label="目标账号" value={account?.account_name || account?.username || account?.account_url} />
+          <Info label="角色 / LoRA" value={`${character?.display_name || character?.name || '—'} · ${lora.name || lora.model || lora.filename || '—'}`} />
+          <Info label="素材" value={linkedAssets.length} />
+        </div>
+        <div className="content-copy-summary">
+          <Info label="Hook" value={item.hook} />
+          <Info label="正文摘要" value={truncate(item.body, 160)} />
+          <Info label="CTA" value={item.cta} />
+          <Info label="标签" value={item.tags} />
+        </div>
+        <div className="asset-strip" aria-label="内容素材预览">
+          {linkedAssets.slice(0, 4).map((asset) => (
+            <div className="asset-thumb" key={asset.id}>
+              <AssetPreview asset={asset} compact />
+              <span>{asset.name}</span>
+            </div>
+          ))}
+          {!linkedAssets.length && <span className="muted-line">暂无素材，进入工作室添加参考或生成新素材。</span>}
+        </div>
+      </details>
 
       <div className="button-row content-card-quick-actions">
-        <button className="ghost-button" type="button" onClick={() => openSection('studio')}>查看详情</button>
-        <button className="ghost-button" type="button" onClick={() => openSection('copy')}>继续编辑</button>
-        <button className="ghost-button" type="button" onClick={() => openSection('media')}>生成素材</button>
-        <button className="ghost-button" type="button" onClick={() => openSection('approval')}>审核</button>
-        <button className="ghost-button" type="button" onClick={() => openSection('results')}>查看生成结果</button>
-        {studioOpen && <button className="ghost-button" type="button" onClick={() => setStudioOpen(false)}>收起工作室</button>}
+        <button className="primary-button" type="button" onClick={followNextStep}>{productionGuide.nextAction.label}</button>
+        <button className="ghost-button" type="button" onClick={() => openSection('studio')}>打开完整工作室</button>
+        {studioOpen && <button className="ghost-button" type="button" onClick={() => {
+          setStudioOpen(false);
+          onNavigate('workspace');
+        }}>收起工作室</button>}
       </div>
 
       <details
         className="generation-studio"
         id={sectionIds.studio}
         open={studioOpen}
-        onToggle={(event) => setStudioOpen(event.currentTarget.open)}
+        onToggle={(event) => {
+          const nextOpen = event.currentTarget.open;
+          setStudioOpen(nextOpen);
+          onNavigate('workspace', nextOpen ? item.id : '');
+        }}
       >
         <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>

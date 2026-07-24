@@ -3,6 +3,7 @@ import { AccountForm } from '../components/AccountForm';
 import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
+import { useConfirmation } from '../contexts/confirmation-context';
 import { accountCategories } from '../data/navigation';
 import {
   createSocialAccount,
@@ -38,7 +39,8 @@ function messageIsError(message) {
   return /error|failed|missing|失败|异常|缺少/i.test(String(message || ''));
 }
 
-export function AccountsPage({ userId }) {
+export function AccountsPage({ userId, detailId, onNavigate }) {
+  const { confirm } = useConfirmation();
   const [accounts, setAccounts] = useState([]);
   const [connections, setConnections] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -73,6 +75,11 @@ export function AccountsPage({ userId }) {
     refresh().catch((error) => setMessage(error.message));
   }, [refresh]);
 
+  useEffect(() => {
+    if (!detailId || !accounts.length) return;
+    setSelectedAccount(accounts.find((account) => String(account.id) === String(detailId)) || null);
+  }, [accounts, detailId]);
+
   const stats = useMemo(() => {
     const connectedConnections = connections.filter((connection) => connection.status === 'connected');
     return {
@@ -102,9 +109,19 @@ export function AccountsPage({ userId }) {
   }
 
   async function handleDelete(account) {
+    const accepted = await confirm({
+      title: '删除账号？',
+      message: `将删除“${account.account_name || account.username || '未命名账号'}”。该账号关联的内容情报、画像和发布配置可能不再可用。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!accepted) return;
     try {
       await deleteSocialAccount(account.id);
-      if (selectedAccount?.id === account.id) setSelectedAccount(null);
+      if (selectedAccount?.id === account.id) {
+        setSelectedAccount(null);
+        onNavigate('accounts');
+      }
       setMessage(`已删除账号：${account.account_name || account.username}`);
       await refresh();
     } catch (error) {
@@ -124,7 +141,10 @@ export function AccountsPage({ userId }) {
             <h3>{account.account_name || account.username}</h3>
             <p>{account.platform} · {statusLabel(getAccountRole(account))} · {account.account_url || '暂无 URL'}</p>
           </div>
-          <button className="ghost-button" type="button" onClick={() => setSelectedAccount(null)}>关闭详情</button>
+          <button className="ghost-button" type="button" onClick={() => {
+            setSelectedAccount(null);
+            onNavigate('accounts');
+          }}>关闭详情</button>
         </div>
 
         <dl>
@@ -235,7 +255,10 @@ export function AccountsPage({ userId }) {
                     {hasBrain ? `AI 已画像 · ${formatDate(profile?.last_analyzed_at || profile?.updated_at)}` : '等待 AI 分析'}
                   </span>
                   <div className="table-actions">
-                    <button type="button" onClick={() => setSelectedAccount(account)}>详情</button>
+                    <button type="button" onClick={() => {
+                      setSelectedAccount(account);
+                      onNavigate('accounts', account.id);
+                    }}>详情</button>
                     <button type="button" onClick={() => setEditing(account)}>编辑</button>
                     {account.account_url && <a className="ghost-button" href={account.account_url} target="_blank" rel="noreferrer">打开</a>}
                     <button type="button" onClick={() => handleDelete(account)}>删除</button>

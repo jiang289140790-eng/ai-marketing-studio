@@ -49,6 +49,7 @@ export function ContentIntelligence({ userId }) {
   const [analyzingId, setAnalyzingId] = useState('');
   const [generatingAnalysisId, setGeneratingAnalysisId] = useState('');
   const [generatedDraft, setGeneratedDraft] = useState(null);
+  const [aiModel, setAIModel] = useState('qwen-plus');
 
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
@@ -120,7 +121,7 @@ export function ContentIntelligence({ userId }) {
   async function handleAnalyze(item) {
     setAnalyzingId(item.id);
     try {
-      await analyzeViralContentWithAI(userId, item);
+      await analyzeViralContentWithAI(userId, item, { model: aiModel });
       setMessage('AI 分析已完成：结果已写入 content_analysis，并关联到账号画像链路。');
       await refresh();
     } catch (error) {
@@ -134,7 +135,7 @@ export function ContentIntelligence({ userId }) {
     setGeneratingAnalysisId(analysis.id);
     setGeneratedDraft(null);
     try {
-      const result = await generateContentFromAnalysis(userId, analysis);
+      const result = await generateContentFromAnalysis(userId, analysis, { model: aiModel });
       setGeneratedDraft(result);
       setMessage('内容生成完成：已写入 content_library，状态为 draft。');
       await refresh();
@@ -164,6 +165,12 @@ export function ContentIntelligence({ userId }) {
       </div>
 
       <div className="filter-bar">
+        <select value={aiModel} onChange={(event) => setAIModel(event.target.value)} aria-label="AI 模型">
+          <option value="qwen-plus">Qwen Plus（默认）</option>
+          <option value="qwen-max">Qwen Max</option>
+          <option value="qwen3.6-plus">Qwen 3.6 Plus</option>
+          <option value="deepseek-chat">DeepSeek Chat（保留）</option>
+        </select>
         <input placeholder="搜索账号、内容、爆点原因" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
         <select value={filters.platform} onChange={(event) => setFilters({ ...filters, platform: event.target.value })}>
           <option value="">全部平台</option>

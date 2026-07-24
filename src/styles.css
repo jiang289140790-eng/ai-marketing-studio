@@ -3154,3 +3154,110 @@ textarea {
   .character-detail-lora dl { grid-template-columns: 1fr; }
   .character-card-media { max-height: 440px; }
 }
+/* Context AI keeps generation reviewable and never overwrites content before Apply. */
+.context-ai-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(2 6 23 / 78%);
+  backdrop-filter: blur(8px);
+}
+
+.context-ai-box {
+  width: min(1040px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid rgb(96 165 250 / 32%);
+  border-radius: 24px;
+  background: #0f172a;
+  box-shadow: 0 32px 90px rgb(0 0 0 / 48%);
+}
+
+.context-ai-header,
+.context-ai-summary,
+.context-ai-controls,
+.context-ai-result-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.context-ai-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.context-ai-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 18px 0;
+}
+
+.context-ai-summary > span,
+.context-ai-result-grid > div {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgb(148 163 184 / 18%);
+  border-radius: 14px;
+  background: rgb(15 23 42 / 72%);
+  overflow-wrap: anywhere;
+}
+
+.context-ai-summary small,
+.context-ai-result-grid small {
+  display: block;
+  margin-bottom: 7px;
+  color: #93c5fd;
+}
+
+.context-ai-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 18px 0;
+}
+
+.context-ai-controls .wide-field {
+  grid-column: 1 / -1;
+}
+
+.context-ai-result {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgb(148 163 184 / 18%);
+}
+
+.context-ai-result-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.context-ai-result-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.context-ai-result-grid pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .context-ai-backdrop {
+    padding: 8px;
+  }
+
+  .context-ai-box {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .context-ai-summary,
+  .context-ai-controls,
+  .context-ai-result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .context-ai-result-grid .wide {
+    grid-column: auto;
+  }
+}

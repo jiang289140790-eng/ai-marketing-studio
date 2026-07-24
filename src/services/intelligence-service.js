@@ -4,8 +4,8 @@ import { requireSupabase } from './supabase-client';
 
 const viralContentSelect = '*, social_accounts:social_account_id(id,account_name,username,platform,account_role,target_audience,content_strategy,posting_frequency)';
 const analysisSelect = '*, viral_contents(title,platform,url,views,likes,comments,content_text,published_at,viral_reason,ai_recommendation,social_accounts:social_account_id(account_name,username,platform,account_role))';
-const defaultAnalysisModel = 'deepseek-chat';
-const defaultContentGenerationModel = 'deepseek-chat';
+const defaultAnalysisModel = 'qwen-plus';
+const defaultContentGenerationModel = 'qwen-plus';
 
 async function getOrCreateAnalysisAgent(client, userId) {
   const { data: existing, error: existingError } = await client
@@ -18,7 +18,7 @@ async function getOrCreateAnalysisAgent(client, userId) {
   if (existingError) throw existingError;
   if (existing?.[0]) {
     const agent = existing[0];
-    if (!String(agent.model || '').toLowerCase().startsWith('deepseek')) {
+    if (!String(agent.model || '').toLowerCase().startsWith('qwen')) {
       const { data, error } = await client
         .from('agents')
         .update({ model: defaultAnalysisModel })
@@ -128,7 +128,7 @@ async function getOrCreateContentGenerationAgent(client, userId) {
   if (existingError) throw existingError;
   if (existing?.[0]) {
     const agent = existing[0];
-    if (!String(agent.model || '').toLowerCase().startsWith('deepseek')) {
+    if (!String(agent.model || '').toLowerCase().startsWith('qwen')) {
       const { data, error } = await client
         .from('agents')
         .update({ model: defaultContentGenerationModel })
@@ -423,6 +423,12 @@ function extractJson(text) {
 
 function inferProviderFromModel(model) {
   const normalized = String(model || '').toLowerCase();
+  if (
+    normalized.startsWith('qwen')
+    || normalized.includes('dashscope')
+    || normalized.includes('aliyun')
+    || normalized.includes('bailian')
+  ) return 'qwen';
   if (normalized.startsWith('deepseek') || normalized.includes('deepseek')) return 'deepseek';
   if (normalized.startsWith('claude') || normalized.includes('anthropic')) return 'anthropic';
   return 'openai';
@@ -602,9 +608,10 @@ export async function createContentAnalysis(userId, payload) {
   return data;
 }
 
-export async function analyzeViralContentWithAI(userId, viralContent) {
+export async function analyzeViralContentWithAI(userId, viralContent, options = {}) {
   const client = requireSupabase();
   const agent = await getOrCreateAnalysisAgent(client, userId);
+  const selectedModel = options.model || agent.model || defaultAnalysisModel;
   const prompt = buildAIAnalysisPrompt(viralContent);
   const task = await createAnalysisAgentTask(client, userId, agent, viralContent, prompt);
   const run = await createAnalysisAgentRun(client, userId, agent, task, viralContent, prompt);
@@ -613,8 +620,8 @@ export async function analyzeViralContentWithAI(userId, viralContent) {
     const gateway = await generateAI({
       agent_name: agent.name,
       prompt,
-      model: agent.model || defaultAnalysisModel,
-      provider: inferProviderFromModel(agent.model || defaultAnalysisModel),
+      model: selectedModel,
+      provider: inferProviderFromModel(selectedModel),
       parameters: {
         temperature: 0.35,
         max_output_tokens: 1200,
@@ -701,9 +708,10 @@ export async function analyzeViralContentWithAI(userId, viralContent) {
   }
 }
 
-export async function generateContentFromAnalysis(userId, analysis) {
+export async function generateContentFromAnalysis(userId, analysis, options = {}) {
   const client = requireSupabase();
   const agent = await getOrCreateContentGenerationAgent(client, userId);
+  const selectedModel = options.model || agent.model || defaultContentGenerationModel;
   const platform = analysis.source_platform || analysis.viral_contents?.platform || null;
   const [promptTemplate, accountStrategy] = await Promise.all([
     getOrCreateContentGenerationPrompt(client, userId, platform),
@@ -717,8 +725,8 @@ export async function generateContentFromAnalysis(userId, analysis) {
     const gateway = await generateAI({
       agent_name: agent.name,
       prompt,
-      model: agent.model || defaultContentGenerationModel,
-      provider: inferProviderFromModel(agent.model || defaultContentGenerationModel),
+      model: selectedModel,
+      provider: inferProviderFromModel(selectedModel),
       parameters: {
         temperature: 0.7,
         max_output_tokens: 1200,

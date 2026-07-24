@@ -78,6 +78,7 @@ async function generate(client: ReturnType<typeof createClient>, userId: string,
     model,
     content: providerResult.content,
     usage: providerResult.usage,
+    raw_provider_id: providerResult.raw_provider_id,
     cost,
     duration,
   };
@@ -89,6 +90,7 @@ async function callProvider(
 ) {
   if (provider === 'anthropic') return callAnthropic(payload);
   if (provider === 'deepseek') return callDeepSeek(payload);
+  if (provider === 'qwen') return callQwen(payload);
   return callOpenAI(payload);
 }
 
@@ -199,6 +201,50 @@ async function callDeepSeek({ prompt, model, parameters }: { prompt: string; mod
   };
 }
 
+async function callQwen({ prompt, model, parameters }: { prompt: string; model: string; parameters: Record<string, unknown> }) {
+  const apiKey = Deno.env.get('DASHSCOPE_API_KEY');
+  if (!apiKey) throw new Error('DASHSCOPE_API_KEY is not configured in Supabase Edge Function Secrets.');
+
+  const baseUrl = String(
+    Deno.env.get('DASHSCOPE_BASE_URL') || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  ).replace(/\/+$/, '');
+  const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: String(parameters.system || '你是 AI Marketing Studio 的内容运营助手。请根据提供的业务上下文输出准确、可执行、结构化的中文结果。'),
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: Number(parameters.temperature ?? 0.55),
+      max_tokens: Number(parameters.max_tokens ?? parameters.max_output_tokens ?? 1600),
+      response_format: parameters.response_format || undefined,
+    }),
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const providerMessage = json?.error?.message || json?.message || `HTTP ${response.status}`;
+    throw new Error(`Qwen request failed: ${providerMessage}`);
+  }
+
+  return {
+    content: extractChatCompletionText(json),
+    usage: normalizeUsage(json?.usage),
+    raw_provider_id: json?.id || json?.request_id || null,
+  };
+}
+
 async function createAuthorizedClient(authHeader: string) {
   const { client } = createServiceClient();
   const jwt = authHeader.replace('Bearer ', '');
@@ -260,6 +306,12 @@ function inferProvider(model: string) {
   const normalized = model.toLowerCase();
   if (normalized.startsWith('claude') || normalized.includes('anthropic')) return 'anthropic';
   if (normalized.startsWith('deepseek') || normalized.includes('deepseek')) return 'deepseek';
+  if (
+    normalized.startsWith('qwen')
+    || normalized.includes('dashscope')
+    || normalized.includes('aliyun')
+    || normalized.includes('bailian')
+  ) return 'qwen';
   return 'openai';
 }
 
@@ -267,6 +319,7 @@ function normalizeProvider(provider: unknown) {
   const normalized = String(provider || '').toLowerCase().trim();
   if (['anthropic', 'claude'].includes(normalized)) return 'anthropic';
   if (['deepseek', 'deepseek-ai'].includes(normalized)) return 'deepseek';
+  if (['qwen', 'dashscope', 'aliyun', 'bailian'].includes(normalized)) return 'qwen';
   if (['openai', 'gpt'].includes(normalized)) return 'openai';
   throw new Error(`Unsupported AI provider: ${provider}`);
 }

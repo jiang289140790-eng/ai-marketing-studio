@@ -210,6 +210,88 @@ export async function saveContentProductionBinding(item, binding) {
   return data;
 }
 
+export async function applyContextAIResult(item, mode, result) {
+  if (!item?.id) throw new Error('缺少内容记录 ID，无法应用 AI 结果。');
+  const client = requireSupabase();
+  const value = result && typeof result === 'object' ? result : {};
+
+  if (item.sourceKey === 'legacyContent') {
+    const generationBrief = normalizeObject(item.raw?.generation_brief);
+    const update = mode === 'rewrite_copy' || mode === 'generate_hook'
+      ? {
+          title: value.title || item.title || null,
+          content_text: value.body || item.body || null,
+          cta: value.cta || item.cta || null,
+          hashtags: normalizeList(value.hashtags || item.tags),
+        }
+      : {
+          generation_brief: {
+            ...generationBrief,
+            context_ai: {
+              ...(generationBrief.context_ai || {}),
+              [mode]: value,
+            },
+          },
+        };
+
+    let query = client.from(TABLES.legacyContent).update(update).eq('id', item.id);
+    if (item.raw?.user_id) query = query.eq('user_id', item.raw.user_id);
+    const { data, error } = await query.select('*').single();
+    if (error) throw new Error(`应用 Context AI 结果失败：${classifyWriteError(error)}`);
+    return data;
+  }
+
+  const update = { updated_at: new Date().toISOString() };
+  if (mode === 'rewrite_copy' || mode === 'generate_hook') {
+    update.title = value.title || item.title || null;
+    update.hook = value.hook || item.hook || null;
+    update.body = value.body || item.body || null;
+    update.cta = value.cta || item.cta || null;
+    update.hashtags = normalizeList(value.hashtags || item.tags);
+    update.keywords = normalizeList(value.keywords || item.keywords);
+    if (value.tone) update.language_style = value.tone;
+  } else if (mode === 'generate_image_prompt') {
+    update.image_requirements = {
+      ...normalizeObject(item.raw?.image_requirements || item.imageRequirements),
+      ...value,
+      context_ai_model: 'qwen',
+    };
+  } else if (mode === 'generate_video_script') {
+    update.video_requirements = {
+      ...normalizeObject(item.raw?.video_requirements || item.videoRequirements),
+      ...value,
+      context_ai_model: 'qwen',
+    };
+  } else if (mode === 'generate_lora_prompt') {
+    const loraInfo = {
+      name: value.character_description || value.visual_identity || 'Context AI LoRA',
+      prompt: value.lora_prompt || '',
+      negative_prompt: value.lora_negative_prompt || '',
+      weight: Number(value.recommended_weight || 0.8),
+      generated: true,
+    };
+    update.image_requirements = {
+      ...normalizeObject(item.raw?.image_requirements || item.imageRequirements),
+      lora_info: loraInfo,
+    };
+    update.video_requirements = {
+      ...normalizeObject(item.raw?.video_requirements || item.videoRequirements),
+      lora_info: loraInfo,
+    };
+  } else if (mode === 'generate_strategy') {
+    update.source_insights = {
+      ...normalizeObject(item.raw?.source_insights || item.sourceInsights),
+      context_ai_strategy: value,
+    };
+  }
+
+  let query = client.from(TABLES.contentPackages).update(update).eq('id', item.id);
+  if (item.raw?.user_id) query = query.eq('user_id', item.raw.user_id);
+  const { data, error } = await query.select('*').single();
+  if (error) throw new Error(`应用 Context AI 结果失败：${classifyWriteError(error)}`);
+  return data;
+}
+
 export function getContentPackages(data) {
   const primary = (data.contentPackages || []).map((item) => ({ ...item, sourceKey: 'contentPackages', sourceLabel: FRIENDLY_SOURCE.contentPackages }));
   const legacy = (data.legacyContent || []).map((item) => ({ ...item, sourceKey: 'legacyContent', sourceLabel: FRIENDLY_SOURCE.legacyContent }));

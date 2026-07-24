@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
+import { ContextAIBox } from '../components/ContextAIBox';
 import { ExecutionButton } from '../components/ExecutionButton';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import {
+  applyContextAIResult,
   countWhere,
   displayText,
   findById,
@@ -13,6 +15,8 @@ import {
   normalizeList,
   saveContentProductionBinding,
 } from '../services/ops-service';
+import { buildContentContext } from '../services/context-ai-service';
+import { createPrompt } from '../services/prompt-service';
 import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
@@ -189,6 +193,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
             data={data}
             assets={assets}
             gateway={gateway}
+            userId={userId}
             onNavigate={onNavigate}
             onRefresh={refreshData}
           />
@@ -201,7 +206,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
   );
 }
 
-function ContentPackageCard({ item, data, assets, gateway, onNavigate, onRefresh }) {
+function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, onRefresh }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
@@ -298,7 +303,7 @@ function ContentPackageCard({ item, data, assets, gateway, onNavigate, onRefresh
       >
         <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
-        <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
+        <ContentPackageStudio item={item} data={data} assets={assets} userId={userId} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
       </details>
     </article>
   );
@@ -330,7 +335,7 @@ function ProductionSteps({ guide, onNext }) {
   );
 }
 
-function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, sectionIds }) {
+function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefresh, sectionIds }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const account = findById(data.accounts, item.accountId);
   const referenceAccount = findById(data.accounts, item.referenceAccountId);
@@ -355,6 +360,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, secti
   const [forceRemote, setForceRemote] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [selectedGeneratedId, setSelectedGeneratedId] = useState('');
+  const [contextAI, setContextAI] = useState({ open: false, mode: 'rewrite_copy' });
   const selectedStrategy = findById(data.strategies, selectedStrategyId) || findById(data.strategies, item.strategyId);
   const selectedCharacter = findById(data.characters, selectedCharacterId) || findById(data.characters, item.characterId);
   const lora = getLoraInfo(selectedCharacter, item);
@@ -453,6 +459,55 @@ function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, secti
     force_remote: forceRemote,
     media_type: activeMediaPanel,
   };
+
+  const contentAIContext = buildContentContext({
+    contentPackage: {
+      ...item,
+      title: draft.title,
+      hook: draft.hook,
+      body: draft.body,
+      cta: draft.cta,
+      tags: normalizeList(draft.tags),
+    },
+    campaign,
+    strategy: selectedStrategy,
+    account,
+    accountProfile: account?.account_profiles?.[0],
+    character: selectedCharacter,
+    lora,
+    assets: selectedAssets.length ? selectedAssets : linkedAssets,
+  });
+
+  function openContextAI(mode) {
+    setContextAI({ open: true, mode });
+  }
+
+  async function handleContextAIApply(result, metadata) {
+    setBindingStatus({ loading: true, message: '', error: false });
+    try {
+      await applyContextAIResult(item, metadata.mode, result);
+      if (['rewrite_copy', 'generate_hook'].includes(metadata.mode)) {
+        setDraft((current) => ({
+          ...current,
+          title: result.title || current.title,
+          hook: result.hook || current.hook,
+          body: result.body || current.body,
+          cta: result.cta || current.cta,
+          tags: normalizeList(result.hashtags || current.tags).join(', '),
+        }));
+      }
+      await onRefresh();
+      setContextAI((current) => ({ ...current, open: false }));
+      setBindingStatus({ loading: false, message: 'Context AI 结果已应用并保存到当前内容。', error: false });
+    } catch (error) {
+      setBindingStatus({ loading: false, message: error?.message || '应用 Context AI 结果失败。', error: true });
+    }
+  }
+
+  async function handleContextAISavePrompt(payload) {
+    await createPrompt(userId, payload);
+    setBindingStatus({ loading: false, message: 'Prompt 已保存到 Prompt 库。', error: false });
+  }
 
   return (
     <div className="inline-content-studio" aria-label={`${item.title} 的内容生成工作室`}>
@@ -575,6 +630,8 @@ function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, secti
           </div>
           <label className="full-editor">给 Agent 的改写意见<textarea rows="3" value={draft.feedback} onChange={(event) => setDraft({ ...draft, feedback: event.target.value })} /></label>
           <div className="button-row">
+            <button className="primary-button" type="button" onClick={() => openContextAI('rewrite_copy')}>AI 优化文案</button>
+            <button className="ghost-button" type="button" onClick={() => openContextAI('generate_hook')}>AI 生成 Hook</button>
             <ExecutionButton
               action="save_draft"
               actionName="保存草稿"
@@ -669,6 +726,16 @@ function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, secti
               <Info label="LoRA 模型" value={lora.name || lora.model || lora.filename} />
               <Info label="LoRA 版本" value={lora.version} />
               <Info label="LoRA 权重" value={lora.weight || lora.strength} />
+              <div className="button-row">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => openContextAI(activeMediaPanel === 'image' ? 'generate_image_prompt' : 'generate_video_script')}
+                >
+                  {activeMediaPanel === 'image' ? 'AI 生成图片提示词' : 'AI 生成视频脚本'}
+                </button>
+                <button className="ghost-button" type="button" onClick={() => openContextAI('generate_lora_prompt')}>AI 补全角色 / LoRA</button>
+              </div>
               {activeMediaPanel === 'image' ? (
                 <Info label="可用于图片" value={booleanText(lora.image_enabled ?? lora.image)} />
               ) : (
@@ -861,6 +928,14 @@ function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, secti
           </ExecutionButton>
           {publishTask && <p className="muted-line">已关联发布任务：{publishTask.id} · {displayText(publishTask.status)}</p>}
         </section>
+        <ContextAIBox
+          open={contextAI.open}
+          mode={contextAI.mode}
+          context={contentAIContext}
+          onApply={handleContextAIApply}
+          onSavePrompt={handleContextAISavePrompt}
+          onClose={() => setContextAI((current) => ({ ...current, open: false }))}
+        />
     </div>
   );
 }

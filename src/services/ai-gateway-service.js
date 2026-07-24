@@ -39,11 +39,11 @@ function formatGatewayError(error) {
   const code = error?.code || 'ai_gateway_error';
   const message = error?.message || error || 'AI Gateway request failed.';
   const labels = {
-    provider_timeout: 'AI Provider 请求超时，请稍后重试或降低输出长度。',
-    provider_quota_or_billing_error: 'AI Provider 额度不足或计费异常，请检查 DeepSeek 账户余额。',
-    model_error: '模型配置错误，请检查 Analysis Agent 的模型名。',
-    provider_auth_error: 'AI Provider Key 未配置或无效，请检查 Supabase Secrets。',
-    provider_rate_limited: 'AI Provider 限流，请稍后重试。',
+    provider_timeout: 'AI 服务响应超时，请稍后重试或缩短生成要求。',
+    provider_quota_or_billing_error: 'AI 服务额度不足或计费状态异常，请检查对应服务商账户。',
+    model_error: '模型不可用或模型名称不正确，请检查模型授权与配置。',
+    provider_auth_error: 'AI 服务密钥未配置或无效，请检查 Supabase Edge Function Secrets。',
+    provider_rate_limited: 'AI 服务请求过于频繁，请稍后重试。',
   };
   return labels[code] ? `${labels[code]} (${message})` : message;
 }

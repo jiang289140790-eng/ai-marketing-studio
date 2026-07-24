@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
+import { ContextAIBox } from '../components/ContextAIBox';
 import { PromptForm } from '../components/PromptForm';
 import { platforms, promptCategories } from '../data/navigation';
 import { listCharacters } from '../services/character-service';
 import { createPrompt, deletePrompt, listPrompts, updatePrompt } from '../services/prompt-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
+import { buildContentContext } from '../services/context-ai-service';
 
 export function PromptLibrary({ userId }) {
   const [prompts, setPrompts] = useState([]);
@@ -15,6 +17,7 @@ export function PromptLibrary({ userId }) {
   const [editing, setEditing] = useState(null);
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState('');
+  const [contextAIOpen, setContextAIOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
@@ -55,6 +58,17 @@ export function PromptLibrary({ userId }) {
     }
   }
 
+  async function handleAISave(payload) {
+    try {
+      await createPrompt(userId, payload);
+      setMessage('AI 生成的 Prompt 已保存。');
+      setContextAIOpen(false);
+      await refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   return (
     <section className="page-stack">
       <div className="section-head">
@@ -63,9 +77,14 @@ export function PromptLibrary({ userId }) {
           <h2>Prompt 库</h2>
           <p>沉淀文本、图像、视频、分析和 Workflow Prompt，可关联角色与平台。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured}>
+        <div className="button-row">
+          <button className="primary-button" type="button" onClick={() => setContextAIOpen(true)} disabled={!isSupabaseConfigured || !userId}>
+            AI 生成 Prompt 模板
+          </button>
+          <button className="ghost-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured}>
           新建 Prompt
-        </button>
+          </button>
+        </div>
       </div>
 
       <div className="filter-bar">
@@ -136,6 +155,23 @@ export function PromptLibrary({ userId }) {
           <p className="draft-preview">{selected.content}</p>
         </aside>
       )}
+      <ContextAIBox
+        open={contextAIOpen}
+        mode="x_copy_prompt"
+        context={buildContentContext({
+          contentPackage: { title: 'Prompt 模板', platform: filters.platform || 'X' },
+          character: characters.find((item) => item.id === filters.character),
+        })}
+        onApply={(result) => handleAISave({
+          title: result.title || 'AI 生成 Prompt',
+          category: result.category || 'general',
+          content: result.content || JSON.stringify(result, null, 2),
+          platform: result.platform || filters.platform || 'X',
+          character: result.character || filters.character || null,
+        })}
+        onSavePrompt={handleAISave}
+        onClose={() => setContextAIOpen(false)}
+      />
     </section>
   );
 }

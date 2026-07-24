@@ -153,6 +153,63 @@ export async function loadWorkflowConfigData() {
   return loadKeys(['comfyWorkflows', 'characters', 'assets', 'legacyAssets', 'workflowRuns']);
 }
 
+export async function saveContentProductionBinding(item, binding) {
+  if (!item?.id) throw new Error('缺少内容记录 ID，无法保存生产关联。');
+
+  const client = requireSupabase();
+  const referenceAssetIds = normalizeIdList(binding.referenceAssetIds);
+  const selectedAssetId = referenceAssetIds[0] || null;
+
+  if (item.sourceKey === 'legacyContent') {
+    let query = client
+      .from(TABLES.legacyContent)
+      .update({
+        character_id: binding.characterId || null,
+        asset_id: selectedAssetId,
+      })
+      .eq('id', item.id);
+
+    if (item.raw?.user_id) query = query.eq('user_id', item.raw.user_id);
+    const { data, error } = await query.select('*').single();
+    if (error) throw new Error(`保存生产关联失败：${classifyWriteError(error)}`);
+    return data;
+  }
+
+  const imageRequirements = normalizeObject(item.raw?.image_requirements || item.imageRequirements);
+  const videoRequirements = normalizeObject(item.raw?.video_requirements || item.videoRequirements);
+  const productionBinding = {
+    character_id: binding.characterId || null,
+    lora_id: binding.loraId || null,
+    lora_info: binding.loraInfo || null,
+    reference_asset_ids: referenceAssetIds,
+    reference_source: binding.referenceSource || '',
+    generation_mode: binding.generationMode || 'character_lora_video',
+  };
+
+  let query = client
+    .from(TABLES.contentPackages)
+    .update({
+      strategy_plan_id: binding.strategyId || null,
+      image_requirements: {
+        ...imageRequirements,
+        ...productionBinding,
+        media_type: 'image',
+      },
+      video_requirements: {
+        ...videoRequirements,
+        ...productionBinding,
+        media_type: 'video',
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', item.id);
+
+  if (item.raw?.user_id) query = query.eq('user_id', item.raw.user_id);
+  const { data, error } = await query.select('*').single();
+  if (error) throw new Error(`保存生产关联失败：${classifyWriteError(error)}`);
+  return data;
+}
+
 export function getContentPackages(data) {
   const primary = (data.contentPackages || []).map((item) => ({ ...item, sourceKey: 'contentPackages', sourceLabel: FRIENDLY_SOURCE.contentPackages }));
   const legacy = (data.legacyContent || []).map((item) => ({ ...item, sourceKey: 'legacyContent', sourceLabel: FRIENDLY_SOURCE.legacyContent }));
@@ -166,13 +223,39 @@ export function getContentPackages(data) {
       return true;
     })
     .map((item) => {
+      const imageRequirements = normalizeObject(item.image_requirements);
+      const videoRequirements = normalizeObject(item.video_requirements);
+      const hasImageRequirements = Object.keys(imageRequirements).length > 0;
+      const hasVideoRequirements = Object.keys(videoRequirements).length > 0;
       const assetRequirement = firstValue(
         item.asset_requirement,
         item.visual_brief,
         item.media_brief,
-        item.image_requirements,
-        item.video_requirements,
+        hasImageRequirements ? imageRequirements : null,
+        hasVideoRequirements ? videoRequirements : null,
         item.raw_requirements,
+      );
+      const embeddedCharacter = firstValue(
+        imageRequirements.character_id,
+        videoRequirements.character_id,
+        imageRequirements.character?.id,
+        videoRequirements.character?.id,
+      );
+      const embeddedLora = firstValue(
+        imageRequirements.lora_info,
+        videoRequirements.lora_info,
+        imageRequirements.lora,
+        videoRequirements.lora,
+      );
+      const referenceAssetIds = firstNonEmptyIdList(
+        item.reference_asset_ids,
+        item.reference_assets,
+        item.asset_ids,
+        imageRequirements.reference_asset_ids,
+        videoRequirements.reference_asset_ids,
+        imageRequirements.reference_assets,
+        videoRequirements.reference_assets,
+        item.sourceKey === 'legacyContent' ? item.asset_id : null,
       );
 
       return {
@@ -196,14 +279,16 @@ export function getContentPackages(data) {
         replicateStrategy: item.replicate_strategy || item.ai_recommendation || item.strategy || '',
         publishSuggestion: item.publish_suggestion || item.scheduling_recommendation || item.best_time || '',
         assetRequirement,
-        imageRequirements: firstValue(item.image_requirements, assetRequirement?.image, item.visual_brief),
-        videoRequirements: firstValue(item.video_requirements, assetRequirement?.video, item.video_brief),
+        imageRequirements: firstValue(hasImageRequirements ? imageRequirements : null, assetRequirement?.image, item.visual_brief),
+        videoRequirements: firstValue(hasVideoRequirements ? videoRequirements : null, assetRequirement?.video, item.video_brief),
         assetId: item.asset_id || item.final_asset_id,
         finalAssetId: item.final_asset_id || item.asset_id,
-        characterId: item.character_id,
-        loraId: item.lora_id || item.lora?.id || item.lora_info?.id,
-        loraInfo: item.lora_info || item.lora || null,
-        referenceAssetIds: normalizeIdList(item.reference_asset_ids || item.reference_assets || item.asset_ids),
+        characterId: item.character_id || embeddedCharacter,
+        loraId: item.lora_id || item.lora?.id || item.lora_info?.id || embeddedLora?.id,
+        loraInfo: item.lora_info || item.lora || embeddedLora || null,
+        referenceAssetIds,
+        referenceSource: firstValue(imageRequirements.reference_source, videoRequirements.reference_source, item.reference_source),
+        generationMode: firstValue(videoRequirements.generation_mode, imageRequirements.generation_mode),
         copyConfirmed: Boolean(item.copy_confirmed || item.final_copy_confirmed || item.copy_approved),
         assetConfirmed: Boolean(item.asset_confirmed || item.final_asset_confirmed || item.asset_approved),
         approvedForPublishing: Boolean(item.approved_for_publishing || item.approval_status === 'approved' || item.review_status === 'approved'),
@@ -308,6 +393,26 @@ function normalizeIdList(value) {
   return normalizeList(value).map((item) => (typeof item === 'object' ? item.id : item)).filter(Boolean);
 }
 
+export function normalizeObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function firstNonEmptyIdList(...values) {
+  for (const value of values) {
+    const ids = normalizeIdList(value);
+    if (ids.length) return ids;
+  }
+  return [];
+}
+
 function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '') || null;
 }
@@ -318,4 +423,12 @@ function classifyReadError(error) {
   if (/permission denied|row-level security|rls|not authorized|JWT/i.test(message)) return `权限或 RLS 拒绝：${message}`;
   if (/Failed to fetch|network|timeout/i.test(message)) return `网络错误：${message}`;
   return message;
+}
+
+function classifyWriteError(error) {
+  const message = error?.message || String(error);
+  if (/permission denied|row-level security|rls|not authorized|JWT/i.test(message)) return '当前账号没有修改这条内容的权限。';
+  if (/does not exist|schema cache|Could not find/i.test(message)) return '线上数据结构与当前页面不兼容。';
+  if (/Failed to fetch|network|timeout/i.test(message)) return '网络连接异常，请稍后重试。';
+  return '保存未完成，请检查必填项后重试。';
 }

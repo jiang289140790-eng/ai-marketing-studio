@@ -24,6 +24,14 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+}
+
 html {
   background: var(--bg);
   overflow-x: hidden;
@@ -32,6 +40,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
+  overflow: hidden;
   overflow-x: hidden;
   background:
     radial-gradient(circle at 20% 0%, rgba(124, 58, 237, 0.22), transparent 34rem),
@@ -53,9 +62,12 @@ a {
 
 .app-shell {
   display: grid;
-  min-height: 100vh;
   grid-template-columns: 292px minmax(0, 1fr);
   width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   max-width: 100vw;
 }
 
@@ -67,6 +79,7 @@ a {
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  min-height: 0;
   overflow: hidden;
   border-right: 1px solid var(--line);
   background: rgba(2, 6, 23, 0.96);
@@ -193,7 +206,11 @@ small {
 .main-shell {
   min-width: 0;
   width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 28px 32px 60px;
 }
 
@@ -2170,6 +2187,14 @@ textarea {
   min-width: 0;
 }
 
+.content-workspace-list,
+.content-package-card,
+.generation-studio,
+.inline-content-studio {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .content-card-meta,
 .requirement-grid,
 .editor-grid {
@@ -2506,6 +2531,73 @@ textarea {
   color: #fff;
 }
 
+.production-binding-block {
+  display: grid;
+  gap: 18px;
+  border-color: rgba(124, 58, 237, 0.34);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.1), rgba(34, 211, 238, 0.035));
+}
+
+.production-binding-heading,
+.production-binding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.production-binding-heading h3 {
+  margin: 4px 0 8px;
+}
+
+.production-binding-heading p,
+.production-binding-footer span {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.production-binding-selectors {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.production-binding-selectors label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.production-binding-selectors select {
+  width: 100%;
+  min-width: 0;
+}
+
+.production-binding-preview {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.production-binding-preview .character-preview {
+  min-height: 150px;
+}
+
+.production-binding-assets {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.production-binding-footer > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 .editor-grid label,
 .full-editor {
   display: grid;
@@ -2569,15 +2661,16 @@ textarea {
   padding: 14px;
 }
 
-.asset-source-grid,
-.generation-result-layout {
+.asset-source-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.8fr) minmax(260px, 0.8fr);
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
   gap: 16px;
 }
 
 .generation-result-layout {
+  display: grid;
   grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+  gap: 16px;
 }
 
 .asset-selector-grid {
@@ -2991,6 +3084,16 @@ textarea {
 .knowledge-content { white-space: pre-line; }
 
 @media (max-width: 780px) {
+  body { overflow-y: auto; }
+  .app-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  .main-shell {
+    height: auto;
+    overflow: visible;
+  }
   .sidebar {
     position: sticky;
     z-index: 40;
@@ -3031,6 +3134,12 @@ textarea {
   .knowledge-selectors { display: grid; }
   .connected-account-list > div { align-items: flex-start; flex-direction: column; }
   .connected-account-list span { text-align: left; }
+  .production-binding-heading,
+  .production-binding-footer { align-items: flex-start; flex-direction: column; }
+  .production-binding-selectors,
+  .production-binding-preview,
+  .asset-source-grid { grid-template-columns: 1fr; }
+  .production-binding-footer .primary-button { width: 100%; }
   .character-detail-overlay { padding: 0; }
   .character-detail-panel {
     width: 100%;

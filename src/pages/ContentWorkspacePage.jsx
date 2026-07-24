@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { ExecutionButton } from '../components/ExecutionButton';
 import { StatCard } from '../components/StatCard';
@@ -11,6 +11,7 @@ import {
   getContentPackages,
   loadContentWorkspaceData,
   normalizeList,
+  saveContentProductionBinding,
 } from '../services/ops-service';
 import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
@@ -93,14 +94,21 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
   const [hideTests, setHideTests] = useState(true);
   const [gateway, setGateway] = useState({ loading: true, connected: false });
 
-  useEffect(() => {
-    if (!userId || !isSupabaseConfigured) return undefined;
+  const refreshData = useCallback(async () => {
+    if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
-    loadContentWorkspaceData()
-      .then((nextData) => setData({ ...EMPTY, ...nextData }))
-      .finally(() => setLoading(false));
-    return undefined;
+    try {
+      const nextData = await loadContentWorkspaceData();
+      setData({ ...EMPTY, ...nextData });
+    } finally {
+      setLoading(false);
+    }
   }, [userId]);
+
+  useEffect(() => {
+    refreshData();
+    return undefined;
+  }, [refreshData]);
 
   useEffect(() => {
     if (!userId) return undefined;
@@ -182,6 +190,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
             assets={assets}
             gateway={gateway}
             onNavigate={onNavigate}
+            onRefresh={refreshData}
           />
         )) : (
           <EmptyState title="没有匹配的内容包" description="请更换工作流筛选，或关闭“隐藏测试内容”后再查看。" />
@@ -192,7 +201,7 @@ export function ContentWorkspacePage({ userId, onNavigate }) {
   );
 }
 
-function ContentPackageCard({ item, data, assets, gateway, onNavigate }) {
+function ContentPackageCard({ item, data, assets, gateway, onNavigate, onRefresh }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
@@ -289,7 +298,7 @@ function ContentPackageCard({ item, data, assets, gateway, onNavigate }) {
       >
         <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
-        <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} sectionIds={sectionIds} />
+        <ContentPackageStudio item={item} data={data} assets={assets} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
       </details>
     </article>
   );
@@ -321,15 +330,16 @@ function ProductionSteps({ guide, onNext }) {
   );
 }
 
-function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
+function ContentPackageStudio({ item, data, assets, onNavigate, onRefresh, sectionIds }) {
   const campaign = findById(data.campaigns, item.campaignId);
-  const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
   const referenceAccount = findById(data.accounts, item.referenceAccountId);
+  const [selectedStrategyId, setSelectedStrategyId] = useState(item.strategyId || '');
   const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || '');
   const [selectedAssetIds, setSelectedAssetIds] = useState(item.referenceAssetIds || []);
+  const [bindingStatus, setBindingStatus] = useState({ loading: false, message: '', error: false });
   const [activeMediaPanel, setActiveMediaPanel] = useState(null);
-  const [videoMode, setVideoMode] = useState('character_lora_video');
+  const [videoMode, setVideoMode] = useState(item.generationMode || 'character_lora_video');
   const [draft, setDraft] = useState(() => ({
     title: item.title || '',
     hook: item.hook || '',
@@ -340,11 +350,12 @@ function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
     feedback: '',
   }));
   const [xUrl, setXUrl] = useState('');
-  const [referenceSource, setReferenceSource] = useState(item.sourceAccount || referenceAccount?.account_name || '');
+  const [referenceSource, setReferenceSource] = useState(item.referenceSource || item.sourceAccount || referenceAccount?.account_name || '');
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [forceRemote, setForceRemote] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [selectedGeneratedId, setSelectedGeneratedId] = useState('');
+  const selectedStrategy = findById(data.strategies, selectedStrategyId) || findById(data.strategies, item.strategyId);
   const selectedCharacter = findById(data.characters, selectedCharacterId) || findById(data.characters, item.characterId);
   const lora = getLoraInfo(selectedCharacter, item);
   const linkedAssets = assetsForContent(item, assets);
@@ -376,6 +387,25 @@ function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
       : selectedAssets.length === 0 && linkedAssets.length === 0
         ? '请先确认至少一个可用素材'
         : undefined;
+  const referenceAssetKey = normalizeList(item.referenceAssetIds).join('|');
+
+  useEffect(() => {
+    setSelectedStrategyId(item.strategyId || '');
+    setSelectedCharacterId(item.characterId || '');
+    setSelectedAssetIds(item.referenceAssetIds || []);
+    setReferenceSource(item.referenceSource || item.sourceAccount || referenceAccount?.account_name || '');
+    setVideoMode(item.generationMode || 'character_lora_video');
+  }, [
+    item.id,
+    item.strategyId,
+    item.characterId,
+    item.generationMode,
+    item.referenceAssetIds,
+    item.referenceSource,
+    item.sourceAccount,
+    referenceAccount?.account_name,
+    referenceAssetKey,
+  ]);
 
   function toggleAsset(assetId) {
     setSelectedAssetIds((current) => (
@@ -383,10 +413,33 @@ function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
     ));
   }
 
+  async function saveProductionBinding() {
+    setBindingStatus({ loading: true, message: '', error: false });
+    try {
+      await saveContentProductionBinding(item, {
+        strategyId: selectedStrategyId || null,
+        characterId: selectedCharacter?.id || null,
+        loraId: item.loraId || lora.id || null,
+        loraInfo: hasLora(lora) ? lora : null,
+        referenceAssetIds: selectedAssetIds,
+        referenceSource,
+        generationMode: videoMode,
+      });
+      await onRefresh();
+      setBindingStatus({ loading: false, message: '生产关联已保存，内容包状态已刷新。', error: false });
+    } catch (error) {
+      setBindingStatus({
+        loading: false,
+        message: error?.message || '生产关联保存失败，请稍后重试。',
+        error: true,
+      });
+    }
+  }
+
   const generationPayload = {
     content_package_id: item.id,
     campaign_id: item.campaignId,
-    strategy_id: item.strategyId,
+    strategy_id: selectedStrategyId || item.strategyId,
     character_id: selectedCharacter?.id,
     lora_id: item.loraId || lora.id,
     lora_weight: lora.weight || lora.strength || 0.8,
@@ -410,13 +463,99 @@ function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
             <Info label="标题" value={item.title} />
             <Info label="平台" value={item.platform} />
             <Info label="Campaign" value={campaign?.name || campaign?.title} />
-            <Info label="策略" value={strategy?.name || strategy?.title} />
+            <Info label="策略" value={selectedStrategy?.name || selectedStrategy?.title} />
             <Info label="目标账号" value={account?.account_name || account?.username} />
             <Info label="来源账号" value={referenceAccount?.account_name || item.sourceAccount} />
             <Info label="创建时间" value={formatDate(item.createdAt)} />
             <Info label="当前状态" value={item.status} />
             <Info label="发布队列" value={publishTask ? `${publishTask.status || 'pending'} · ${publishTask.id}` : '尚未进入发布队列'} />
           </div>
+        </section>
+
+        <section className="workspace-block production-binding-block">
+          <div className="production-binding-heading">
+            <div>
+              <p className="eyebrow">PRODUCTION BINDING</p>
+              <h3>生产关联设置</h3>
+              <p>保存后，策略、角色、LoRA 和参考素材会写入当前内容包，刷新页面后仍会保留。</p>
+            </div>
+            <span className={`status-badge ${selectedCharacter && hasLora(lora) ? 'connected' : 'pending'}`}>
+              {selectedCharacter && hasLora(lora) ? '角色 LoRA 可用' : '等待角色 LoRA'}
+            </span>
+          </div>
+
+          <div className="production-binding-selectors">
+            <label>关联策略
+              <select value={selectedStrategyId} onChange={(event) => setSelectedStrategyId(event.target.value)}>
+                <option value="">不关联策略</option>
+                {(data.strategies || []).map((nextStrategy) => (
+                  <option key={nextStrategy.id} value={nextStrategy.id}>
+                    {nextStrategy.name || nextStrategy.title || nextStrategy.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>人物角色
+              <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
+                <option value="">请选择角色</option>
+                {(data.characters || []).filter((character) => character.status !== 'archived').map((character) => {
+                  const characterLora = getLoraInfo(character, item);
+                  return (
+                    <option key={character.id} value={character.id}>
+                      {character.display_name || character.name || character.id} · {displayText(characterLora.name || characterLora.model, '未绑定 LoRA')}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+          </div>
+
+          <div className="production-binding-preview">
+            <div className="character-preview">
+              {selectedCharacter?.avatar || selectedCharacter?.avatar_url
+                ? <img src={selectedCharacter.avatar || selectedCharacter.avatar_url} alt="" />
+                : <span>角色预览</span>}
+            </div>
+            <div className="content-card-meta">
+              <Info label="人物角色" value={selectedCharacter?.display_name || selectedCharacter?.name} />
+              <Info label="LoRA 模型" value={lora.name || lora.model || lora.filename} />
+              <Info label="LoRA 版本" value={lora.version} />
+              <Info label="默认权重" value={lora.weight || lora.strength} />
+              <Info label="图片生成" value={booleanText(lora.image_enabled ?? lora.image)} />
+              <Info label="视频生成" value={booleanText(lora.video_enabled ?? lora.video)} />
+            </div>
+          </div>
+
+          <div>
+            <h4>参考素材</h4>
+            <div className="asset-selector-grid production-binding-assets">
+              {referenceAssets.slice(0, 24).map((asset) => (
+                <button
+                  key={asset.id}
+                  className={`asset-select-card ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`}
+                  type="button"
+                  aria-pressed={selectedAssetIds.includes(asset.id)}
+                  onClick={() => toggleAsset(asset.id)}
+                >
+                  <AssetPreview asset={asset} />
+                  <strong>{asset.name}</strong>
+                  <small>{asset.type} · {asset.source || '素材库'}</small>
+                </button>
+              ))}
+              {!referenceAssets.length && <div className="empty-card-inline">素材库中暂无可用的图片或视频参考素材。</div>}
+            </div>
+          </div>
+
+          <div className="production-binding-footer">
+            <div>
+              <strong>已选 {selectedAssetIds.length} 个参考素材</strong>
+              <span>{selectedStrategy ? `策略：${selectedStrategy.name || selectedStrategy.title}` : '未选择策略'} · {selectedCharacter ? `角色：${selectedCharacter.display_name || selectedCharacter.name}` : '未选择角色'}</span>
+            </div>
+            <button className="primary-button" type="button" disabled={bindingStatus.loading} onClick={saveProductionBinding}>
+              {bindingStatus.loading ? '正在保存...' : '保存生产关联'}
+            </button>
+          </div>
+          {bindingStatus.message && <div className={`notice ${bindingStatus.error ? 'error' : ''}`}>{bindingStatus.message}</div>}
         </section>
 
         <section className="workspace-block" id={sectionIds.copy}>
@@ -520,23 +659,7 @@ function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
             </section>
 
         <section className="workspace-block">
-          <h3>人物角色与 LoRA</h3>
-          <div className="editor-grid">
-            <label>人物角色
-              <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
-                <option value="">请选择角色</option>
-                {(data.characters || []).filter((character) => character.status !== 'archived').map((character) => {
-                  const characterLora = getLoraInfo(character, item);
-                  return (
-                    <option key={character.id} value={character.id}>
-                      {character.display_name || character.name || character.id} · {displayText(characterLora.name || characterLora.model, '未绑定 LoRA')}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <Info label="来源账号" value={item.sourceAccount || referenceAccount?.account_name} />
-          </div>
+          <h3>当前关联角色与 LoRA</h3>
           <div className="character-lora-panel">
             <div className="character-preview">
               {selectedCharacter?.avatar || selectedCharacter?.avatar_url ? <img src={selectedCharacter.avatar || selectedCharacter.avatar_url} alt="" /> : <span>角色预览</span>}
@@ -585,24 +708,6 @@ function ContentPackageStudio({ item, data, assets, onNavigate, sectionIds }) {
             </label>
           </div>
           <div className="asset-source-grid">
-            <div>
-              <h4>从素材库选择</h4>
-              <div className="asset-selector-grid">
-                {referenceAssets.slice(0, 24).map((asset) => (
-                  <button
-                    key={asset.id}
-                    className={`asset-select-card ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`}
-                    type="button"
-                    onClick={() => toggleAsset(asset.id)}
-                  >
-                    <AssetPreview asset={asset} />
-                    <strong>{asset.name}</strong>
-                    <small>{asset.type} · {asset.source || '素材库'} · {formatDate(asset.createdAt)}</small>
-                    <small>权限：{displayText(asset.rightsStatus, '未确认')} · 使用：{asset.usedByContentId ? '已被引用' : '未占用'}</small>
-                  </button>
-                ))}
-              </div>
-            </div>
             <div>
               <h4>上传本地文件</h4>
               <label className="upload-dropzone">

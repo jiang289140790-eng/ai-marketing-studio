@@ -54,12 +54,12 @@ export function PromptForm({ initialValue, characters = [], onSubmit, onCancel }
           </select>
         </label>
         <label className="wide-field">
-          Prompt 内容
+          提示词内容
           <textarea value={form.content} onChange={(event) => update('content', event.target.value)} required />
         </label>
       </div>
       <div className="button-row">
-        <button className="primary-button" type="submit">保存 Prompt</button>
+        <button className="primary-button" type="submit">保存提示词</button>
         <button className="ghost-button" type="button" onClick={onCancel}>取消</button>
       </div>
     </form>

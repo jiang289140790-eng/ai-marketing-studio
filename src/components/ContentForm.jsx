@@ -113,9 +113,9 @@ export function ContentForm({ initialValue, assets = [], characters = [], prompt
           </select>
         </label>
         <label>
-          关联 Prompt
+          关联提示词
           <select value={form.prompt_id || ''} onChange={(event) => update('prompt_id', event.target.value)}>
-            <option value="">不关联 Prompt</option>
+            <option value="">不关联提示词</option>
             {prompts.map((prompt) => (
               <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
             ))}

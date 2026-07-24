@@ -28,12 +28,12 @@ export function Header({ title }) {
   return (
     <header className="header">
       <div>
-        <p className="eyebrow">Personal AI Ops Workspace</p>
+        <p className="eyebrow">个人 AI 运营工作台</p>
         <h1>{title}</h1>
       </div>
 
       <div className="header-actions">
-        {!isSupabaseConfigured && <span className="config-pill warning">等待 Supabase 配置</span>}
+        {!isSupabaseConfigured && <span className="config-pill warning">等待数据服务配置</span>}
         {user ? (
           <>
             <span className="status-badge connected">已登录</span>

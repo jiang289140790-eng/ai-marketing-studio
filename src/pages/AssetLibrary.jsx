@@ -116,9 +116,9 @@ export function AssetLibrary({ userId, detailId, onNavigate }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Asset Factory</p>
+          <p className="eyebrow">素材工厂</p>
           <h2>素材库</h2>
-          <p>统一管理图片、视频、音频、Prompt、Workflow 和 LoRA。后续可以继续接入 Civitai 模型资产与 ComfyUI 工作流。</p>
+          <p>统一管理图片、视频、音频、提示词、工作流和角色模型（LoRA）。后续可以继续接入 Civitai 模型资产与 ComfyUI 工作流。</p>
         </div>
         <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
           新建资产
@@ -126,7 +126,7 @@ export function AssetLibrary({ userId, detailId, onNavigate }) {
       </div>
 
       <div className="filter-bar">
-        <input placeholder="搜索名称、Prompt、模型" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
+        <input placeholder="搜索名称、提示词、模型" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
         <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}>
           <option value="">全部类型</option>
           {assetTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
@@ -168,7 +168,7 @@ export function AssetLibrary({ userId, detailId, onNavigate }) {
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的素材库。" />
       ) : assets.length === 0 ? (
-        <EmptyState title="暂无素材" description="上传文件，或者保存一个 Workflow / LoRA / Prompt 资产。" />
+        <EmptyState title="暂无素材" description="上传文件，或者保存一个工作流、角色模型或提示词资产。" />
       ) : (
         <div className="asset-grid">
           {assets.map((asset) => (
@@ -202,7 +202,7 @@ export function AssetLibrary({ userId, detailId, onNavigate }) {
         <aside className="detail-panel">
           <div className="section-head">
             <div>
-              <p className="eyebrow">Asset Preview</p>
+              <p className="eyebrow">素材预览</p>
               <h2>{selected.name}</h2>
             </div>
             <button className="ghost-button" type="button" onClick={() => {
@@ -218,7 +218,7 @@ export function AssetLibrary({ userId, detailId, onNavigate }) {
             <div><dt>创建时间</dt><dd>{formatDate(selected.created_at)}</dd></div>
           </dl>
           {selected.prompt && <p className="draft-preview">{selected.prompt}</p>}
-          {selected.workflow && <p className="draft-preview">这个素材已绑定 Workflow 配置，可在内容工作台中作为生成流程使用。</p>}
+          {selected.workflow && <p className="draft-preview">这个素材已绑定工作流配置，可在内容工作台中作为生成流程使用。</p>}
         </aside>
       )}
     </section>

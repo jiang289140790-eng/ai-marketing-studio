@@ -77,7 +77,7 @@ export function CommandCenter({ userId, onNavigate }) {
   if (!isSupabaseConfigured) {
     return (
       <section className="page-stack">
-        <EmptyState title="等待 Supabase 配置" description="配置完成后，Command Center 会读取真实运营数据。" />
+        <EmptyState title="等待数据服务配置" description="配置完成后，AI 运营指挥中心会读取真实运营数据。" />
       </section>
     );
   }
@@ -86,7 +86,7 @@ export function CommandCenter({ userId, onNavigate }) {
     return (
       <section className="page-stack">
         <div className="hero-panel command-hero">
-          <p className="eyebrow">AI Marketing OS</p>
+          <p className="eyebrow">AI 营销操作系统</p>
           <h2>请先登录你的个人运营工作台</h2>
           <p>登录后，这里会直接显示待审批策略、待审核内容、生成任务、待发布审批、失败任务、最近账号智能报告和知识沉淀。</p>
         </div>
@@ -112,7 +112,7 @@ export function CommandCenter({ userId, onNavigate }) {
   ];
   const actionItems = [
     { label: '待审批策略', description: '确认 AI 生成的定位、内容支柱和执行计划。', value: summary.pendingStrategies, page: 'campaigns', button: '去审批策略' },
-    { label: '待审核内容', description: '检查文案、CTA、角色 LoRA 与最终素材。', value: summary.pendingContent, page: 'workspace', button: '去审核内容' },
+    { label: '待审核内容', description: '检查文案、行动引导、角色模型与最终素材。', value: summary.pendingContent, page: 'workspace', button: '去审核内容' },
     { label: '待确认发布', description: '确认发布时间、目标账号和发布安全条件。', value: summary.pendingPublish, page: 'publish', button: '去发布队列' },
     { label: '失败任务', description: '查看失败原因并决定重试、重生成或人工处理。', value: summary.failedTasks, page: 'health', button: '查看异常', danger: true },
   ];
@@ -137,7 +137,7 @@ export function CommandCenter({ userId, onNavigate }) {
       emoji: '⚡',
       title: '推荐内容模式',
       text: recommendationText(bestContentMemory, ['pattern', 'winning_pattern', 'recommendation', 'summary', 'description']),
-      empty: '积累内容表现后，这里会推荐成功率最高的 Hook、结构和 CTA 模式。',
+      empty: '积累内容表现后，这里会推荐成功率最高的开场钩子、结构和行动引导模式。',
     },
   ];
 
@@ -149,10 +149,10 @@ export function CommandCenter({ userId, onNavigate }) {
     <section className="page-stack">
       <div className="hero-panel command-hero">
         <div>
-          <p className="eyebrow">AI Command Center</p>
+          <p className="eyebrow">AI 运营指挥中心</p>
           <h2>你管理方向，AI 员工负责推进每天的运营流水线</h2>
           <p>
-            线上站点已按本地 Command Center 的真实流程重构：从 Campaign 目标，到策略审批、内容生成与审核、素材/角色选择、发布安全审批，
+            线上站点已按本地运营指挥中心的真实流程重构：从运营活动目标，到策略审批、内容生成与审核、素材和角色选择、发布安全审批，
             最后沉淀到账号画像和知识库。页面只暴露业务决策，不再把数据库表和技术模块摊开给你操作。
           </p>
         </div>
@@ -165,13 +165,13 @@ export function CommandCenter({ userId, onNavigate }) {
           ) : gatewayStatus.connected ? (
             <div className="execution-hero-state connected">
               <strong>执行服务已连接</strong>
-              <span>可以从具体 Campaign、内容或发布任务发起受控动作。</span>
+              <span>可以从具体运营活动、内容或发布任务发起受控动作。</span>
               <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>查看待处理内容</button>
             </div>
           ) : (
             <div className="execution-hero-state unavailable">
               <strong>执行服务暂未连接</strong>
-              <span>请先完成 MCP Bridge 部署，之后才能运行每日 AI 运营。</span>
+              <span>请先完成 MCP 安全连接服务部署，之后才能运行每日 AI 运营。</span>
               <div className="button-row">
                 <button className="ghost-button" type="button" onClick={scrollToGateway}>查看执行网关状态</button>
                 <button className="ghost-button" type="button" onClick={() => onNavigate('connections')}>查看连接详情</button>
@@ -188,9 +188,9 @@ export function CommandCenter({ userId, onNavigate }) {
       <section className="daily-ops-panel">
         <div className="section-head compact-head">
           <div>
-            <p className="eyebrow">AI DAILY OPS</p>
+            <p className="eyebrow">每日 AI 运营</p>
             <h3>今日运营工作流</h3>
-            <p>实时读取 Supabase 状态，快速判断流程推进到哪一步、哪里需要人工确认。</p>
+            <p>实时读取数据服务状态，快速判断流程推进到哪一步、哪里需要人工确认。</p>
           </div>
           <StatusBadge status={summary.failedTasks ? 'failed' : summary.generating ? 'running' : 'success'} />
         </div>
@@ -200,15 +200,15 @@ export function CommandCenter({ userId, onNavigate }) {
       </section>
 
       <div className="stat-grid compact">
-        <StatCard label="活跃 Campaign" value={loading ? '-' : summary.activeCampaigns} hint="当前运营目标" />
+        <StatCard label="活跃运营活动" value={loading ? '-' : summary.activeCampaigns} hint="当前运营目标" />
         <StatCard label="待你审批" value={loading ? '-' : summary.pendingStrategies + summary.pendingContent + summary.pendingPublish} hint="策略、内容与发布" />
         <StatCard label="授权连接记录" value={loading ? '-' : summary.connectedAccounts} hint="账号授权不等于 MCP / 发布能力" />
-        <StatCard label="知识库条目" value={loading ? '-' : summary.knowledge.length} hint="Knowledge Vault 与运营记忆" />
+        <StatCard label="知识库条目" value={loading ? '-' : summary.knowledge.length} hint="知识库与运营记忆" />
       </div>
 
       <section className="attention-panel">
         <div className="section-head compact-head">
-          <div><p className="eyebrow">ACTION CENTER</p><h3>需要你处理</h3></div>
+          <div><p className="eyebrow">待办中心</p><h3>需要你处理</h3></div>
           <span className="attention-total">{actionItems.reduce((total, item) => total + item.value, 0)} 项待办</span>
         </div>
         <div className="attention-grid">
@@ -218,7 +218,7 @@ export function CommandCenter({ userId, onNavigate }) {
 
       <section className="recommendation-panel">
         <div className="section-head compact-head">
-          <div><p className="eyebrow">AI NEXT MOVE</p><h3>下一步建议</h3><p>从账号报告、策略记忆和内容记忆中提取最新可执行建议。</p></div>
+          <div><p className="eyebrow">AI 下一步行动</p><h3>下一步建议</h3><p>从账号报告、策略记忆和内容记忆中提取最新可执行建议。</p></div>
           <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
         </div>
         <div className="recommendation-grid">
@@ -229,10 +229,10 @@ export function CommandCenter({ userId, onNavigate }) {
       <div className="dashboard-grid">
         <section className="table-card mini-panel">
           <div className="panel-title">
-            <h3>最近 Agent / Workflow</h3>
+            <h3>最近智能体与工作流</h3>
             <button className="ghost-button" type="button" onClick={() => onNavigate('health')}>系统状态</button>
           </div>
-          <RecordList rows={latestRuns} empty="还没有 Agent 或 Workflow 执行记录。" />
+          <RecordList rows={latestRuns} empty="还没有智能体或工作流执行记录。" />
         </section>
 
         <section className="table-card mini-panel">
@@ -260,7 +260,7 @@ function DataReadErrors({ errors = [] }) {
   return (
     <div className="error-banner">
       <strong>数据读取异常</strong>
-      <span>部分统计可能不完整，请优先检查 Supabase 表结构、RLS 或网络。</span>
+      <span>部分统计可能不完整，请优先检查数据表权限或网络连接。</span>
       <ul>
         {errors.slice(0, 5).map((error) => (
           <li key={`${error.key}-${error.message}`}>{error.message}</li>

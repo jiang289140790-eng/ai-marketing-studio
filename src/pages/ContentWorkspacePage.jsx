@@ -40,7 +40,7 @@ const VIDEO_MODES = [
   ['first_frame', '首帧生视频'],
   ['first_last_frame', '首尾帧生视频'],
   ['reference_video', '参考视频生成'],
-  ['character_lora_video', '角色 LoRA 视频'],
+  ['character_lora_video', '角色模型视频'],
   ['multi_shot', '多镜头分段生成'],
 ];
 
@@ -66,8 +66,8 @@ const IMAGE_REQUIREMENT_FIELDS = [
   ['color', '色调'],
   ['aspect_ratio', '图片比例'],
   ['size', '图片尺寸'],
-  ['lora', 'LoRA'],
-  ['lora_weight', 'LoRA 权重'],
+  ['lora', '角色模型（LoRA）'],
+  ['lora_weight', '角色模型权重'],
   ['positive_prompt', '正向提示词'],
   ['negative_prompt', '负向提示词'],
   ['reference_assets', '参考素材'],
@@ -86,7 +86,7 @@ const VIDEO_REQUIREMENT_FIELDS = [
   ['first_frame', '首帧要求'],
   ['last_frame', '尾帧要求'],
   ['reference_video', '参考视频'],
-  ['lora', 'LoRA'],
+  ['lora', '角色模型（LoRA）'],
   ['model', '生成模型'],
   ['negative_prompt', 'negative prompt'],
 ];
@@ -140,7 +140,7 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
   ), [contentPackages, detailId, filteredPackages]);
 
   if (!isSupabaseConfigured) {
-    return <EmptyState title="等待 Supabase 配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
+    return <EmptyState title="等待数据服务配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
   }
 
   if (!userId) {
@@ -151,9 +151,9 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
     <section className="page-stack content-workspace-page">
       <div className="hero-panel">
         <p className="eyebrow">内容工作台</p>
-        <h2>内容审核、角色 LoRA、素材引用、图片/视频生成放在同一个工作流里</h2>
+        <h2>内容审核、角色模型、素材引用、图片和视频生成都在同一个流程里</h2>
         <p>
-          这里不是简化版列表。每张内容卡都会连接 Campaign、策略、账号、角色、LoRA、素材、生成任务和发布队列。
+          每张内容卡都会连接运营活动、策略、账号、角色、角色模型（LoRA）、素材、生成任务和发布队列。
           你从这里完成：查看内容 → 补素材 → 生成图片/视频 → 人工审核 → 进入发布。
         </p>
         <div className="button-row">
@@ -165,14 +165,14 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
       <div className="stat-grid compact">
         <StatCard label="内容包" value={loading ? '-' : contentPackages.length} hint="content_packages + content_library" />
         <StatCard label="待审核" value={loading ? '-' : countWhere(contentPackages, (item) => ['draft', 'review'].includes(item.reviewStatus))} hint="需要人工确认" />
-        <StatCard label="生成中" value={loading ? '-' : countWhere(contentPackages, (item) => item.status === 'generating')} hint="等待 Workflow 结果" />
+        <StatCard label="生成中" value={loading ? '-' : countWhere(contentPackages, (item) => item.status === 'generating')} hint="等待工作流结果" />
         <StatCard label="可用素材" value={loading ? '-' : assets.length} hint="素材库与历史素材" />
       </div>
 
       {!gateway.loading && !gateway.connected && (
         <div className="execution-service-notice">
           <div><strong>执行服务暂未连接</strong><span>内容查看、编辑和审核不受影响；生成、导入与发布动作暂不可执行。</span></div>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>查看 Command Center 的执行网关状态</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>查看运营指挥中心的执行服务状态</button>
         </div>
       )}
 
@@ -269,17 +269,17 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
       <details className="content-card-context">
         <summary>查看内容、策略与素材概览</summary>
         <div className="content-card-meta">
-          <Info label="Campaign" value={campaign?.name || campaign?.title} />
+          <Info label="运营活动" value={campaign?.name || campaign?.title} />
           <Info label="策略" value={strategy?.name || strategy?.title} />
           <Info label="平台" value={item.platform} />
           <Info label="目标账号" value={account?.account_name || account?.username || account?.account_url} />
-          <Info label="角色 / LoRA" value={`${character?.display_name || character?.name || '—'} · ${lora.name || lora.model || lora.filename || '—'}`} />
+          <Info label="角色 / 角色模型" value={`${character?.display_name || character?.name || '—'} · ${lora.name || lora.model || lora.filename || '—'}`} />
           <Info label="素材" value={linkedAssets.length} />
         </div>
         <div className="content-copy-summary">
-          <Info label="Hook" value={item.hook} />
+          <Info label="开场钩子" value={item.hook} />
           <Info label="正文摘要" value={truncate(item.body, 160)} />
-          <Info label="CTA" value={item.cta} />
+          <Info label="行动引导" value={item.cta} />
           <Info label="标签" value={item.tags} />
         </div>
         <div className="asset-strip" aria-label="内容素材预览">
@@ -312,7 +312,7 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
           onNavigate('workspace', nextOpen ? item.id : '');
         }}
       >
-        <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
+        <summary>🎬 人物角色模型（LoRA）图片和视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
         <ContentPackageStudio item={item} data={data} assets={assets} gateway={gateway} userId={userId} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
       </details>
@@ -326,13 +326,13 @@ function ProductionSteps({ guide, onNext }) {
       id: 'copy',
       label: '文案确认',
       status: guide.steps.find((step) => step.id === 'copy')?.status || 'pending',
-      hint: '标题、Hook、正文与 CTA',
+      hint: '标题、开场钩子、正文与行动引导',
     },
     {
       id: 'visual',
       label: '视觉生成',
       status: summarizeProductionStatus(guide.steps.filter((step) => ['role', 'reference', 'image', 'video', 'results'].includes(step.id))),
-      hint: '角色、LoRA、素材与生成结果',
+      hint: '角色、角色模型、素材与生成结果',
     },
     {
       id: 'review',
@@ -346,7 +346,7 @@ function ProductionSteps({ guide, onNext }) {
     <section className="production-guide" aria-label="内容生产步骤">
       <div className="production-guide-head">
         <div>
-          <p className="eyebrow">PRODUCTION STATUS</p>
+          <p className="eyebrow">生产进度</p>
           <h4>当前步骤：{guide.current.label}</h4>
         </div>
         <span className={`production-current-status ${guide.current.status}`}>{productionStatusLabel(guide.current.status)}</span>
@@ -431,18 +431,18 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
   const missingGenerationReason = !selectedCharacter
     ? '请先选择人物角色'
     : !hasLora(lora)
-      ? '该角色还没有配置 LoRA，请先前往角色库配置'
+      ? '该角色还没有配置角色模型（LoRA），请先前往角色库配置'
       : activeMediaPanel === 'image' && lora.image_enabled === false
-        ? '当前 LoRA 未启用图片生成'
+        ? '当前角色模型未启用图片生成'
         : activeMediaPanel === 'video' && lora.video_enabled === false
-          ? '当前 LoRA 未启用视频生成'
+          ? '当前角色模型未启用视频生成'
       : needsReference && selectedAssetIds.length === 0 && selectedFiles.length === 0 && !parsedX
         ? '当前生成方式需要选择参考素材、上传文件或导入 X 链接'
         : undefined;
   const finalReviewReason = !draft.body.trim()
     ? '请先确认正文'
     : !draft.cta.trim()
-      ? '请先确认 CTA'
+      ? '请先确认行动引导'
       : selectedAssets.length === 0 && linkedAssets.length === 0
         ? '请先确认至少一个可用素材'
         : undefined;
@@ -560,15 +560,15 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
       }
       await onRefresh();
       setContextAI((current) => ({ ...current, open: false }));
-      setBindingStatus({ loading: false, message: 'Context AI 结果已应用并保存到当前内容。', error: false });
+      setBindingStatus({ loading: false, message: '上下文 AI 结果已应用并保存到当前内容。', error: false });
     } catch (error) {
-      setBindingStatus({ loading: false, message: error?.message || '应用 Context AI 结果失败。', error: true });
+      setBindingStatus({ loading: false, message: error?.message || '应用上下文 AI 结果失败。', error: true });
     }
   }
 
   async function handleContextAISavePrompt(payload) {
     await createPrompt(userId, payload);
-    setBindingStatus({ loading: false, message: 'Prompt 已保存到 Prompt 库。', error: false });
+    setBindingStatus({ loading: false, message: '提示词已保存到提示词库。', error: false });
   }
 
   return (
@@ -576,12 +576,12 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
         <section className="studio-simple-progress" aria-label="内容生产主流程">
           <div className="simple-progress-step completed">
             <span>✓</span>
-            <div><strong>1 文案确认</strong><small>标题、Hook、正文与 CTA</small></div>
+            <div><strong>1 文案确认</strong><small>标题、开场钩子、正文与行动引导</small></div>
           </div>
           <div className="simple-progress-line active" />
           <div className="simple-progress-step active">
             <span>2</span>
-            <div><strong>视觉生成</strong><small>角色、LoRA、素材与提示词</small></div>
+            <div><strong>视觉生成</strong><small>角色、角色模型、素材与提示词</small></div>
           </div>
           <div className="simple-progress-line" />
           <div className="simple-progress-step">
@@ -594,7 +594,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
           <section className="studio-focus-card copy-focus-card" id={sectionIds.copy}>
             <div className="studio-focus-heading">
               <div>
-                <p className="eyebrow">CURRENT COPY</p>
+                <p className="eyebrow">当前文案</p>
                 <h3>当前文案</h3>
               </div>
               <span className="context-sync-badge">策略已关联</span>
@@ -602,13 +602,13 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             <label>标题
               <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
             </label>
-            <label>Hook
+            <label>开场钩子
               <textarea rows="2" value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} />
             </label>
             <label>正文摘要
               <textarea rows="5" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
             </label>
-            <label>CTA
+            <label>行动引导
               <input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} />
             </label>
             <label>标签
@@ -632,11 +632,11 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
           <section className="studio-focus-card visual-focus-card" id={sectionIds.media}>
             <div className="studio-focus-heading">
               <div>
-                <p className="eyebrow">VISUAL GENERATION</p>
+                <p className="eyebrow">视觉生成</p>
                 <h3>视觉生成</h3>
               </div>
               <span className={`status-badge ${selectedCharacter && hasLora(lora) ? 'connected' : 'pending'}`}>
-                {selectedCharacter && hasLora(lora) ? '角色 LoRA 可用' : '等待角色 LoRA'}
+                {selectedCharacter && hasLora(lora) ? '角色模型可用' : '等待角色模型'}
               </span>
             </div>
 
@@ -645,7 +645,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
               <button className={activeMediaPanel === 'video' ? 'active' : ''} type="button" onClick={() => setActiveMediaPanel('video')}>▶ 视频生成</button>
             </div>
 
-            <div className="context-sync-strip">✓ 已同步文案主题、Hook、策略、角色与素材要求</div>
+            <div className="context-sync-strip">✓ 已同步文案主题、开场钩子、策略、角色与素材要求</div>
 
             <div className="visual-control-grid">
               <label>人物角色
@@ -658,13 +658,13 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
                   ))}
                 </select>
               </label>
-              <label>LoRA
+              <label>角色模型（LoRA）
                 <select
                   value={hasLora(lora) ? loraOptionKey(lora) : ''}
                   onChange={(event) => setSelectedLoraKey(event.target.value)}
                   disabled={!loraOptions.length}
                 >
-                  {!loraOptions.length && <option value="">未配置 LoRA</option>}
+                  {!loraOptions.length && <option value="">未配置角色模型</option>}
                   {loraOptions.map((option) => (
                     <option key={loraOptionKey(option)} value={loraOptionKey(option)}>
                       {option.name || option.model || option.filename} · {option.version || '默认版本'} · 权重 {option.weight || option.strength || 0.8}
@@ -743,7 +743,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
 
             <div className="generation-preflight" aria-label="生成前检查">
               <Check label="角色已选择" ok={Boolean(selectedCharacter)} />
-              <Check label="LoRA 可用" ok={hasLora(lora)} />
+              <Check label="角色模型可用" ok={hasLora(lora)} />
               <Check label={selectedAssetIds.length ? `${selectedAssetIds.length} 个参考素材` : '参考素材可选'} ok={!needsReference || selectedAssetIds.length > 0 || selectedFiles.length > 0 || Boolean(parsedX)} />
               <Check label={gateway.connected ? '执行服务已连接' : '执行服务未连接'} ok={gateway.connected} />
             </div>
@@ -767,7 +767,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
         <section className="studio-focus-card result-focus-card" id={sectionIds.results}>
           <div className="studio-focus-heading">
             <div>
-              <p className="eyebrow">GENERATION RESULTS</p>
+              <p className="eyebrow">生成结果</p>
               <h3>生成结果</h3>
             </div>
             <span className="context-sync-badge">{linkedAssets.length} 个可用素材</span>
@@ -790,7 +790,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
           <div className="content-card-meta">
             <Info label="标题" value={item.title} />
             <Info label="平台" value={item.platform} />
-            <Info label="Campaign" value={campaign?.name || campaign?.title} />
+            <Info label="运营活动" value={campaign?.name || campaign?.title} />
             <Info label="策略" value={selectedStrategy?.name || selectedStrategy?.title} />
             <Info label="目标账号" value={account?.account_name || account?.username} />
             <Info label="来源账号" value={referenceAccount?.account_name || item.sourceAccount} />
@@ -803,12 +803,12 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
         <section className="workspace-block production-binding-block">
           <div className="production-binding-heading">
             <div>
-              <p className="eyebrow">PRODUCTION BINDING</p>
+              <p className="eyebrow">生产关联</p>
               <h3>生产关联设置</h3>
-              <p>保存后，策略、角色、LoRA 和参考素材会写入当前内容包，刷新页面后仍会保留。</p>
+              <p>保存后，策略、角色、角色模型和参考素材会写入当前内容包，刷新页面后仍会保留。</p>
             </div>
             <span className={`status-badge ${selectedCharacter && hasLora(lora) ? 'connected' : 'pending'}`}>
-              {selectedCharacter && hasLora(lora) ? '角色 LoRA 可用' : '等待角色 LoRA'}
+              {selectedCharacter && hasLora(lora) ? '角色模型可用' : '等待角色模型'}
             </span>
           </div>
 
@@ -830,7 +830,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
                   const characterLora = getLoraInfo(character, item);
                   return (
                     <option key={character.id} value={character.id}>
-                      {character.display_name || character.name || character.id} · {displayText(characterLora.name || characterLora.model, '未绑定 LoRA')}
+                      {character.display_name || character.name || character.id} · {displayText(characterLora.name || characterLora.model, '未绑定角色模型')}
                     </option>
                   );
                 })}
@@ -846,8 +846,8 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             </div>
             <div className="content-card-meta">
               <Info label="人物角色" value={selectedCharacter?.display_name || selectedCharacter?.name} />
-              <Info label="LoRA 模型" value={lora.name || lora.model || lora.filename} />
-              <Info label="LoRA 版本" value={lora.version} />
+              <Info label="角色模型" value={lora.name || lora.model || lora.filename} />
+              <Info label="模型版本" value={lora.version} />
               <Info label="默认权重" value={lora.weight || lora.strength} />
               <Info label="图片生成" value={booleanText(lora.image_enabled ?? lora.image)} />
               <Info label="视频生成" value={booleanText(lora.video_enabled ?? lora.video)} />
@@ -890,8 +890,8 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
           <h3>文案内容</h3>
           <div className="editor-grid">
             <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-            <label>Hook<input value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} /></label>
-            <label>CTA<input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} /></label>
+            <label>开场钩子<input value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} /></label>
+            <label>行动引导<input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} /></label>
             <label>标签<input value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} /></label>
           </div>
           <label className="full-editor">正文<textarea rows="7" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
@@ -901,10 +901,10 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             <Info label="可复刻策略" value={item.replicateStrategy} />
             <Info label="发布建议" value={item.publishSuggestion} />
           </div>
-          <label className="full-editor">给 Agent 的改写意见<textarea rows="3" value={draft.feedback} onChange={(event) => setDraft({ ...draft, feedback: event.target.value })} /></label>
+          <label className="full-editor">给文案智能体的改写意见<textarea rows="3" value={draft.feedback} onChange={(event) => setDraft({ ...draft, feedback: event.target.value })} /></label>
           <div className="button-row">
             <button className="primary-button" type="button" onClick={() => openContextAI('rewrite_copy')}>AI 优化文案</button>
-            <button className="ghost-button" type="button" onClick={() => openContextAI('generate_hook')}>AI 生成 Hook</button>
+            <button className="ghost-button" type="button" onClick={() => openContextAI('generate_hook')}>AI 生成开场钩子</button>
             <ExecutionButton
               action="save_draft"
               actionName="保存草稿"
@@ -917,14 +917,14 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             </ExecutionButton>
             <ExecutionButton
               action="rewrite_content"
-              actionName="Agent 改写文案"
+              actionName="智能体改写文案"
               className="ghost-button"
               resourceType="content_package"
               resourceId={item.id}
               payload={{ content_package_id: item.id, feedback: draft.feedback, draft }}
               reason={!draft.feedback.trim() ? '请先填写改写意见' : undefined}
             >
-              Agent 改写
+              智能体改写
             </ExecutionButton>
             <ExecutionButton
               action="review_generated_asset"
@@ -957,7 +957,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
               <span className="media-generation-icon">▧</span>
               <span>
                 <strong>图片生成</strong>
-                <small>图片要求、角色 LoRA、参考素材与生图</small>
+                <small>图片要求、角色模型、参考素材与生图</small>
               </span>
               <b>{activeMediaPanel === 'image' ? '收起' : '展开'}</b>
             </button>
@@ -989,16 +989,16 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             </section>
 
         <section className="workspace-block">
-          <h3>当前关联角色与 LoRA</h3>
+          <h3>当前关联角色与角色模型</h3>
           <div className="character-lora-panel">
             <div className="character-preview">
               {selectedCharacter?.avatar || selectedCharacter?.avatar_url ? <img src={selectedCharacter.avatar || selectedCharacter.avatar_url} alt="" /> : <span>角色预览</span>}
             </div>
             <div className="content-card-meta">
               <Info label="角色" value={selectedCharacter?.display_name || selectedCharacter?.name} />
-              <Info label="LoRA 模型" value={lora.name || lora.model || lora.filename} />
-              <Info label="LoRA 版本" value={lora.version} />
-              <Info label="LoRA 权重" value={lora.weight || lora.strength} />
+              <Info label="角色模型" value={lora.name || lora.model || lora.filename} />
+              <Info label="模型版本" value={lora.version} />
+              <Info label="模型权重" value={lora.weight || lora.strength} />
               <div className="button-row">
                 <button
                   className="primary-button"
@@ -1007,7 +1007,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
                 >
                   {activeMediaPanel === 'image' ? 'AI 生成图片提示词' : 'AI 生成视频脚本'}
                 </button>
-                <button className="ghost-button" type="button" onClick={() => openContextAI('generate_lora_prompt')}>AI 补全角色 / LoRA</button>
+                <button className="ghost-button" type="button" onClick={() => openContextAI('generate_lora_prompt')}>AI 补全角色 / 角色模型</button>
               </div>
               {activeMediaPanel === 'image' ? (
                 <Info label="可用于图片" value={booleanText(lora.image_enabled ?? lora.image)} />
@@ -1022,7 +1022,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
           </div>
           {!hasLora(lora) && (
             <div className="warning-card">
-              这个角色还没有配置 LoRA。需要先在角色库绑定 LoRA 模型、版本和权重，才能做角色一致性图片/视频生成。
+              这个角色还没有配置角色模型。需要先在角色库绑定 LoRA 模型、版本和权重，才能做角色一致性图片/视频生成。
               <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>前往角色库配置</button>
             </div>
           )}
@@ -1123,24 +1123,24 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             {activeMediaPanel === 'image' ? (
               <ExecutionButton
                 action="generate_character_image"
-                actionName="使用角色 LoRA 生成图片"
+                actionName="使用角色模型生成图片"
                 resourceType="content_package"
                 resourceId={item.id}
                 payload={generationPayload}
                 reason={missingGenerationReason}
               >
-                使用角色 LoRA 生成图片
+                使用角色模型生成图片
               </ExecutionButton>
             ) : (
               <ExecutionButton
                 action="generate_character_video"
-                actionName="使用角色 LoRA 生成视频"
+                actionName="使用角色模型生成视频"
                 resourceType="content_package"
                 resourceId={item.id}
                 payload={generationPayload}
                 reason={missingGenerationReason}
               >
-                使用角色 LoRA 生成视频
+                使用角色模型生成视频
               </ExecutionButton>
             )}
           </div>
@@ -1165,7 +1165,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             <label>最终贴文正文
               <textarea rows="5" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
             </label>
-            <label>最终 CTA
+            <label>最终行动引导
               <input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} />
             </label>
             <label>发布时间
@@ -1174,9 +1174,9 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
           </div>
           <div className="review-checklist">
             <Check label="正文已确认" ok={Boolean(draft.body.trim())} />
-            <Check label="CTA 已确认" ok={Boolean(draft.cta.trim())} />
+            <Check label="行动引导已确认" ok={Boolean(draft.cta.trim())} />
             <Check label="标签已确认" ok={Boolean(draft.tags.trim())} />
-            <Check label="角色 / LoRA 已确认" ok={Boolean(selectedCharacter && hasLora(lora))} />
+            <Check label="角色 / 角色模型已确认" ok={Boolean(selectedCharacter && hasLora(lora))} />
             <Check label="素材已确认" ok={Boolean(selectedAssets.length || linkedAssets.length)} />
             <Check label="素材权限已确认" ok={rightsConfirmed || linkedAssets.some((asset) => asset.rightsStatus)} />
           </div>
@@ -1233,7 +1233,7 @@ function RequirementGrid({ fields, value, empty }) {
 }
 
 function ModeInputs({ mode, selectedAssets, videoReq }) {
-  if (mode === 'text_to_video') return <div className="empty-card-inline">文生视频会直接使用当前内容策略、视频脚本和角色 LoRA。</div>;
+  if (mode === 'text_to_video') return <div className="empty-card-inline">文生视频会直接使用当前内容策略、视频脚本和角色模型。</div>;
   if (mode === 'image_to_video') return <ModeNotice title="图生视频" text="必须选择一张参考图片。系统会结合当前分镜和镜头运动生成视频。" selectedAssets={selectedAssets} />;
   if (mode === 'first_frame') return <ModeNotice title="首帧生视频" text="必须选择首帧图片。尾帧和运动由视频要求自动补充。" selectedAssets={selectedAssets} />;
   if (mode === 'first_last_frame') return <ModeNotice title="首尾帧生视频" text="需要首帧和尾帧参考，适合控制人物起止动作。" selectedAssets={selectedAssets} />;
@@ -1247,11 +1247,11 @@ function ModeInputs({ mode, selectedAssets, videoReq }) {
             <p>{displayText(shot)}</p>
           </div>
         ))}
-        {!normalizeList(videoReq.shots).length && <div className="empty-card-inline">当前内容没有分镜列表，生成前建议先让 Agent 补充分镜。</div>}
+        {!normalizeList(videoReq.shots).length && <div className="empty-card-inline">当前内容没有分镜列表，生成前建议先让智能体补充分镜。</div>}
       </div>
     );
   }
-  return <div className="empty-card-inline">角色 LoRA 视频会使用已绑定 LoRA 的角色，并结合当前视频要求生成。</div>;
+  return <div className="empty-card-inline">角色模型视频会使用已绑定角色模型（LoRA）的角色，并结合当前视频要求生成。</div>;
 }
 
 function ModeNotice({ title, text, selectedAssets }) {
@@ -1274,7 +1274,7 @@ function GenerationResults({ item, assets, runs, selectedId, onSelect }) {
   return (
     <div className="generation-result-layout">
       <div>
-        <h4>Workflow 任务</h4>
+        <h4>工作流任务</h4>
         {runs.length ? runs.map((run) => (
           <article key={run.id} className="run-card">
             <div className="row-between">
@@ -1457,7 +1457,7 @@ function buildProductionGuide({ item, character, lora, linkedAssets, workflowRun
   const blocked = (ready, fallback = 'blocked') => ready ? 'pending' : fallback;
   const steps = [
     { id: 'copy', label: '文案确认', status: copyDone ? 'completed' : 'pending', target: 'copy', reason: '文案尚未确认', action: '继续编辑文案' },
-    { id: 'role', label: '角色 / LoRA 确认', status: roleDone ? 'completed' : blocked(copyDone), target: 'media', reason: '该内容还没有绑定角色或角色 LoRA', action: '选择角色或配置 LoRA' },
+    { id: 'role', label: '角色 / 角色模型确认', status: roleDone ? 'completed' : blocked(copyDone), target: 'media', reason: '该内容还没有绑定角色或角色模型', action: '选择角色或配置角色模型' },
     { id: 'reference', label: '素材引用', status: referenceDone ? 'completed' : blocked(roleDone), target: 'media', reason: '还没有选择参考素材', action: '选择或导入参考素材' },
     { id: 'image', label: '图片生成', status: imageDone ? 'completed' : !roleDone ? 'blocked' : bridgeUnavailable ? 'needs_bridge' : 'pending', target: 'media', reason: bridgeUnavailable ? '执行服务暂未连接' : '图片尚未生成', action: bridgeUnavailable ? '查看执行网关状态' : '打开图片生成', page: bridgeUnavailable ? 'dashboard' : undefined },
     { id: 'video', label: '视频生成', status: videoDone ? 'completed' : !roleDone ? 'blocked' : bridgeUnavailable ? 'needs_bridge' : 'pending', target: 'media', reason: bridgeUnavailable ? '执行服务暂未连接' : '视频尚未生成', action: bridgeUnavailable ? '查看执行网关状态' : '打开视频生成', page: bridgeUnavailable ? 'dashboard' : undefined },

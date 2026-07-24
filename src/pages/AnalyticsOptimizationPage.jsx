@@ -32,9 +32,9 @@ export function AnalyticsOptimizationPage({ userId, onNavigate }) {
       <div className="hero-panel">
         <p className="eyebrow">ANALYTICS / 学习闭环</p>
         <h2>用真实发布结果反向优化策略、Hook 和内容生成</h2>
-        <p>发布数据、内容指标、账号洞察与 AI 建议集中在这里，供 Strategy Agent 和 Content Agent 下一轮生成时复用。</p>
+        <p>发布数据、内容指标、账号洞察与 AI 建议集中在这里，供策略智能体和内容智能体下一轮生成时复用。</p>
         <div className="button-row">
-          <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>返回 Campaign 与策略</button>
+          <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>返回运营活动与策略</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>查看知识库</button>
         </div>
       </div>
@@ -72,7 +72,7 @@ export function AnalyticsOptimizationPage({ userId, onNavigate }) {
                   {memory.platform && <span className="tag">{memory.platform}</span>}
                   <span className="tag">成功率 {formatRate(memory.success_rate || memory.score)}</span>
                 </div>
-                <p>{memory.recommendation || memory.summary || memory.description || '该模式已保存，可供 Content Agent 下一轮生成参考。'}</p>
+                <p>{memory.recommendation || memory.summary || memory.description || '该模式已保存，可供内容智能体下一轮生成参考。'}</p>
               </article>
             )) : <div className="empty-card-inline">发布内容回传表现后，高成功率模式会沉淀到这里。</div>}
           </div>

@@ -75,19 +75,19 @@ export function AnalyticsPage({ userId, onNavigate }) {
     .slice(0, 12), [metrics]);
 
   if (!userId) {
-    return <EmptyState title="请先登录" description="登录后才能查看运营分析和 Agent 学习记忆。" />;
+    return <EmptyState title="请先登录" description="登录后才能查看运营分析和智能体学习记忆。" />;
   }
 
   return (
     <section className="page-stack analytics-page">
       <div className="hero-panel analytics-hero">
         <div>
-          <p className="eyebrow">ANALYTICS / LEARNING LOOP</p>
+          <p className="eyebrow">分析与学习闭环</p>
           <h2>把真实表现沉淀成下一轮内容与策略的生成依据</h2>
           <p>发布指标负责回答“发生了什么”，Content Memory 与 Strategy Memory 负责记录“为什么有效、下次怎么复用”。</p>
         </div>
         <div className="button-row">
-          <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>返回 Campaign 与策略</button>
+          <button className="primary-button" type="button" onClick={() => onNavigate('campaigns')}>返回运营活动与策略</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
         </div>
       </div>
@@ -112,7 +112,7 @@ export function AnalyticsPage({ userId, onNavigate }) {
       <section className="table-card analytics-performance-section">
         <div className="panel-title">
           <div>
-            <p className="eyebrow">PERFORMANCE SIGNALS</p>
+            <p className="eyebrow">表现信号</p>
             <h3>最近内容表现</h3>
             <p>优先显示最新回传的内容与发布指标。</p>
           </div>
@@ -141,9 +141,9 @@ export function AnalyticsPage({ userId, onNavigate }) {
 
       <div className="analytics-memory-grid">
         <MemorySection
-          eyebrow="CONTENT MEMORY"
+          eyebrow="内容记忆"
           title="🏆 高表现内容模式"
-          description="记录经过验证的 Hook、标题、CTA、结构与视觉模板，供 Content Agent 直接复用。"
+          description="记录经过验证的开场钩子、标题、行动引导、结构与视觉模板，供内容智能体直接复用。"
           count={data.contentMemory.length}
         >
           {data.contentMemory.length > 0 ? data.contentMemory.slice(0, 8).map((memory, index) => (
@@ -152,9 +152,9 @@ export function AnalyticsPage({ userId, onNavigate }) {
         </MemorySection>
 
         <MemorySection
-          eyebrow="STRATEGY MEMORY"
+          eyebrow="策略记忆"
           title="📋 策略学习结果"
-          description="记录策略目标、执行结果与经验教训，供 Strategy Agent 在下一轮决策时调用。"
+          description="记录策略目标、执行结果与经验教训，供策略智能体在下一轮决策时调用。"
           count={data.strategyMemory.length}
         >
           {data.strategyMemory.length > 0 ? data.strategyMemory.slice(0, 8).map((memory, index) => (

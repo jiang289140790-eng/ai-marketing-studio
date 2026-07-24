@@ -31,7 +31,7 @@ export function PublishQueuePage({ userId, onNavigate }) {
   const contentPackages = useMemo(() => getContentPackages(data), [data]);
   const assets = useMemo(() => getAssets(data), [data]);
 
-  if (!isSupabaseConfigured) return <EmptyState title="等待 Supabase 配置" description="配置完成后，发布队列会读取真实发布任务。" />;
+  if (!isSupabaseConfigured) return <EmptyState title="等待数据服务配置" description="配置完成后，发布队列会读取真实发布任务。" />;
   if (!userId) return <EmptyState title="请先登录" description="登录后才能查看发布队列。" />;
 
   return (
@@ -76,7 +76,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
     <article className="strategy-card publish-task-card">
       <div className="section-head">
         <div>
-          <p className="eyebrow">PUBLISH TASK · {task.id}</p>
+          <p className="eyebrow">发布任务 · {task.id}</p>
           <h3>{content?.title || task.title || '未命名发布任务'}</h3>
           <p>{displayText(task.final_text || task.content_text || content?.body, '等待内容终审结果')}</p>
         </div>

@@ -137,7 +137,7 @@ export function AccountsPage({ userId, detailId, onNavigate }) {
       <article className="detail-panel account-detail-panel">
         <div className="section-head">
           <div>
-            <p className="eyebrow">Account Brain</p>
+            <p className="eyebrow">账号大脑</p>
             <h3>{account.account_name || account.username}</h3>
             <p>{account.platform} · {statusLabel(getAccountRole(account))} · {account.account_url || '暂无 URL'}</p>
           </div>
@@ -170,9 +170,9 @@ export function AccountsPage({ userId, detailId, onNavigate }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Account Intelligence Core</p>
+          <p className="eyebrow">账号智能中心</p>
           <h2>账号矩阵管理</h2>
-          <p>这里是唯一的账号资产中心。自己的账号、竞品账号和灵感账号都统一放在这里，后续供情报、Agent 和发布系统调用。</p>
+          <p>这里是唯一的账号资产中心。自己的账号、竞品账号和灵感账号都统一放在这里，后续供内容情报、智能体和发布系统调用。</p>
         </div>
         <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
           添加账号
@@ -200,7 +200,7 @@ export function AccountsPage({ userId, detailId, onNavigate }) {
           {Array.from({ length: 4 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}
         </div>
       ) : !isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会读取你的真实账号、画像和平台连接状态。" />
+        <EmptyState title="等待数据服务配置" description="配置完成后，这里会读取你的真实账号、画像和平台连接状态。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的个人账号矩阵。" />
       ) : accounts.length === 0 ? (

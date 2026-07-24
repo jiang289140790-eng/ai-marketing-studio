@@ -9,7 +9,7 @@ const TYPE_FILTERS = [
   { id: 'all', label: '全部' }, { id: 'account', label: '账号' },
   { id: 'character', label: '角色' }, { id: 'content', label: '内容' },
   { id: 'strategy', label: '策略' }, { id: 'insight', label: '洞察' },
-  { id: 'campaign', label: 'Campaign' }, { id: 'research', label: '研究' },
+  { id: 'campaign', label: '运营活动' }, { id: 'research', label: '研究' },
 ];
 
 function getTypeGroup(item) {
@@ -49,9 +49,9 @@ function readableValue(value) {
 
 function friendlyKey(key) {
   const labels = {
-    hook: 'Hook', cta: 'CTA', summary: '摘要', keywords: '关键词', tags: '标签',
+    hook: '开场钩子', cta: '行动引导', summary: '摘要', keywords: '关键词', tags: '标签',
     language_style: '语言风格', replicate_strategy: '可复刻策略', next_action: '下一步',
-    source: '来源', importance: '重要性', campaign: 'Campaign', account: '关联账号',
+    source: '来源', importance: '重要性', campaign: '运营活动', account: '关联账号',
   };
   return labels[key] || String(key).replaceAll('_', ' ');
 }
@@ -92,7 +92,7 @@ function getBusinessDetails(item) {
   return [
     ['来源', item.source || item.source_type || meta.source || meta.origin],
     ['关联账号', item.account_name || item.source_account || meta.account_name || meta.handle || item.account_id],
-    ['Campaign', item.campaign_name || meta.campaign_name || item.campaign_id],
+    ['运营活动', item.campaign_name || meta.campaign_name || item.campaign_id],
     ['类型', item.type || item.entry_type || item.category || getTypeGroup(item)],
     ['重要性', item.importance || item.priority || meta.importance || meta.priority || meta.score],
     ['可复刻策略', item.replicate_strategy || meta.replicate_strategy || meta.reusable_strategy || meta.winner_rule],
@@ -141,14 +141,14 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
     ));
   }, [accountFilter, activeType, items, query, sourceFilter]);
 
-  if (!userId) return <EmptyState title="请先登录" description="登录后才能读取 Knowledge Vault 与 Agent 运营记忆。" />;
+  if (!userId) return <EmptyState title="请先登录" description="登录后才能读取知识库与智能体运营记忆。" />;
 
   return (
     <section className="page-stack knowledge-vault-page">
       <div className="hero-panel knowledge-vault-hero">
         <div>
-          <p className="eyebrow">KNOWLEDGE VAULT / AGENT MEMORY</p>
-          <h2>把账号、内容、策略与研究结果变成 Agent 可复用的知识</h2>
+          <p className="eyebrow">知识库与智能体记忆</p>
+          <h2>把账号、内容、策略与研究结果变成智能体可复用的知识</h2>
           <p>这里显示业务摘要、来源、关联账号、重要性、可复刻策略和下一步，不再把原始 JSON 直接摊给你。</p>
         </div>
         <div className="button-row">
@@ -158,14 +158,14 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
       </div>
 
       <div className="stat-grid compact">
-        <StatCard label="知识记录" value={loading ? '-' : items.length} hint="从 Supabase 实时读取" />
+        <StatCard label="知识记录" value={loading ? '-' : items.length} hint="从数据服务实时读取" />
         <StatCard label="当前结果" value={loading ? '-' : filteredItems.length} hint="搜索与分类筛选结果" />
         <StatCard label="知识类型" value={loading ? '-' : Object.keys(counts).length} hint="账号、内容、策略、研究等" />
         <StatCard label="最新写入" value={loading || !items[0] ? '-' : formatDate(items[0].created_at || items[0].updated_at)} hint="按数据返回顺序" />
       </div>
 
       <div className="knowledge-toolbar">
-        <label className="knowledge-search"><span aria-hidden="true">⌕</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、Hook、关键词、策略或研究报告…" /></label>
+        <label className="knowledge-search"><span aria-hidden="true">⌕</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、开场钩子、关键词、策略或研究报告…" /></label>
         <div className="knowledge-selectors">
           <label><span>来源</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">全部来源</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
           <label><span>账号</span><select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)}><option value="all">全部账号</option>{accountOptions.map((account) => <option key={account} value={account}>{account}</option>)}</select></label>

@@ -44,7 +44,7 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
       <div className="form-card-heading">
         <p className="eyebrow">{initialValue ? 'Edit Character' : 'New Character'}</p>
         <h3>{initialValue ? `编辑 ${initialValue.name}` : '创建人物角色'}</h3>
-        <p>角色设定与 LoRA 会一起保存，内容工作台可直接读取这些生成参数。</p>
+        <p>角色设定与角色模型（LoRA）会一起保存，内容工作台可直接读取这些生成参数。</p>
       </div>
       <div className="form-grid">
         <label>
@@ -68,7 +68,7 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
           <textarea value={form.appearance || ''} onChange={(event) => update('appearance', event.target.value)} />
         </label>
         <label className="wide-field">
-          角色 Prompt
+          角色提示词
           <textarea value={form.prompt || ''} onChange={(event) => update('prompt', event.target.value)} />
         </label>
         <label>
@@ -78,8 +78,8 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
       </div>
 
       <fieldset className="lora-config-fieldset">
-        <legend>LoRA 配置</legend>
-        <p>绑定模型后，图片和视频生成会自动携带对应 LoRA、权重与触发词。</p>
+        <legend>角色模型（LoRA）配置</legend>
+        <p>绑定模型后，图片和视频生成会自动携带对应角色模型、权重与触发词。</p>
         <div className="form-grid">
           <label>
             显示名称
@@ -102,8 +102,8 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
             <input type="number" min="0" max="2" step="0.05" value={form.loraConfig.weight} onChange={(event) => updateLora('weight', event.target.value)} />
           </label>
           <label>
-            关联 Workflow
-            <input value={form.loraConfig.workflow} onChange={(event) => updateLora('workflow', event.target.value)} placeholder="Workflow 名称或 ID" />
+            关联工作流
+            <input value={form.loraConfig.workflow} onChange={(event) => updateLora('workflow', event.target.value)} placeholder="工作流名称或 ID" />
           </label>
           <label className="wide-field">
             触发词

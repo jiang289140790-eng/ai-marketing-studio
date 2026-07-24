@@ -80,11 +80,11 @@ export function AssetForm({ initialValue, onSubmit, onCancel }) {
           <input value={form.tagsText ?? formatTags(form.tags)} onChange={(event) => update('tagsText', event.target.value)} />
         </label>
         <label className="wide-field">
-          Prompt
+          提示词
           <textarea value={form.prompt || ''} onChange={(event) => update('prompt', event.target.value)} />
         </label>
         <label className="wide-field">
-          Workflow JSON / 说明
+          工作流配置 / 说明
           <textarea value={form.workflowText || ''} onChange={(event) => update('workflowText', event.target.value)} />
         </label>
       </div>

@@ -19,7 +19,7 @@ export function SystemOverviewPage({ userId }) {
   const failed = allRuns.filter((row) => ['failed', 'error'].includes(row.status));
 
   if (!isSupabaseConfigured) {
-    return <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会显示系统健康情况。" />;
+    return <EmptyState title="等待数据服务配置" description="配置完成后，这里会显示系统健康情况。" />;
   }
 
   if (!userId) {
@@ -31,12 +31,12 @@ export function SystemOverviewPage({ userId }) {
       <div className="hero-panel">
         <p className="eyebrow">系统状态</p>
         <h2>只看运营是否稳定，不把底层数据库细节暴露到页面里</h2>
-        <p>这里汇总 Agent、Workflow、发布任务和指标回收状态，帮助你发现失败任务、未连接执行服务和需要重试的环节。</p>
+        <p>这里汇总智能体、工作流、发布任务和指标回收状态，帮助你发现失败任务、未连接执行服务和需要重试的环节。</p>
       </div>
 
       <div className="stat-grid compact">
-        <StatCard label="Agent 运行" value={data.agentRuns.length} hint="最近执行记录" />
-        <StatCard label="Workflow 运行" value={data.workflowRuns.length} hint="素材与模型任务" />
+        <StatCard label="智能体运行" value={data.agentRuns.length} hint="最近执行记录" />
+        <StatCard label="工作流运行" value={data.workflowRuns.length} hint="素材与模型任务" />
         <StatCard label="发布任务" value={data.publishTasks.length} hint="队列状态" />
         <StatCard label="失败任务" value={failed.length} hint="需要检查" />
         <StatCard label="成功率" value={successRate(allRuns)} hint="按最近记录估算" />

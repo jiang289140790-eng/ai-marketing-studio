@@ -72,7 +72,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
   const createHint = !canCreate ? '请先填写名称和目标' : !gateway.connected ? '执行服务暂未连接，请查看上方连接状态' : '';
 
   if (!isSupabaseConfigured) {
-    return <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会读取 Campaign 和 Agent 策略。" />;
+    return <EmptyState title="等待数据服务配置" description="配置完成后，这里会读取运营活动和智能体策略。" />;
   }
 
   if (!userId) {
@@ -82,10 +82,10 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
   return (
     <section className="page-stack">
       <div className="hero-panel">
-        <p className="eyebrow">Campaign 与策略</p>
-        <h2>先定义运营目标，再让 Strategy Agent 生成可执行策略</h2>
+        <p className="eyebrow">运营活动与策略</p>
+        <h2>先定义运营目标，再让策略智能体生成可执行方案</h2>
         <p>
-          Campaign 是 AI 员工的任务 brief：目标、平台、账号、主题、成功指标、图片/视频需求都会传给执行网关。
+          运营活动是 AI 员工的任务说明：目标、平台、账号、主题、成功指标、图片和视频需求都会传给安全执行服务。
           策略生成后会保存到 strategy_plans，必须经过你批准后才进入内容工作台。
         </p>
       </div>
@@ -95,19 +95,19 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
       <form className="campaign-form-card" onSubmit={(event) => event.preventDefault()}>
         <div className="section-head">
           <div>
-            <p className="eyebrow">新建 Campaign</p>
+            <p className="eyebrow">新建运营活动</p>
             <h3>给 AI 营销团队一个明确目标</h3>
           </div>
           <ExecutionButton
             action="create_campaign"
-            actionName="创建 Campaign"
+            actionName="创建运营活动"
             payload={campaignPayload}
             ready={canCreate}
             reason={!canCreate ? '请先填写名称和目标' : undefined}
             showGatewayHint={canCreate}
             onCompleted={reload}
           >
-            创建 Campaign
+            创建运营活动
           </ExecutionButton>
         </div>
         {createHint && <div className="form-hint">{createHint}</div>}
@@ -157,7 +157,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
       </form>
 
       <div className="stat-grid compact">
-        <StatCard label="Campaign" value={loading ? '-' : data.campaigns.length} hint="当前运营目标" />
+        <StatCard label="运营活动" value={loading ? '-' : data.campaigns.length} hint="当前运营目标" />
         <StatCard label="待审核策略" value={loading ? '-' : countWhere(data.strategies, (item) => ['review', 'pending', 'draft'].includes(item.status))} hint="等待你批准或驳回" />
         <StatCard label="已批准策略" value={loading ? '-' : countWhere(data.strategies, (item) => item.status === 'approved')} hint="可进入内容生产" />
         <StatCard label="可用账号" value={loading ? '-' : data.accounts.length} hint="来自账号矩阵" />
@@ -165,7 +165,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
 
       <div className="stack-list">
         {data.campaigns.length === 0 && data.strategies.length === 0 ? (
-          <EmptyState title="暂无 Campaign 策略" description="创建 Campaign 后，Agent 生成的策略会以业务卡片方式显示在这里。" />
+          <EmptyState title="暂无运营策略" description="创建运营活动后，智能体生成的策略会以业务卡片方式显示在这里。" />
         ) : (
           <>
             {data.campaigns.map((campaign) => (
@@ -197,8 +197,8 @@ function CampaignCard({ campaign, strategies, accounts, onNavigate, onRefresh })
     <article className="strategy-card">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Campaign</p>
-          <h3>{campaign.name || '未命名 Campaign'}</h3>
+          <p className="eyebrow">运营活动</p>
+          <h3>{campaign.name || '未命名运营活动'}</h3>
           <p>{campaign.goal || '暂无目标说明'}</p>
         </div>
         <StatusBadge status={campaign.status || 'active'} />
@@ -212,7 +212,7 @@ function CampaignCard({ campaign, strategies, accounts, onNavigate, onRefresh })
       <div className="button-row">
         <ExecutionButton
           action="generate_strategy"
-          actionName="让 Strategy Agent 生成策略"
+          actionName="让策略智能体生成策略"
           resourceType="campaign"
           resourceId={campaign.id}
           payload={{
@@ -234,7 +234,7 @@ function CampaignCard({ campaign, strategies, accounts, onNavigate, onRefresh })
       <div className="nested-list">
         {strategies.length ? strategies.map((strategy) => (
           <StrategyCard key={strategy.id} strategy={strategy} accounts={accounts} compact onNavigate={onNavigate} onRefresh={onRefresh} />
-        )) : <div className="empty-card-inline">还没有 Agent 策略。点击“生成策略”后会保存到 strategy_plans。</div>}
+        )) : <div className="empty-card-inline">还没有智能体策略。点击“生成策略”后会保存到策略记录。</div>}
       </div>
     </article>
   );
@@ -251,9 +251,9 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
     <article className={`strategy-card ${compact ? 'compact-card' : ''}`}>
       <div className="section-head">
         <div>
-          <p className="eyebrow">Strategy Agent</p>
+          <p className="eyebrow">策略智能体</p>
           <h3>{strategy.name || strategy.title || plan.title || '待审核策略'}</h3>
-          <p className="strategy-summary">{strategy.description || strategy.executive_summary || plan.executive_summary || 'Agent 生成的策略会转成可审核的业务内容。'}</p>
+          <p className="strategy-summary">{strategy.description || strategy.executive_summary || plan.executive_summary || '智能体生成的策略会转成可审核的业务内容。'}</p>
         </div>
         <StatusBadge status={strategy.status || 'review'} />
       </div>
@@ -261,8 +261,8 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
       <div className="business-grid">
         <Info label="目标账号" value={account?.account_name || account?.username || strategy.target_accounts} />
         <Info label="内容支柱" value={strategy.content_themes || plan.content_pillars} />
-        <Info label="Hook 规则" value={plan.hook_library || strategy.source_insights} />
-        <Info label="CTA 策略" value={plan.cta_strategy || strategy.kpi_targets} />
+        <Info label="开场钩子规则" value={plan.hook_library || strategy.source_insights} />
+        <Info label="行动引导策略" value={plan.cta_strategy || strategy.kpi_targets} />
         <Info label="平台" value={strategy.target_platforms} />
         <Info label="模型" value={strategy.llm_model} />
       </div>

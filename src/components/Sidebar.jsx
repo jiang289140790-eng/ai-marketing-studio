@@ -15,11 +15,11 @@ export function Sidebar({ activePage, onNavigate }) {
       <div className="sidebar-top">
         <div className="brand">
           <div className="brand-mark">
-            <img src={logoSrc} alt="AI Marketing Studio logo" />
+            <img src={logoSrc} alt="AI 营销工作室标志" />
           </div>
           <div className="brand-copy">
-            <strong>AI Marketing OS</strong>
-            <span>Command Center</span>
+            <strong>AI 营销操作系统</strong>
+            <span>运营指挥中心</span>
           </div>
         </div>
         <button className="sidebar-toggle" type="button" aria-expanded={mobileOpen} aria-label="展开或收起导航" onClick={() => setMobileOpen((current) => !current)}>

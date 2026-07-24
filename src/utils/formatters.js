@@ -50,8 +50,8 @@ export function statusLabel(status) {
     image: '图片',
     video: '视频',
     audio: '音频',
-    prompt: 'Prompt',
-    workflow: 'Workflow',
+    prompt: '提示词',
+    workflow: '工作流',
     lora: 'LoRA',
   };
 

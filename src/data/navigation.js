@@ -1,12 +1,12 @@
 export const navigationSections = [
   {
     label: '总览',
-    items: [{ id: 'dashboard', label: 'AI Command Center', icon: '◉' }],
+    items: [{ id: 'dashboard', label: 'AI 运营指挥中心', icon: '◉' }],
   },
   {
     label: 'AI 运营',
     items: [
-      { id: 'campaigns', label: 'Campaign 与策略', icon: '◆' },
+      { id: 'campaigns', label: '运营活动与策略', icon: '◆' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
       { id: 'intelligence', label: '内容情报', icon: '⌕' },
       { id: 'publish', label: '发布队列', icon: '↗' },
@@ -39,7 +39,7 @@ export const navigationSections = [
   },
 ];
 
-navigationSections[3].items.push({ id: 'prompts', label: 'Prompt 库', icon: '✎' });
+navigationSections[3].items.push({ id: 'prompts', label: '提示词库', icon: '✎' });
 
 export const navigationItems = navigationSections.flatMap((section) => section.items);
 
@@ -76,8 +76,8 @@ export const assetTypes = [
   { value: 'image', label: '图片' },
   { value: 'video', label: '视频' },
   { value: 'audio', label: '音频' },
-  { value: 'prompt', label: 'Prompt' },
-  { value: 'workflow', label: 'Workflow' },
+  { value: 'prompt', label: '提示词' },
+  { value: 'workflow', label: '工作流' },
   { value: 'lora', label: 'LoRA' },
 ];
 

@@ -30,8 +30,8 @@ export function AIWorksPage({ userId, onNavigate }) {
   return (
     <section className="page-stack">
       <div className="hero-panel">
-        <p className="eyebrow">AI WORKS / 生成成果</p>
-        <h2>统一查看图片、视频、LoRA 与工作流生成结果</h2>
+        <p className="eyebrow">AI 生成成果</p>
+        <h2>统一查看图片、视频、角色模型与工作流生成结果</h2>
         <p>这里汇总内容工作台产生的视觉素材和运行记录。审核、重新生成与最终采用仍在同一张内容卡片中完成。</p>
         <div className="button-row">
           <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>进入内容工作台</button>
@@ -41,7 +41,7 @@ export function AIWorksPage({ userId, onNavigate }) {
       <div className="stat-grid compact">
         <StatCard label="全部成果" value={loading ? '-' : assets.length} hint="图片、视频及工作流素材" />
         <StatCard label="AI 生成" value={loading ? '-' : generated.length} hint="包含模型或工作流信息" />
-        <StatCard label="运行记录" value={loading ? '-' : runs.length} hint="Agent + Workflow" />
+        <StatCard label="运行记录" value={loading ? '-' : runs.length} hint="智能体与工作流" />
         <StatCard label="异常任务" value={loading ? '-' : failed.length} hint="可回到工作台重新生成" />
       </div>
       {assets.length ? (

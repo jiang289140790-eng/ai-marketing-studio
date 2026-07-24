@@ -50,7 +50,7 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
   async function handleDelete(character) {
     const accepted = await confirm({
       title: '删除角色？',
-      message: `将删除“${character.name || '未命名角色'}”及其当前 LoRA 绑定信息。已有生成结果不会被删除。`,
+      message: `将删除“${character.name || '未命名角色'}”及其当前角色模型绑定信息。已有生成结果不会被删除。`,
       confirmLabel: '确认删除',
       danger: true,
     });
@@ -78,9 +78,9 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Character Brain</p>
+          <p className="eyebrow">角色大脑</p>
           <h2>角色库</h2>
-          <p>保存角色设定、外观、性格、Prompt 和 LoRA。未来 Asset Factory 会根据角色自动选择 LoRA、Workflow 和生成参数。</p>
+          <p>保存角色设定、外观、性格、提示词和角色模型（LoRA）。未来素材工厂会根据角色自动选择角色模型、工作流和生成参数。</p>
         </div>
         <button className="primary-button" type="button" onClick={() => {
           setEditing(null);
@@ -110,7 +110,7 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
       {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置后这里会读取你的真实角色资产。" />
+        <EmptyState title="等待数据服务配置" description="配置后这里会读取你的真实角色资产。" />
       ) : !userId ? (
         <EmptyState title="请先登录" description="登录后才能读取和管理你的角色库。" />
       ) : characters.length === 0 ? (
@@ -135,12 +135,12 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
                   <div className="character-card-title">
                     <h3>{character.name}</h3>
                     <span className={`status-badge ${hasLora ? 'connected' : 'pending'}`}>
-                      {hasLora ? '已绑定 LoRA' : '未绑定 LoRA'}
+                      {hasLora ? '已绑定角色模型' : '未绑定角色模型'}
                     </span>
                   </div>
                   <p className="character-card-description">{character.description || character.personality || '暂无描述'}</p>
                   <div className="character-lora-summary">
-                    <span>LoRA</span>
+                    <span>角色模型</span>
                     <strong>{loraDisplayName(character.lora)}</strong>
                     {hasLora && <small>权重 {lora.weight ?? 0.8} · {lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</small>}
                   </div>
@@ -149,7 +149,7 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
                   </div>
                   <small className="character-created-at">{formatDate(character.created_at)}</small>
                   <div className="character-card-actions">
-                    <button type="button" onClick={() => editCharacter(character)}>{hasLora ? '编辑角色与 LoRA' : '配置 LoRA'}</button>
+                    <button type="button" onClick={() => editCharacter(character)}>{hasLora ? '编辑角色与模型' : '配置角色模型'}</button>
                     <button type="button" onClick={() => handleDelete(character)}>删除</button>
                   </div>
                 </div>
@@ -169,7 +169,7 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
           <aside className="detail-panel character-detail-panel">
             <div className="section-head">
               <div>
-                <p className="eyebrow">Character Detail</p>
+                <p className="eyebrow">角色详情</p>
                 <h2>{selected.name}</h2>
               </div>
               <button className="ghost-button" type="button" onClick={() => {
@@ -186,11 +186,11 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
               <p><strong>创建时间：</strong>{formatDate(selected.created_at)}</p>
             </div>
             <div className="character-prompt-block">
-              <span>角色 Prompt</span>
-              <p className="draft-preview">{selected.prompt || '暂无角色 Prompt'}</p>
+              <span>角色提示词</span>
+              <p className="draft-preview">{selected.prompt || '暂无角色提示词'}</p>
             </div>
             <div className="button-row">
-              <button className="primary-button" type="button" onClick={() => editCharacter(selected)}>编辑角色与 LoRA</button>
+              <button className="primary-button" type="button" onClick={() => editCharacter(selected)}>编辑角色与模型</button>
             </div>
           </aside>
         </div>
@@ -204,13 +204,13 @@ function CharacterLoraDetails({ value }) {
   const configured = hasLoraConfig(value);
 
   if (!configured) {
-    return <div className="notice warning">该角色尚未绑定 LoRA，暂时不能用于角色一致性图片或视频生成。</div>;
+    return <div className="notice warning">该角色尚未绑定角色模型（LoRA），暂时不能用于角色一致性图片或视频生成。</div>;
   }
 
   return (
     <section className="character-detail-lora">
       <div className="character-detail-section-title">
-        <h3>LoRA 配置</h3>
+        <h3>角色模型（LoRA）配置</h3>
         <span className="status-badge connected">已绑定</span>
       </div>
       <dl>
@@ -219,7 +219,7 @@ function CharacterLoraDetails({ value }) {
         <div><dt>版本</dt><dd>{lora.version || '—'}</dd></div>
         <div><dt>文件</dt><dd>{lora.filename || '—'}</dd></div>
         <div><dt>权重</dt><dd>{lora.weight ?? 0.8}</dd></div>
-        <div><dt>Workflow</dt><dd>{lora.workflow || '—'}</dd></div>
+        <div><dt>工作流</dt><dd>{lora.workflow || '—'}</dd></div>
         <div><dt>生成能力</dt><dd>{lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</dd></div>
         <div><dt>触发词</dt><dd>{lora.trigger_words || '—'}</dd></div>
       </dl>

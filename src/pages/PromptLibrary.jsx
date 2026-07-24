@@ -57,8 +57,8 @@ export function PromptLibrary({ userId, detailId, onNavigate }) {
 
   async function handleDelete(prompt) {
     const accepted = await confirm({
-      title: '删除 Prompt？',
-      message: `将删除“${prompt.title || '未命名 Prompt'}”。已经生成的内容不会受到影响。`,
+      title: '删除提示词？',
+      message: `将删除“${prompt.title || '未命名提示词'}”。已经生成的内容不会受到影响。`,
       confirmLabel: '确认删除',
       danger: true,
     });
@@ -78,7 +78,7 @@ export function PromptLibrary({ userId, detailId, onNavigate }) {
   async function handleAISave(payload) {
     try {
       await createPrompt(userId, payload);
-      setMessage('AI 生成的 Prompt 已保存。');
+      setMessage('AI 生成的提示词已保存。');
       setContextAIOpen(false);
       await refresh();
     } catch (error) {
@@ -90,16 +90,16 @@ export function PromptLibrary({ userId, detailId, onNavigate }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Prompt Library</p>
-          <h2>Prompt 库</h2>
-          <p>沉淀文本、图像、视频、分析和 Workflow Prompt，可关联角色与平台。</p>
+          <p className="eyebrow">提示词库</p>
+          <h2>提示词库</h2>
+          <p>沉淀文本、图像、视频、分析和工作流提示词，可关联角色与平台。</p>
         </div>
         <div className="button-row">
           <button className="primary-button" type="button" onClick={() => setContextAIOpen(true)} disabled={!isSupabaseConfigured || !userId}>
-            AI 生成 Prompt 模板
+            AI 生成提示词模板
           </button>
           <button className="ghost-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured}>
-          新建 Prompt
+          新建提示词
           </button>
         </div>
       </div>
@@ -135,9 +135,9 @@ export function PromptLibrary({ userId, detailId, onNavigate }) {
       {message && <div className="notice error">{message}</div>}
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置后这里会从 prompts 表读取 Prompt。" />
+        <EmptyState title="等待数据服务配置" description="配置后这里会读取已保存的提示词。" />
       ) : prompts.length === 0 ? (
-        <EmptyState title="暂无 Prompt" description="保存你的第一条营销 Prompt，后续可直接用于 AI Studio。" />
+        <EmptyState title="暂无提示词" description="保存你的第一条营销提示词，后续可直接用于 AI 创作。" />
       ) : (
         <div className="analysis-list">
           {prompts.map((prompt) => (
@@ -167,7 +167,7 @@ export function PromptLibrary({ userId, detailId, onNavigate }) {
         <aside className="detail-panel">
           <div className="section-head">
             <div>
-              <p className="eyebrow">Prompt Detail</p>
+              <p className="eyebrow">提示词详情</p>
               <h2>{selected.title}</h2>
             </div>
             <button className="ghost-button" type="button" onClick={() => {
@@ -182,11 +182,11 @@ export function PromptLibrary({ userId, detailId, onNavigate }) {
         open={contextAIOpen}
         mode="x_copy_prompt"
         context={buildContentContext({
-          contentPackage: { title: 'Prompt 模板', platform: filters.platform || 'X' },
+          contentPackage: { title: '提示词模板', platform: filters.platform || 'X' },
           character: characters.find((item) => item.id === filters.character),
         })}
         onApply={(result) => handleAISave({
-          title: result.title || 'AI 生成 Prompt',
+          title: result.title || 'AI 生成提示词',
           category: result.category || 'general',
           content: result.content || JSON.stringify(result, null, 2),
           platform: result.platform || filters.platform || 'X',

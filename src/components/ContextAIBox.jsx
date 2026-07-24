@@ -3,17 +3,17 @@ import { contextResultToPrompt, generateContextAI } from '../services/context-ai
 
 const MODES = [
   ['rewrite_copy', '优化当前文案'],
-  ['generate_hook', '生成 Hook'],
+  ['generate_hook', '生成开场钩子'],
   ['generate_image_prompt', '生成图片提示词'],
   ['generate_video_script', '生成视频脚本'],
-  ['generate_lora_prompt', '补全角色 / LoRA'],
+  ['generate_lora_prompt', '补全角色 / 角色模型'],
   ['generate_strategy', '生成内容策略'],
-  ['viral_analysis_prompt', '爆款分析 Prompt 模板'],
-  ['x_copy_prompt', 'X 文案 Prompt 模板'],
-  ['image_prompt_template', '图片 Prompt 模板'],
-  ['video_script_prompt', '视频脚本 Prompt 模板'],
-  ['lora_character_prompt', 'LoRA 角色 Prompt 模板'],
-  ['account_persona_prompt', '账号画像 Prompt 模板'],
+  ['viral_analysis_prompt', '爆款分析提示词模板'],
+  ['x_copy_prompt', 'X 文案提示词模板'],
+  ['image_prompt_template', '图片提示词模板'],
+  ['video_script_prompt', '视频脚本提示词模板'],
+  ['lora_character_prompt', '角色模型（LoRA）提示词模板'],
+  ['account_persona_prompt', '账号画像提示词模板'],
 ];
 
 const MODE_LABELS = Object.fromEntries(MODES);
@@ -68,12 +68,12 @@ export function ContextAIBox({
 
   return (
     <div className="context-ai-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose?.()}>
-      <section className="context-ai-box" role="dialog" aria-modal="true" aria-label="Context AI">
+      <section className="context-ai-box" role="dialog" aria-modal="true" aria-label="上下文 AI">
         <header className="context-ai-header">
           <div>
             <p className="eyebrow">QWEN CONTEXT AI</p>
-            <h2>{MODE_LABELS[selectedMode] || 'Context AI'}</h2>
-            <p>模型会读取当前内容、策略、账号、角色、LoRA 与参考素材；点击“应用”前不会覆盖原内容。</p>
+            <h2>{MODE_LABELS[selectedMode] || '上下文 AI'}</h2>
+            <p>模型会读取当前内容、策略、账号、角色、角色模型与参考素材；点击“应用”前不会覆盖原内容。</p>
           </div>
           <button className="ghost-button" type="button" onClick={onClose}>关闭</button>
         </header>
@@ -82,11 +82,11 @@ export function ContextAIBox({
           <span><small>内容</small>{contextSummary.title}</span>
           <span><small>平台</small>{contextSummary.platform}</span>
           <span><small>角色</small>{contextSummary.character}</span>
-          <span><small>LoRA</small>{String(contextSummary.lora)}</span>
+          <span><small>角色模型</small>{String(contextSummary.lora)}</span>
         </div>
 
         {(!context.character || !context.lora) && (
-          <div className="notice">当前未完整选择角色或 LoRA，系统仍可生成通用提示词，但人物一致性会较弱。</div>
+          <div className="notice">当前未完整选择角色或角色模型，系统仍可生成通用提示词，但人物一致性会较弱。</div>
         )}
 
         <div className="context-ai-controls">
@@ -127,7 +127,7 @@ export function ContextAIBox({
               platform: context.platform || null,
               character: context.character?.id || null,
             }))}>
-              保存到 Prompt 库
+              保存到提示词库
             </button>
           )}
         </div>
@@ -162,7 +162,7 @@ function ResultFields({ value }) {
 function friendlyError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
   const lower = message.toLowerCase();
-  if (lower.includes('dashscope_api_key') || lower.includes('provider_auth')) return '千问密钥尚未在 Supabase Edge Function Secrets 中配置，或密钥无效。';
+  if (lower.includes('dashscope_api_key') || lower.includes('provider_auth')) return '千问密钥尚未在数据服务的安全配置中设置，或密钥无效。';
   if (lower.includes('quota') || lower.includes('balance') || lower.includes('billing')) return '千问额度不足或计费状态异常，请检查阿里百炼控制台。';
   if (lower.includes('model')) return '当前千问模型不可用，请改用 qwen-plus，或检查模型授权。';
   if (lower.includes('timeout')) return '千问响应超时，请稍后重试或缩短生成要求。';

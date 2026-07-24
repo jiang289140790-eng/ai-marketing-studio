@@ -129,7 +129,7 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
     setAnalyzingId(item.id);
     try {
       await analyzeViralContentWithAI(userId, item, { model: aiModel });
-      setMessage('AI 分析已完成：结果已写入 content_analysis，并关联到账号画像链路。');
+      setMessage('AI 分析已完成，结果已保存并关联到账号画像。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
@@ -175,7 +175,7 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
     <section className="page-stack">
       <div className="hero-panel intelligence-hero">
         <div>
-          <p className="eyebrow">Content Intelligence</p>
+          <p className="eyebrow">内容情报</p>
           <h2>内容情报中心</h2>
           <p>从账号矩阵发现值得学习的内容，交给 AI 拆解爆点，再把分析结果转成可审核的内容草稿。</p>
         </div>
@@ -185,17 +185,17 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
       <section className="intelligence-pipeline" aria-label="内容情报工作流">
         <div><span>1</span><strong>发现机会</strong><small>选择竞品或灵感账号，保存原始内容与数据</small></div>
         <b>→</b>
-        <div><span>2</span><strong>AI 拆解</strong><small>提炼 Hook、结构、用户心理和可复刻策略</small></div>
+        <div><span>2</span><strong>AI 拆解</strong><small>提炼开场钩子、结构、用户心理和可复刻策略</small></div>
         <b>→</b>
         <div><span>3</span><strong>生成草稿</strong><small>把验证后的分析转成内容库草稿继续生产</small></div>
       </section>
 
       <div className="stat-grid">
-        <StatCard label="情报账号" value={loading ? '—' : stats.accounts} hint="social_accounts: competitor / inspiration" />
-        <StatCard label="内容机会" value={loading ? '—' : stats.viral} hint="viral_contents" />
-        <StatCard label="AI分析" value={loading ? '—' : stats.analyses} hint="content_analysis" />
+        <StatCard label="情报账号" value={loading ? '—' : stats.accounts} hint="竞品账号与灵感账号" />
+        <StatCard label="内容机会" value={loading ? '—' : stats.viral} hint="值得分析的内容" />
+        <StatCard label="AI 分析" value={loading ? '—' : stats.analyses} hint="已完成的智能分析" />
         <StatCard label="热门平台" value={loading ? '—' : stats.topPlatform} hint="机会来源" />
-        <StatCard label="最高分内容" value={loading ? '—' : stats.topItem} hint={`Score ${compactNumber(stats.topScore)}`} />
+        <StatCard label="最高分内容" value={loading ? '—' : stats.topItem} hint={`评分 ${compactNumber(stats.topScore)}`} />
       </div>
 
       <div className="filter-bar">
@@ -223,9 +223,9 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
         </summary>
         <form className="intelligence-form" onSubmit={handleCreateViralContent}>
           <div className="form-card-heading">
-            <p className="eyebrow">Content Opportunity</p>
+            <p className="eyebrow">内容机会</p>
             <h3>保存内容机会</h3>
-            <p>记录值得学习的内容，后续交给分析 Agent 提炼爆点与复刻建议。</p>
+            <p>记录值得学习的内容，后续交给分析智能体提炼爆点与复刻建议。</p>
           </div>
           <div className="intelligence-fields">
             <label className="wide">
@@ -261,25 +261,25 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
       {generatedDraft && (
         <article className="analysis-card">
           <div className="card-meta">
-            <span className="tag">Content Generation Agent</span>
+            <span className="tag">内容生成智能体</span>
             <span>{generatedDraft.model || 'deepseek-chat'}</span>
             <span>成本 {Number(generatedDraft.cost || 0).toFixed(6)}</span>
             <span>耗时 {Number(generatedDraft.duration || 0)}ms</span>
           </div>
           <h3>{generatedDraft.content?.title || generatedDraft.generated?.title || 'AI 内容草稿'}</h3>
           <p>{generatedDraft.generated?.body || generatedDraft.content?.content_text || ''}</p>
-          {generatedDraft.generated?.cta && <p><strong>CTA：</strong>{generatedDraft.generated.cta}</p>}
+          {generatedDraft.generated?.cta && <p><strong>行动引导：</strong>{generatedDraft.generated.cta}</p>}
         </article>
       )}
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置后这里会读取内容情报数据。" />
+        <EmptyState title="等待数据服务配置" description="配置后这里会读取内容情报数据。" />
       ) : viralContents.length === 0 ? (
         <EmptyState title="暂无内容机会" description="先在账号矩阵添加竞品/灵感账号，再保存值得学习的内容。" />
       ) : (
         <section className="intelligence-stage-panel">
           <div className="section-head compact-head">
-            <div><p className="eyebrow">OPPORTUNITY INBOX</p><h3>待分析内容机会</h3></div>
+            <div><p className="eyebrow">机会收集箱</p><h3>待分析内容机会</h3></div>
             <span>{viralContents.length} 条</span>
           </div>
           <div className="intelligence-card-grid">
@@ -318,14 +318,14 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
       {analyses.length > 0 && (
         <section className="intelligence-stage-panel">
           <div className="section-head compact-head">
-            <div><p className="eyebrow">ANALYSIS READY</p><h3>已完成的 AI 拆解</h3></div>
+            <div><p className="eyebrow">分析完成</p><h3>已完成的 AI 拆解</h3></div>
             <span>{analyses.length} 条</span>
           </div>
           <div className="intelligence-card-grid">
           {analyses.slice(0, 6).map((analysis) => (
             <article className="analysis-card" key={analysis.id}>
               <div className="card-meta">
-                <span className="tag">{analysis.provider || 'AI Gateway'}</span>
+                <span className="tag">{analysis.provider || 'AI 服务'}</span>
                 <span>{analysis.model || 'deepseek-chat'}</span>
                 <span>成本 {Number(analysis.cost || 0).toFixed(6)}</span>
                 <span>耗时 {Number(analysis.duration_ms || 0)}ms</span>

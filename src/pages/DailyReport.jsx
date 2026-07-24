@@ -43,7 +43,7 @@ export function DailyReport({ userId }) {
     <section className="page-stack">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Daily Ops Report</p>
+          <p className="eyebrow">每日运营报告</p>
           <h2>运营日报</h2>
           <p>每天复盘昨日发现、生成、发布、表现、成本和下一步建议。</p>
         </div>
@@ -55,7 +55,7 @@ export function DailyReport({ userId }) {
       </div>
 
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待 Supabase 配置" description="配置后会生成日报和重要数据备份。" />
+        <EmptyState title="等待数据服务配置" description="配置后会生成日报和重要数据备份。" />
       ) : !report ? (
         <EmptyState title="暂无报告" description="点击刷新报告生成昨日运营日报。" />
       ) : (
@@ -107,7 +107,7 @@ export function DailyReport({ userId }) {
           </div>
 
           <article className="form-card">
-            <p className="eyebrow">Next Actions</p>
+            <p className="eyebrow">下一步行动</p>
             <h3>今日建议</h3>
             <ul>
               {report.recommendations.map((item) => (

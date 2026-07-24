@@ -22,8 +22,8 @@ const WorkflowModelConfigPage = lazy(() => import('./pages/WorkflowModelConfigPa
 const KnowledgeVaultPage = lazy(() => import('./pages/KnowledgeVaultPage').then((module) => ({ default: module.KnowledgeVaultPage })));
 
 const pageTitles = {
-  dashboard: 'AI Command Center',
-  campaigns: 'Campaign 与策略',
+  dashboard: 'AI 运营指挥中心',
+  campaigns: '运营活动与策略',
   workspace: '内容工作台',
   intelligence: '内容情报',
   publish: '发布队列',
@@ -39,7 +39,7 @@ const pageTitles = {
   workflows: '工作流与模型配置',
 };
 
-pageTitles.prompts = 'Prompt 库';
+pageTitles.prompts = '提示词库';
 
 export default function App() {
   const { page: activePage, detailId, navigate } = useAppRoute();

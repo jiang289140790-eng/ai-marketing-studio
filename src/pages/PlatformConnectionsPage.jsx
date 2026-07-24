@@ -45,7 +45,7 @@ export function PlatformConnectionsPage({ userId }) {
   }, [data.platformConnections]);
 
   if (!isSupabaseConfigured) {
-    return <EmptyState title="等待 Supabase 配置" description="配置完成后，这里会显示平台连接状态。" />;
+    return <EmptyState title="等待数据服务配置" description="配置完成后，这里会显示平台连接状态。" />;
   }
 
   if (!userId) {
@@ -55,7 +55,7 @@ export function PlatformConnectionsPage({ userId }) {
   return (
     <section className="page-stack platform-connections-page">
       <div className="hero-panel">
-        <p className="eyebrow">CONNECTION HEALTH</p>
+        <p className="eyebrow">连接状态</p>
         <h2>平台连接、账号与能力状态</h2>
         <p>这里只展示数据库中的真实连接记录。未完成 OAuth、API 权限或服务端适配的平台统一标记为“准备中”，不会显示成可用。</p>
       </div>
@@ -137,7 +137,7 @@ function ConnectionLayerSummary({ byPlatform, gateway }) {
   const xReady = platformRuntimeReady('X', gateway);
   return (
     <section className="connection-layer-summary">
-      <div><span>账号授权</span><strong>{authorized} 条有效记录</strong><small>来自 Supabase platform_connections</small></div>
+      <div><span>账号授权</span><strong>{authorized} 条有效记录</strong><small>来自平台连接记录</small></div>
       <b>→</b>
       <div><span>安全执行网关</span><strong>{gateway.loading ? '检查中' : gateway.connected ? '已连接' : '未完全连接'}</strong><small>{gateway.reason || 'Edge Function 与 MCP Bridge 状态'}</small></div>
       <b>→</b>
@@ -150,8 +150,8 @@ function PlatformCapabilityMatrix({ byPlatform, gateway }) {
   return (
     <section className="platform-capability-matrix-panel">
       <div className="section-head">
-        <div><p className="eyebrow">CAPABILITY MATRIX</p><h3>平台能力矩阵</h3></div>
-        <span>连接状态来自 Supabase，能力状态来自当前服务端实现与验证结果。</span>
+        <div><p className="eyebrow">能力矩阵</p><h3>平台能力矩阵</h3></div>
+        <span>连接状态来自数据服务，能力状态来自当前服务端实现与验证结果。</span>
       </div>
       <div className="platform-capability-table-wrap">
         <table className="platform-capability-table">

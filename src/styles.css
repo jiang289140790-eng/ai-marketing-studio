@@ -2576,6 +2576,102 @@ textarea {
   margin-bottom: 12px;
 }
 
+.focus-asset-picker {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.2);
+  padding: 12px;
+}
+
+.focus-asset-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.focus-asset-picker-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.focus-asset-picker-head strong {
+  color: #f8fafc;
+  font-size: 13px;
+}
+
+.focus-asset-picker-head span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.focus-asset-strip {
+  display: flex;
+  gap: 9px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+}
+
+.focus-asset-item {
+  position: relative;
+  flex: 0 0 116px;
+  display: grid;
+  gap: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #e2e8f0;
+  padding: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.focus-asset-item:hover,
+.focus-asset-item.selected {
+  border-color: rgba(34, 211, 238, 0.76);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.focus-asset-item.selected {
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.09);
+}
+
+.focus-asset-item .compact-asset-preview {
+  height: 70px !important;
+  min-height: 70px;
+}
+
+.focus-asset-item span,
+.focus-asset-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-asset-item span {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.focus-asset-item small {
+  color: #67e8f9;
+  font-size: 10px;
+}
+
+.focus-asset-empty {
+  width: 100%;
+  min-height: 82px;
+  border: 1px dashed rgba(148, 163, 184, 0.26);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.4);
+  color: #94a3b8;
+  cursor: pointer;
+}
+
 .visual-prompt-editor {
   flex: 1;
 }
@@ -2613,6 +2709,32 @@ textarea {
   font-size: 15px;
   font-weight: 900;
   box-shadow: 0 14px 32px rgba(37, 99, 235, 0.22);
+}
+
+.generation-preflight {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.generation-preflight > span {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.26);
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.generation-preflight .check-ok {
+  border-color: rgba(34, 197, 94, 0.24);
+  color: #86efac;
+}
+
+.generation-preflight .check-missing {
+  border-color: rgba(245, 158, 11, 0.24);
+  color: #fde68a;
 }
 
 .focus-advanced-settings {
@@ -3489,6 +3611,10 @@ textarea {
     width: 100%;
   }
   .focus-advanced-content {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .focus-asset-picker-head {
     align-items: flex-start;
     flex-direction: column;
   }

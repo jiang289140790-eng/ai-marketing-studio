@@ -303,7 +303,7 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
       >
         <summary>🎬 人物 LoRA 图片 / 视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
-        <ContentPackageStudio item={item} data={data} assets={assets} userId={userId} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
+        <ContentPackageStudio item={item} data={data} assets={assets} gateway={gateway} userId={userId} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
       </details>
     </article>
   );
@@ -363,12 +363,13 @@ function summarizeProductionStatus(steps) {
   return 'blocked';
 }
 
-function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefresh, sectionIds }) {
+function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate, onRefresh, sectionIds }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const account = findById(data.accounts, item.accountId);
   const referenceAccount = findById(data.accounts, item.referenceAccountId);
   const [selectedStrategyId, setSelectedStrategyId] = useState(item.strategyId || '');
   const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || '');
+  const [selectedLoraKey, setSelectedLoraKey] = useState(item.loraId || '');
   const [selectedAssetIds, setSelectedAssetIds] = useState(item.referenceAssetIds || []);
   const [bindingStatus, setBindingStatus] = useState({ loading: false, message: '', error: false });
   const [activeMediaPanel, setActiveMediaPanel] = useState('image');
@@ -391,7 +392,8 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
   const [contextAI, setContextAI] = useState({ open: false, mode: 'rewrite_copy' });
   const selectedStrategy = findById(data.strategies, selectedStrategyId) || findById(data.strategies, item.strategyId);
   const selectedCharacter = findById(data.characters, selectedCharacterId) || findById(data.characters, item.characterId);
-  const lora = getLoraInfo(selectedCharacter, item);
+  const loraOptions = getLoraOptions(selectedCharacter, item);
+  const lora = loraOptions.find((option) => loraOptionKey(option) === selectedLoraKey) || loraOptions[0] || {};
   const linkedAssets = assetsForContent(item, assets);
   const referenceAssets = assets.filter((asset) => {
     const metadata = safeJson(asset.raw?.metadata);
@@ -419,6 +421,10 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
     ? '请先选择人物角色'
     : !hasLora(lora)
       ? '该角色还没有配置 LoRA，请先前往角色库配置'
+      : activeMediaPanel === 'image' && lora.image_enabled === false
+        ? '当前 LoRA 未启用图片生成'
+        : activeMediaPanel === 'video' && lora.video_enabled === false
+          ? '当前 LoRA 未启用视频生成'
       : needsReference && selectedAssetIds.length === 0 && selectedFiles.length === 0 && !parsedX
         ? '当前生成方式需要选择参考素材、上传文件或导入 X 链接'
         : undefined;
@@ -434,6 +440,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
   useEffect(() => {
     setSelectedStrategyId(item.strategyId || '');
     setSelectedCharacterId(item.characterId || '');
+    setSelectedLoraKey(item.loraId || '');
     setSelectedAssetIds(item.referenceAssetIds || []);
     setReferenceSource(item.referenceSource || item.sourceAccount || referenceAccount?.account_name || '');
     setVideoMode(item.generationMode || 'character_lora_video');
@@ -441,6 +448,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
     item.id,
     item.strategyId,
     item.characterId,
+    item.loraId,
     item.generationMode,
     item.referenceAssetIds,
     item.referenceSource,
@@ -455,13 +463,20 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
     ));
   }
 
+  function handleCharacterSelection(characterId) {
+    setSelectedCharacterId(characterId);
+    const nextCharacter = findById(data.characters, characterId);
+    const nextLora = getLoraOptions(nextCharacter, item)[0];
+    setSelectedLoraKey(nextLora ? loraOptionKey(nextLora) : '');
+  }
+
   async function saveProductionBinding() {
     setBindingStatus({ loading: true, message: '', error: false });
     try {
       await saveContentProductionBinding(item, {
         strategyId: selectedStrategyId || null,
         characterId: selectedCharacter?.id || null,
-        loraId: item.loraId || lora.id || null,
+        loraId: lora.id || selectedLoraKey || null,
         loraInfo: hasLora(lora) ? lora : null,
         referenceAssetIds: selectedAssetIds,
         referenceSource,
@@ -483,7 +498,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
     campaign_id: item.campaignId,
     strategy_id: selectedStrategyId || item.strategyId,
     character_id: selectedCharacter?.id,
-    lora_id: item.loraId || lora.id,
+    lora_id: lora.id || selectedLoraKey,
     lora_weight: lora.weight || lora.strength || 0.8,
     reference_asset_ids: selectedAssetIds,
     generation_mode: videoMode,
@@ -623,7 +638,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
 
             <div className="visual-control-grid">
               <label>人物角色
-                <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
+                <select value={selectedCharacterId} onChange={(event) => handleCharacterSelection(event.target.value)}>
                   <option value="">请选择角色</option>
                   {(data.characters || []).filter((nextCharacter) => nextCharacter.status !== 'archived').map((nextCharacter) => (
                     <option key={nextCharacter.id} value={nextCharacter.id}>
@@ -633,7 +648,18 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
                 </select>
               </label>
               <label>LoRA
-                <div className="readonly-control">{displayText(lora.name || lora.model || lora.filename, '未配置 LoRA')} · {displayText(lora.weight || lora.strength, '0.8')}</div>
+                <select
+                  value={hasLora(lora) ? loraOptionKey(lora) : ''}
+                  onChange={(event) => setSelectedLoraKey(event.target.value)}
+                  disabled={!loraOptions.length}
+                >
+                  {!loraOptions.length && <option value="">未配置 LoRA</option>}
+                  {loraOptions.map((option) => (
+                    <option key={loraOptionKey(option)} value={loraOptionKey(option)}>
+                      {option.name || option.model || option.filename} · {option.version || '默认版本'} · 权重 {option.weight || option.strength || 0.8}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>画面比例
                 <div className="readonly-control">{displayText(imageReq.aspect_ratio || videoReq.aspect_ratio, '9:16')}</div>
@@ -650,6 +676,36 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
                 </select>
               </label>
             )}
+
+            <div className="focus-asset-picker">
+              <div className="focus-asset-picker-head">
+                <div>
+                  <strong>参考素材</strong>
+                  <span>已选择 {selectedAssetIds.length} 个；点击缩略图可选择或取消</span>
+                </div>
+                <button className="text-action" type="button" onClick={() => onNavigate('assets')}>打开素材库</button>
+              </div>
+              <div className="focus-asset-strip">
+                {referenceAssets.slice(0, 8).map((asset) => (
+                  <button
+                    className={`focus-asset-item ${selectedAssetIds.includes(asset.id) ? 'selected' : ''}`}
+                    type="button"
+                    key={asset.id}
+                    aria-pressed={selectedAssetIds.includes(asset.id)}
+                    onClick={() => toggleAsset(asset.id)}
+                  >
+                    <AssetPreview asset={asset} compact />
+                    <span>{asset.name}</span>
+                    <small>{selectedAssetIds.includes(asset.id) ? '✓ 已选择' : asset.type}</small>
+                  </button>
+                ))}
+                {!referenceAssets.length && (
+                  <button className="focus-asset-empty" type="button" onClick={() => onNavigate('assets')}>
+                    素材库暂无可用参考，前往上传或从 X 导入
+                  </button>
+                )}
+              </div>
+            </div>
 
             <label className="visual-prompt-editor">
               <span>{activeMediaPanel === 'image' ? '图片提示词' : '视频脚本与提示词'}</span>
@@ -668,9 +724,17 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
                 resourceId={item.id}
                 payload={generationPayload}
                 reason={missingGenerationReason}
+                showGatewayHint
               >
                 {activeMediaPanel === 'image' ? '▧ 立即生成图片' : '▶ 立即生成视频'}
               </ExecutionButton>
+            </div>
+
+            <div className="generation-preflight" aria-label="生成前检查">
+              <Check label="角色已选择" ok={Boolean(selectedCharacter)} />
+              <Check label="LoRA 可用" ok={hasLora(lora)} />
+              <Check label={selectedAssetIds.length ? `${selectedAssetIds.length} 个参考素材` : '参考素材可选'} ok={!needsReference || selectedAssetIds.length > 0 || selectedFiles.length > 0 || Boolean(parsedX)} />
+              <Check label={gateway.connected ? '执行服务已连接' : '执行服务未连接'} ok={gateway.connected} />
             </div>
 
             <details className="focus-advanced-settings">
@@ -749,7 +813,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
               </select>
             </label>
             <label>人物角色
-              <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
+              <select value={selectedCharacterId} onChange={(event) => handleCharacterSelection(event.target.value)}>
                 <option value="">请选择角色</option>
                 {(data.characters || []).filter((character) => character.status !== 'archived').map((character) => {
                   const characterLora = getLoraInfo(character, item);
@@ -1410,12 +1474,39 @@ function productionStatusLabel(status) {
 }
 
 function getLoraInfo(character, item) {
-  const source = item?.loraInfo || character?.lora_info || character?.lora || {};
-  if (typeof source === 'string') {
-    const parsed = safeJson(source);
-    return Object.keys(parsed).length ? parsed : { name: source };
-  }
-  return source || {};
+  return getLoraOptions(character, item)[0] || {};
+}
+
+function getLoraOptions(character, item) {
+  const candidates = [
+    item?.loraInfo,
+    character?.lora_info,
+    character?.lora,
+    character?.loras,
+    character?.lora_configs,
+  ].flatMap((source) => {
+    if (!source) return [];
+    if (Array.isArray(source)) return source;
+    if (typeof source === 'string') {
+      const parsed = safeJson(source);
+      if (Array.isArray(parsed)) return parsed;
+      return Object.keys(parsed).length ? [parsed] : [{ name: source }];
+    }
+    return [source];
+  }).filter((option) => option && typeof option === 'object');
+
+  const seen = new Set();
+  return candidates.filter((option) => {
+    if (!hasLora(option)) return false;
+    const key = loraOptionKey(option);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function loraOptionKey(lora) {
+  return String(lora?.id || lora?.model || lora?.filename || lora?.name || 'lora');
 }
 
 function safeJson(value) {

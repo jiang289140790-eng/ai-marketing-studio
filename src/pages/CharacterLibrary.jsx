@@ -4,6 +4,7 @@ import { EmptyState } from '../components/EmptyState';
 import { createCharacter, deleteCharacter, listCharacters, updateCharacter } from '../services/character-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { formatDate } from '../utils/formatters';
+import { hasLoraConfig, loraDisplayName, parseLoraConfig } from '../utils/lora';
 
 export function CharacterLibrary({ userId }) {
   const [characters, setCharacters] = useState([]);
@@ -50,6 +51,12 @@ export function CharacterLibrary({ userId }) {
     }
   }
 
+  function editCharacter(character) {
+    setSelected(null);
+    setIsCreating(false);
+    setEditing(character);
+  }
+
   return (
     <section className="page-stack">
       <div className="section-head">
@@ -58,7 +65,10 @@ export function CharacterLibrary({ userId }) {
           <h2>角色库</h2>
           <p>保存角色设定、外观、性格、Prompt 和 LoRA。未来 Asset Factory 会根据角色自动选择 LoRA、Workflow 和生成参数。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
+        <button className="primary-button" type="button" onClick={() => {
+          setEditing(null);
+          setIsCreating(true);
+        }} disabled={!isSupabaseConfigured || !userId}>
           新建角色
         </button>
       </div>
@@ -70,6 +80,7 @@ export function CharacterLibrary({ userId }) {
 
       {(isCreating || editing) && (
         <CharacterForm
+          key={editing?.id || 'new-character'}
           initialValue={editing}
           onSubmit={handleSave}
           onCancel={() => {
@@ -88,47 +99,104 @@ export function CharacterLibrary({ userId }) {
       ) : characters.length === 0 ? (
         <EmptyState title="暂无角色" description="创建第一个 AI 角色，用来沉淀虚拟模特、品牌人物或内容 IP。" />
       ) : (
-        <div className="asset-grid">
-          {characters.map((character) => (
-            <article className="asset-card" key={character.id}>
-              <button className="card-open" type="button" onClick={() => setSelected(character)}>查看</button>
-              {character.avatar ? <img src={character.avatar} alt="" /> : <div className="prompt-card">{character.name.slice(0, 2)}</div>}
-              <div>
-                <h3>{character.name}</h3>
-                <p>{character.description || character.personality || '暂无描述'}</p>
-                <div className="tag-row">
-                  {(character.tags || []).map((tag) => <span key={tag} className="tag">{tag}</span>)}
+        <div className="character-library-grid">
+          {characters.map((character) => {
+            const hasLora = hasLoraConfig(character.lora);
+            const lora = parseLoraConfig(character.lora);
+            return (
+              <article className="character-card" key={character.id}>
+                <button className="card-open" type="button" onClick={() => setSelected(character)}>查看详情</button>
+                <div className="character-card-media">
+                  {character.avatar
+                    ? <img src={character.avatar} alt={`${character.name} 角色头像`} />
+                    : <div className="character-avatar-fallback">{character.name.slice(0, 2)}</div>}
                 </div>
-                <small>{formatDate(character.created_at)}</small>
-                <div className="table-actions">
-                  <button type="button" onClick={() => setEditing(character)}>编辑</button>
-                  <button type="button" onClick={() => handleDelete(character)}>删除</button>
+                <div className="character-card-body">
+                  <div className="character-card-title">
+                    <h3>{character.name}</h3>
+                    <span className={`status-badge ${hasLora ? 'connected' : 'pending'}`}>
+                      {hasLora ? '已绑定 LoRA' : '未绑定 LoRA'}
+                    </span>
+                  </div>
+                  <p className="character-card-description">{character.description || character.personality || '暂无描述'}</p>
+                  <div className="character-lora-summary">
+                    <span>LoRA</span>
+                    <strong>{loraDisplayName(character.lora)}</strong>
+                    {hasLora && <small>权重 {lora.weight ?? 0.8} · {lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</small>}
+                  </div>
+                  <div className="tag-row">
+                    {(character.tags || []).map((tag) => <span key={tag} className="tag">{tag}</span>)}
+                  </div>
+                  <small className="character-created-at">{formatDate(character.created_at)}</small>
+                  <div className="character-card-actions">
+                    <button type="button" onClick={() => editCharacter(character)}>{hasLora ? '编辑角色与 LoRA' : '配置 LoRA'}</button>
+                    <button type="button" onClick={() => handleDelete(character)}>删除</button>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       )}
 
       {selected && (
-        <aside className="detail-panel">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">Character Detail</p>
-              <h2>{selected.name}</h2>
+        <div className="character-detail-overlay" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setSelected(null);
+        }}>
+          <aside className="detail-panel character-detail-panel">
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">Character Detail</p>
+                <h2>{selected.name}</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={() => setSelected(null)}>关闭</button>
             </div>
-            <button className="ghost-button" type="button" onClick={() => setSelected(null)}>关闭</button>
-          </div>
-          <dl>
-            <div><dt>LoRA</dt><dd>{selected.lora || '—'}</dd></div>
-            <div><dt>创建时间</dt><dd>{formatDate(selected.created_at)}</dd></div>
-          </dl>
-          <p><strong>描述：</strong>{selected.description || '—'}</p>
-          <p><strong>性格：</strong>{selected.personality || '—'}</p>
-          <p><strong>外观：</strong>{selected.appearance || '—'}</p>
-          <p className="draft-preview">{selected.prompt || '暂无角色 Prompt'}</p>
-        </aside>
+            {selected.avatar && <img className="character-detail-avatar" src={selected.avatar} alt={`${selected.name} 角色头像`} />}
+            <CharacterLoraDetails value={selected.lora} />
+            <div className="character-detail-copy">
+              <p><strong>描述：</strong>{selected.description || '—'}</p>
+              <p><strong>性格：</strong>{selected.personality || '—'}</p>
+              <p><strong>外观：</strong>{selected.appearance || '—'}</p>
+              <p><strong>创建时间：</strong>{formatDate(selected.created_at)}</p>
+            </div>
+            <div className="character-prompt-block">
+              <span>角色 Prompt</span>
+              <p className="draft-preview">{selected.prompt || '暂无角色 Prompt'}</p>
+            </div>
+            <div className="button-row">
+              <button className="primary-button" type="button" onClick={() => editCharacter(selected)}>编辑角色与 LoRA</button>
+            </div>
+          </aside>
+        </div>
       )}
+    </section>
+  );
+}
+
+function CharacterLoraDetails({ value }) {
+  const lora = parseLoraConfig(value);
+  const configured = hasLoraConfig(value);
+
+  if (!configured) {
+    return <div className="notice warning">该角色尚未绑定 LoRA，暂时不能用于角色一致性图片或视频生成。</div>;
+  }
+
+  return (
+    <section className="character-detail-lora">
+      <div className="character-detail-section-title">
+        <h3>LoRA 配置</h3>
+        <span className="status-badge connected">已绑定</span>
+      </div>
+      <dl>
+        <div><dt>名称</dt><dd>{loraDisplayName(value)}</dd></div>
+        <div><dt>模型</dt><dd>{lora.model || '—'}</dd></div>
+        <div><dt>版本</dt><dd>{lora.version || '—'}</dd></div>
+        <div><dt>文件</dt><dd>{lora.filename || '—'}</dd></div>
+        <div><dt>权重</dt><dd>{lora.weight ?? 0.8}</dd></div>
+        <div><dt>Workflow</dt><dd>{lora.workflow || '—'}</dd></div>
+        <div><dt>生成能力</dt><dd>{lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</dd></div>
+        <div><dt>触发词</dt><dd>{lora.trigger_words || '—'}</dd></div>
+      </dl>
     </section>
   );
 }

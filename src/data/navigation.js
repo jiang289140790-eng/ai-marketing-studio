@@ -45,6 +45,17 @@ export const navigationItems = navigationSections.flatMap((section) => section.i
 
 export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];
 
+export const promptCategories = [
+  { value: 'general', label: '通用' },
+  { value: 'viral_analysis', label: '爆款分析' },
+  { value: 'caption', label: '文案' },
+  { value: 'image', label: '图片生成' },
+  { value: 'video', label: '视频脚本' },
+  { value: 'character', label: '角色 / LoRA' },
+  { value: 'account_persona', label: '账号画像' },
+  { value: 'workflow', label: '工作流' },
+];
+
 export const platformAdapterIds = ['telegram', 'x', 'youtube', 'instagram', 'tiktok', 'discord'];
 
 export const accountCategories = [

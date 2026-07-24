@@ -2344,13 +2344,344 @@ textarea {
 
 .inline-content-studio {
   display: grid;
-  gap: 0;
-  padding: 0 18px 18px;
+  gap: 16px;
+  padding: 2px 18px 18px;
 }
 
 .inline-content-studio .workspace-block {
   margin-bottom: 12px;
   border-radius: 18px;
+}
+
+.studio-simple-progress {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(48px, 0.55fr) minmax(170px, 1fr) minmax(48px, 0.55fr) minmax(170px, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.32);
+  padding: 16px 20px;
+}
+
+.simple-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: #94a3b8;
+}
+
+.simple-progress-step > span {
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  height: 38px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.08);
+  font-weight: 900;
+}
+
+.simple-progress-step > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.simple-progress-step strong {
+  color: #e2e8f0;
+  font-size: 14px;
+}
+
+.simple-progress-step small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.simple-progress-step.completed > span {
+  border-color: rgba(129, 140, 248, 0.72);
+  background: linear-gradient(135deg, #818cf8, #a78bfa);
+  color: #fff;
+}
+
+.simple-progress-step.active > span {
+  border: 2px solid #a78bfa;
+  background: rgba(124, 58, 237, 0.18);
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.08);
+}
+
+.simple-progress-step.active strong { color: #fff; }
+.simple-progress-step.active small { color: #67e8f9; }
+
+.simple-progress-line {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.25);
+}
+
+.simple-progress-line.active {
+  background: linear-gradient(90deg, #8b5cf6, #22d3ee);
+}
+
+.studio-focus-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.72fr) minmax(520px, 1.55fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.studio-focus-card {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(34, 211, 238, 0.035), transparent 36%),
+    rgba(15, 23, 42, 0.56);
+  padding: 18px;
+}
+
+.studio-focus-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.studio-focus-heading h3 {
+  margin: 4px 0 0;
+  color: #fff;
+  font-size: 20px;
+}
+
+.context-sync-badge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.07);
+  color: #a5f3fc;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.copy-focus-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.copy-focus-card label,
+.visual-control-grid label,
+.visual-mode-select,
+.visual-prompt-editor {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.copy-focus-card input,
+.copy-focus-card textarea,
+.visual-control-grid select,
+.visual-mode-select select,
+.visual-prompt-editor textarea {
+  width: 100%;
+  min-width: 0;
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.copy-focus-card textarea,
+.visual-prompt-editor textarea {
+  resize: vertical;
+}
+
+.copy-focus-card .button-row {
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.compact-action {
+  min-height: 40px;
+}
+
+.visual-focus-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.visual-mode-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  align-self: flex-start;
+  overflow: hidden;
+  margin-bottom: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.visual-mode-tabs button {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  padding: 10px 16px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.visual-mode-tabs button.active {
+  background: linear-gradient(135deg, #7c3aed, #0891b2);
+  color: #fff;
+}
+
+.context-sync-strip {
+  margin-bottom: 14px;
+  border: 1px solid rgba(34, 211, 238, 0.12);
+  border-radius: 11px;
+  background: rgba(34, 211, 238, 0.08);
+  color: #a5f3fc;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-control-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.readonly-control {
+  min-height: 43px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.28);
+  color: #f8fafc;
+  padding: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-mode-select {
+  margin-bottom: 12px;
+}
+
+.visual-prompt-editor {
+  flex: 1;
+}
+
+.visual-prompt-editor textarea {
+  min-height: 118px;
+  color: #e2e8f0;
+  line-height: 1.65;
+}
+
+.visual-generation-actions {
+  display: grid;
+  grid-template-columns: auto minmax(240px, 1fr);
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.text-action {
+  border: 0;
+  background: transparent;
+  color: #60a5fa;
+  padding: 8px 0;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.generate-now-button {
+  width: 100%;
+  min-height: 52px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(100deg, #7c3aed, #2563eb 52%, #06b6d4);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 900;
+  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.22);
+}
+
+.focus-advanced-settings {
+  margin-top: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.22);
+}
+
+.focus-advanced-settings > summary {
+  padding: 11px 13px;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.focus-advanced-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 13px 13px;
+}
+
+.focus-advanced-content p {
+  margin: 4px 0 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.result-focus-card {
+  padding-bottom: 14px;
+}
+
+.result-focus-card .generation-results {
+  margin-top: 0;
+}
+
+.studio-advanced-workflow {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.24);
+}
+
+.studio-advanced-workflow > summary {
+  padding: 15px 18px;
+  color: #cbd5e1;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.studio-advanced-workflow > summary::marker {
+  color: #67e8f9;
+}
+
+.studio-advanced-workflow-body {
+  padding: 0 14px 14px;
+}
+
+@media (max-width: 1120px) {
+  .studio-focus-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-control-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .media-generation-shell {
@@ -3022,7 +3353,7 @@ textarea {
 .production-current-status.pending { color: #cbd5e1; background: rgba(148, 163, 184, 0.12); }
 .production-current-status.blocked,
 .production-current-status.needs_bridge { color: #fde68a; background: rgba(245, 158, 11, 0.14); }
-.production-stepper { display: grid; grid-template-columns: repeat(8, minmax(110px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.production-stepper { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
 .production-step { display: flex; gap: 8px; min-width: 110px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; opacity: 0.72; }
 .production-step > span { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: rgba(148, 163, 184, 0.14); font-weight: 900; }
 .production-step div { display: grid; gap: 3px; }
@@ -3142,6 +3473,25 @@ textarea {
   .connected-account-list span { text-align: left; }
   .production-binding-heading,
   .production-binding-footer { align-items: flex-start; flex-direction: column; }
+  .studio-simple-progress {
+    grid-template-columns: 1fr;
+  }
+  .simple-progress-line { display: none; }
+  .studio-focus-grid,
+  .visual-control-grid {
+    grid-template-columns: 1fr;
+  }
+  .visual-generation-actions {
+    grid-template-columns: 1fr;
+  }
+  .visual-mode-tabs {
+    display: grid;
+    width: 100%;
+  }
+  .focus-advanced-content {
+    align-items: flex-start;
+    flex-direction: column;
+  }
   .production-binding-selectors,
   .production-binding-preview,
   .asset-source-grid { grid-template-columns: 1fr; }

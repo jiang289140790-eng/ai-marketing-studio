@@ -310,6 +310,27 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
 }
 
 function ProductionSteps({ guide, onNext }) {
+  const groupedSteps = [
+    {
+      id: 'copy',
+      label: '文案确认',
+      status: guide.steps.find((step) => step.id === 'copy')?.status || 'pending',
+      hint: '标题、Hook、正文与 CTA',
+    },
+    {
+      id: 'visual',
+      label: '视觉生成',
+      status: summarizeProductionStatus(guide.steps.filter((step) => ['role', 'reference', 'image', 'video', 'results'].includes(step.id))),
+      hint: '角色、LoRA、素材与生成结果',
+    },
+    {
+      id: 'review',
+      label: '结果审核',
+      status: summarizeProductionStatus(guide.steps.filter((step) => ['approval', 'publish'].includes(step.id))),
+      hint: '确认素材并进入发布队列',
+    },
+  ];
+
   return (
     <section className="production-guide" aria-label="内容生产步骤">
       <div className="production-guide-head">
@@ -320,10 +341,10 @@ function ProductionSteps({ guide, onNext }) {
         <span className={`production-current-status ${guide.current.status}`}>{productionStatusLabel(guide.current.status)}</span>
       </div>
       <div className="production-stepper">
-        {guide.steps.map((step, index) => (
-          <div className={`production-step ${step.status} ${step.id === guide.current.id ? 'current' : ''}`} key={step.id}>
+        {groupedSteps.map((step, index) => (
+          <div className={`production-step ${step.status} ${step.status !== 'completed' && !groupedSteps.slice(0, index).some((item) => item.status !== 'completed') ? 'current' : ''}`} key={step.id}>
             <span>{index + 1}</span>
-            <div><strong>{step.label}</strong><small>{productionStatusLabel(step.status)}</small></div>
+            <div><strong>{step.label}</strong><small>{step.hint} · {productionStatusLabel(step.status)}</small></div>
           </div>
         ))}
       </div>
@@ -335,6 +356,13 @@ function ProductionSteps({ guide, onNext }) {
   );
 }
 
+function summarizeProductionStatus(steps) {
+  if (steps.every((step) => step.status === 'completed')) return 'completed';
+  if (steps.some((step) => step.status === 'needs_bridge')) return 'needs_bridge';
+  if (steps.some((step) => step.status === 'pending')) return 'pending';
+  return 'blocked';
+}
+
 function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefresh, sectionIds }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const account = findById(data.accounts, item.accountId);
@@ -343,7 +371,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
   const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || '');
   const [selectedAssetIds, setSelectedAssetIds] = useState(item.referenceAssetIds || []);
   const [bindingStatus, setBindingStatus] = useState({ loading: false, message: '', error: false });
-  const [activeMediaPanel, setActiveMediaPanel] = useState(null);
+  const [activeMediaPanel, setActiveMediaPanel] = useState('image');
   const [videoMode, setVideoMode] = useState(item.generationMode || 'character_lora_video');
   const [draft, setDraft] = useState(() => ({
     title: item.title || '',
@@ -376,6 +404,14 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
   const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id) === String(item.id));
   const imageReq = normalizeRequirement(item.imageRequirements || item.assetRequirement);
   const videoReq = normalizeRequirement(item.videoRequirements || item.assetRequirement);
+  const visualPrompt = displayText(
+    activeMediaPanel === 'video'
+      ? videoReq.script || videoReq.positive_prompt || videoReq.text
+      : imageReq.positive_prompt || imageReq.prompt || imageReq.text,
+    activeMediaPanel === 'video'
+      ? `${draft.hook || draft.title}。围绕当前文案主题，以 ${selectedCharacter?.display_name || selectedCharacter?.name || '当前角色'} 为主角，生成竖版短视频脚本与镜头提示。`
+      : `${draft.hook || draft.title}。${selectedCharacter?.display_name || selectedCharacter?.name || '原创 AI 角色'}，${imageReq.scene || '具有氛围感的真实场景'}，${imageReq.lighting || '电影感光线'}，${imageReq.aspect_ratio || '9:16'}。`,
+  );
   const parsedX = parseXUrl(xUrl);
   const needsReference = activeMediaPanel === 'video'
     && ['image_to_video', 'first_frame', 'first_last_frame', 'reference_video', 'multi_shot'].includes(videoMode);
@@ -511,6 +547,168 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
 
   return (
     <div className="inline-content-studio" aria-label={`${item.title} 的内容生成工作室`}>
+        <section className="studio-simple-progress" aria-label="内容生产主流程">
+          <div className="simple-progress-step completed">
+            <span>✓</span>
+            <div><strong>1 文案确认</strong><small>标题、Hook、正文与 CTA</small></div>
+          </div>
+          <div className="simple-progress-line active" />
+          <div className="simple-progress-step active">
+            <span>2</span>
+            <div><strong>视觉生成</strong><small>角色、LoRA、素材与提示词</small></div>
+          </div>
+          <div className="simple-progress-line" />
+          <div className="simple-progress-step">
+            <span>3</span>
+            <div><strong>结果审核</strong><small>采用素材并进入发布</small></div>
+          </div>
+        </section>
+
+        <div className="studio-focus-grid">
+          <section className="studio-focus-card copy-focus-card" id={sectionIds.copy}>
+            <div className="studio-focus-heading">
+              <div>
+                <p className="eyebrow">CURRENT COPY</p>
+                <h3>当前文案</h3>
+              </div>
+              <span className="context-sync-badge">策略已关联</span>
+            </div>
+            <label>标题
+              <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+            </label>
+            <label>Hook
+              <textarea rows="2" value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} />
+            </label>
+            <label>正文摘要
+              <textarea rows="5" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
+            </label>
+            <label>CTA
+              <input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} />
+            </label>
+            <label>标签
+              <input value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} />
+            </label>
+            <div className="button-row">
+              <button className="primary-button compact-action" type="button" onClick={() => openContextAI('rewrite_copy')}>✦ AI 优化文案</button>
+              <ExecutionButton
+                action="save_draft"
+                actionName="保存草稿"
+                className="ghost-button"
+                resourceType="content_package"
+                resourceId={item.id}
+                payload={{ content_package_id: item.id, draft }}
+              >
+                保存草稿
+              </ExecutionButton>
+            </div>
+          </section>
+
+          <section className="studio-focus-card visual-focus-card" id={sectionIds.media}>
+            <div className="studio-focus-heading">
+              <div>
+                <p className="eyebrow">VISUAL GENERATION</p>
+                <h3>视觉生成</h3>
+              </div>
+              <span className={`status-badge ${selectedCharacter && hasLora(lora) ? 'connected' : 'pending'}`}>
+                {selectedCharacter && hasLora(lora) ? '角色 LoRA 可用' : '等待角色 LoRA'}
+              </span>
+            </div>
+
+            <div className="visual-mode-tabs" role="tablist" aria-label="视觉生成类型">
+              <button className={activeMediaPanel === 'image' ? 'active' : ''} type="button" onClick={() => setActiveMediaPanel('image')}>▧ 图片生成</button>
+              <button className={activeMediaPanel === 'video' ? 'active' : ''} type="button" onClick={() => setActiveMediaPanel('video')}>▶ 视频生成</button>
+            </div>
+
+            <div className="context-sync-strip">✓ 已同步文案主题、Hook、策略、角色与素材要求</div>
+
+            <div className="visual-control-grid">
+              <label>人物角色
+                <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
+                  <option value="">请选择角色</option>
+                  {(data.characters || []).filter((nextCharacter) => nextCharacter.status !== 'archived').map((nextCharacter) => (
+                    <option key={nextCharacter.id} value={nextCharacter.id}>
+                      {nextCharacter.display_name || nextCharacter.name || nextCharacter.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>LoRA
+                <div className="readonly-control">{displayText(lora.name || lora.model || lora.filename, '未配置 LoRA')} · {displayText(lora.weight || lora.strength, '0.8')}</div>
+              </label>
+              <label>画面比例
+                <div className="readonly-control">{displayText(imageReq.aspect_ratio || videoReq.aspect_ratio, '9:16')}</div>
+              </label>
+              <label>参考素材
+                <div className="readonly-control">{selectedAssets.length ? `${selectedAssets.length} 个已选素材` : '尚未选择'}</div>
+              </label>
+            </div>
+
+            {activeMediaPanel === 'video' && (
+              <label className="visual-mode-select">视频生成方式
+                <select value={videoMode} onChange={(event) => setVideoMode(event.target.value)}>
+                  {VIDEO_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+            )}
+
+            <label className="visual-prompt-editor">
+              <span>{activeMediaPanel === 'image' ? '图片提示词' : '视频脚本与提示词'}</span>
+              <textarea rows="5" value={visualPrompt} readOnly />
+            </label>
+
+            <div className="visual-generation-actions">
+              <button className="text-action" type="button" onClick={() => openContextAI(activeMediaPanel === 'image' ? 'generate_image_prompt' : 'generate_video_script')}>
+                重新生成{activeMediaPanel === 'image' ? '图片提示词' : '视频脚本'}
+              </button>
+              <ExecutionButton
+                action={activeMediaPanel === 'image' ? 'generate_character_image' : 'generate_character_video'}
+                actionName={activeMediaPanel === 'image' ? '立即生成图片' : '立即生成视频'}
+                className="primary-button generate-now-button"
+                resourceType="content_package"
+                resourceId={item.id}
+                payload={generationPayload}
+                reason={missingGenerationReason}
+              >
+                {activeMediaPanel === 'image' ? '▧ 立即生成图片' : '▶ 立即生成视频'}
+              </ExecutionButton>
+            </div>
+
+            <details className="focus-advanced-settings">
+              <summary>高级设置与参考素材</summary>
+              <div className="focus-advanced-content">
+                <div>
+                  <strong>当前关联</strong>
+                  <p>{selectedStrategy?.name || selectedStrategy?.title || '未关联策略'} · {selectedCharacter?.display_name || selectedCharacter?.name || '未选择角色'}</p>
+                </div>
+                <button className="ghost-button" type="button" onClick={saveProductionBinding} disabled={bindingStatus.loading}>
+                  {bindingStatus.loading ? '正在保存...' : '保存当前关联'}
+                </button>
+              </div>
+            </details>
+            {bindingStatus.message && <div className={`notice ${bindingStatus.error ? 'error' : ''}`}>{bindingStatus.message}</div>}
+          </section>
+        </div>
+
+        <section className="studio-focus-card result-focus-card" id={sectionIds.results}>
+          <div className="studio-focus-heading">
+            <div>
+              <p className="eyebrow">GENERATION RESULTS</p>
+              <h3>生成结果</h3>
+            </div>
+            <span className="context-sync-badge">{linkedAssets.length} 个可用素材</span>
+          </div>
+          <GenerationResults
+            item={item}
+            assets={linkedAssets}
+            runs={runs}
+            selectedId={selectedGeneratedId}
+            onSelect={setSelectedGeneratedId}
+          />
+        </section>
+
+        <details className="studio-advanced-workflow">
+          <summary>完整设置、素材导入与终审发布</summary>
+          <div className="studio-advanced-workflow-body">
 
         <section className="workspace-block">
           <h3>基础信息</h3>
@@ -613,7 +811,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
           {bindingStatus.message && <div className={`notice ${bindingStatus.error ? 'error' : ''}`}>{bindingStatus.message}</div>}
         </section>
 
-        <section className="workspace-block" id={sectionIds.copy}>
+        <section className="workspace-block">
           <h3>文案内容</h3>
           <div className="editor-grid">
             <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
@@ -666,7 +864,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
           </div>
         </section>
 
-        <section className="workspace-block media-generation-shell" id={sectionIds.media}>
+        <section className="workspace-block media-generation-shell">
           <div className="media-generation-heading">
             <div>
               <p className="eyebrow">视觉内容生成</p>
@@ -875,7 +1073,7 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
           </div>
         )}
 
-        <section className="workspace-block" id={sectionIds.results}>
+        <section className="workspace-block">
           <h3>生成结果回传</h3>
           <GenerationResults
             item={item}
@@ -928,6 +1126,8 @@ function ContentPackageStudio({ item, data, assets, userId, onNavigate, onRefres
           </ExecutionButton>
           {publishTask && <p className="muted-line">已关联发布任务：{publishTask.id} · {displayText(publishTask.status)}</p>}
         </section>
+          </div>
+        </details>
         <ContextAIBox
           open={contextAI.open}
           mode={contextAI.mode}

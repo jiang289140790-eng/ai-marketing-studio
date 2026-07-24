@@ -509,6 +509,9 @@ function classifyReadError(error) {
 
 function classifyWriteError(error) {
   const message = error?.message || String(error);
+  if (/0 rows|no rows|multiple \(or no\) rows|PGRST116|JSON object requested/i.test(message)) {
+    return '当前内容没有成功写入。请确认你是该内容的所有者，然后刷新页面重试。';
+  }
   if (/permission denied|row-level security|rls|not authorized|JWT/i.test(message)) return '当前账号没有修改这条内容的权限。';
   if (/does not exist|schema cache|Could not find/i.test(message)) return '线上数据结构与当前页面不兼容。';
   if (/Failed to fetch|network|timeout/i.test(message)) return '网络连接异常，请稍后重试。';

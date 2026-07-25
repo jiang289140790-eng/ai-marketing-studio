@@ -120,7 +120,7 @@ export async function loadCommandCenterData() {
 }
 
 export async function loadCampaignData() {
-  return loadKeys(['campaigns', 'strategies', 'accounts', 'accountReports', 'knowledge', 'strategyMemory', 'contentMetrics']);
+  return loadKeys(['campaigns', 'strategies', 'contentPackages', 'accounts', 'accountReports', 'knowledge', 'strategyMemory', 'contentMetrics']);
 }
 
 export async function loadContentWorkspaceData() {

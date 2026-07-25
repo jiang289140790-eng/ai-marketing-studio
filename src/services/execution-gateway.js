@@ -5,6 +5,13 @@ export const EXECUTION_ACTIONS = new Set([
   'generate_strategy',
   'approve_strategy',
   'reject_strategy',
+  'generate_campaign_strategy',
+  'approve_campaign_strategy',
+  'generate_7_day_plan',
+  'approve_7_day_plan',
+  'create_content_packages_from_daily_plan',
+  'get_campaign_day_status',
+  'start_campaign_day',
   'generate_content',
   'rewrite_content',
   'save_draft',
@@ -25,6 +32,8 @@ export const EXECUTION_ACTIONS = new Set([
 
 export const asyncActions = new Set([
   'generate_strategy',
+  'generate_campaign_strategy',
+  'generate_7_day_plan',
   'generate_content',
   'rewrite_content',
   'import_x_reference',

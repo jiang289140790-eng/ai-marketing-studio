@@ -1,4 +1,5 @@
 import { requireSupabase } from './supabase-client';
+import { dayTitle } from '../utils/content-package-sequence';
 
 const TABLES = {
   accounts: 'social_accounts',
@@ -135,6 +136,48 @@ export async function loadContentWorkspaceData() {
     'workflowRuns',
     'publishTasks',
   ]);
+}
+
+export async function ensureStrategyContentPackageDayMetadata(strategyId, campaignId, dailyPlan = []) {
+  if (!strategyId || !dailyPlan.length) return [];
+  const client = requireSupabase();
+  const { data: packages, error } = await client
+    .from(TABLES.contentPackages)
+    .select('*')
+    .eq('strategy_plan_id', strategyId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`内容包日程读取失败：${classifyReadError(error)}`);
+
+  return Promise.all((packages || []).slice(0, dailyPlan.length).map(async (contentPackage, index) => {
+    const planDay = dailyPlan[index] || {};
+    const dayIndex = index + 1;
+    const dayMetadata = {
+      day_index: dayIndex,
+      day_label: `Day ${dayIndex}`,
+      pillar: planDay.pillar || '',
+      platform: planDay.platform || contentPackage.platform || '',
+      source_strategy_id: strategyId,
+      campaign_id: campaignId || contentPackage.campaign_id || null,
+    };
+    const imageRequirements = normalizeObject(contentPackage.image_requirements);
+    const videoRequirements = normalizeObject(contentPackage.video_requirements);
+    const sourceInsights = normalizeObject(contentPackage.source_insights);
+    const update = {
+      title: dayTitle(dayIndex, planDay.pillar || contentPackage.title),
+      source_insights: { ...sourceInsights, ...dayMetadata },
+      image_requirements: { ...imageRequirements, ...dayMetadata },
+      video_requirements: { ...videoRequirements, ...dayMetadata },
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error: updateError } = await client
+      .from(TABLES.contentPackages)
+      .update(update)
+      .eq('id', contentPackage.id)
+      .select('*')
+      .single();
+    if (updateError) throw new Error(`Day ${dayIndex} 内容包更新失败：${classifyWriteError(updateError)}`);
+    return data;
+  }));
 }
 
 export async function loadPublishQueueData() {

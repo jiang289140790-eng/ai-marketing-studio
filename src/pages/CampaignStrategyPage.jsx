@@ -4,7 +4,7 @@ import { ExecutionButton } from '../components/ExecutionButton';
 import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { getExecutionStatus } from '../services/execution-gateway';
-import { countWhere, displayText, findById, loadCampaignData } from '../services/ops-service';
+import { countWhere, displayText, ensureStrategyContentPackageDayMetadata, findById, loadCampaignData } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
 const EMPTY = {
@@ -247,6 +247,16 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
   const dailyPlan = normalizeDailyPlan(strategy.daily_plan || plan.daily_plan || plan.weekly_plan || plan.content_calendar);
   const isReview = ['review', 'pending', 'draft'].includes(strategy.status || 'review');
 
+  async function handleApproved() {
+    await onRefresh?.();
+    try {
+      await ensureStrategyContentPackageDayMetadata(strategy.id, strategy.campaign_id, dailyPlan);
+    } catch (error) {
+      console.warn('内容包 Day 元数据补全失败，将由工作台前端顺序解析兜底。', error);
+    }
+    onNavigate('workspace', '', { strategy_id: strategy.id, day: 1 });
+  }
+
   return (
     <article className={`strategy-card ${compact ? 'compact-card' : ''}`}>
       <div className="section-head">
@@ -298,10 +308,15 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
               actionName="批准策略并创建内容包"
               resourceType="strategy"
               resourceId={strategy.id}
-              payload={{ strategy_id: strategy.id, action: 'approve' }}
-              onCompleted={onRefresh}
+              payload={{
+                strategy_id: strategy.id,
+                action: 'approve',
+                daily_plan: dailyPlan.map((day, index) => ({ ...day, day_index: index + 1, day_label: `Day ${index + 1}` })),
+                content_package_title_format: 'Day {day_index}｜{pillar}',
+              }}
+              onCompleted={handleApproved}
             >
-              批准策略
+              批准策略并进入 Day 1
             </ExecutionButton>
             <ExecutionButton
               action="reject_strategy"
@@ -316,7 +331,7 @@ function StrategyCard({ strategy, accounts, compact = false, onNavigate, onRefre
             </ExecutionButton>
           </>
         )}
-        <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>查看关联内容</button>
+        <button className="ghost-button" type="button" onClick={() => onNavigate('workspace', '', { strategy_id: strategy.id, day: 1 })}>进入 Day 内容生产</button>
       </div>
     </article>
   );

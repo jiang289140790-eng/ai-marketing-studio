@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { ContextAIBox } from '../components/ContextAIBox';
 import { ExecutionButton } from '../components/ExecutionButton';
-import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import {
   applyContextAIResult,
-  countWhere,
   displayText,
   findById,
   getAssets,
@@ -19,6 +17,7 @@ import { buildContentContext } from '../services/context-ai-service';
 import { createPrompt } from '../services/prompt-service';
 import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { normalizeContentPackageSequence } from '../utils/content-package-sequence';
 import { formatDate } from '../utils/formatters';
 
 const EMPTY = {
@@ -91,12 +90,14 @@ const VIDEO_REQUIREMENT_FIELDS = [
   ['negative_prompt', 'negative prompt'],
 ];
 
-export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
+export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams = {} }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
   const [activeWorkflow, setActiveWorkflow] = useState('all');
   const [hideTests, setHideTests] = useState(true);
   const [gateway, setGateway] = useState({ loading: true, connected: false });
+  const [selectedStrategyId, setSelectedStrategyId] = useState(routeParams.strategy_id || '');
+  const [selectedPackageId, setSelectedPackageId] = useState(detailId || '');
 
   const refreshData = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
@@ -125,19 +126,86 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
 
   const contentPackages = useMemo(() => getContentPackages(data), [data]);
   const assets = useMemo(() => getAssets(data), [data]);
+  const allSequence = useMemo(
+    () => normalizeContentPackageSequence(contentPackages, data.strategies),
+    [contentPackages, data.strategies],
+  );
+  const strategyOptions = useMemo(() => {
+    const ids = new Set(contentPackages.map((item) => item.strategyId).filter(Boolean).map(String));
+    return (data.strategies || []).filter((strategy) => ids.has(String(strategy.id)));
+  }, [contentPackages, data.strategies]);
+
+  useEffect(() => {
+    const detailPackage = contentPackages.find((item) => String(item.id) === String(detailId));
+    const requested = routeParams.strategy_id || detailPackage?.strategyId || '';
+    if (requested && contentPackages.some((item) => String(item.strategyId) === String(requested))) {
+      setSelectedStrategyId(String(requested));
+      return;
+    }
+    if (selectedStrategyId && contentPackages.some((item) => String(item.strategyId) === String(selectedStrategyId))) return;
+    const next = allSequence.find((item) => item.isCurrent)?.contentPackage?.strategyId
+      || allSequence[0]?.contentPackage?.strategyId
+      || '';
+    setSelectedStrategyId(next ? String(next) : '');
+  }, [allSequence, contentPackages, detailId, routeParams.strategy_id, selectedStrategyId]);
+
+  const strategyPackages = useMemo(() => (
+    selectedStrategyId
+      ? contentPackages.filter((item) => String(item.strategyId) === String(selectedStrategyId))
+      : contentPackages
+  ), [contentPackages, selectedStrategyId]);
+  const daySequence = useMemo(
+    () => normalizeContentPackageSequence(strategyPackages, data.strategies),
+    [data.strategies, strategyPackages],
+  );
   const workflowCounts = useMemo(() => WORKFLOW_FILTERS.reduce((result, [id]) => {
     result[id] = contentPackages.filter((item) => contentMatchesWorkflow(item, id, data, assets)).length;
     return result;
   }, {}), [assets, contentPackages, data]);
-  const filteredPackages = useMemo(() => contentPackages.filter((item) => {
+  const filteredPackages = useMemo(() => strategyPackages.filter((item) => {
     if (hideTests && activeWorkflow !== 'test' && isTestContent(item)) return false;
     return contentMatchesWorkflow(item, activeWorkflow, data, assets);
-  }), [activeWorkflow, assets, contentPackages, data, hideTests]);
-  const visiblePackages = useMemo(() => (
-    detailId
-      ? contentPackages.filter((item) => String(item.id) === String(detailId))
-      : filteredPackages
-  ), [contentPackages, detailId, filteredPackages]);
+  }), [activeWorkflow, assets, data, hideTests, strategyPackages]);
+  const visibleSequence = useMemo(() => {
+    const allowed = new Set(filteredPackages.map((item) => String(item.id)));
+    return daySequence.filter((item) => allowed.has(String(item.id)));
+  }, [daySequence, filteredPackages]);
+
+  useEffect(() => {
+    const requestedDay = Number(routeParams.day);
+    const detailMatch = visibleSequence.find((item) => String(item.id) === String(detailId));
+    const dayMatch = Number.isFinite(requestedDay) && requestedDay > 0
+      ? visibleSequence.find((item) => item.dayIndex === requestedDay)
+      : null;
+    const selectedStillExists = visibleSequence.find((item) => String(item.id) === String(selectedPackageId));
+    const next = detailMatch || dayMatch || selectedStillExists || visibleSequence.find((item) => item.isCurrent) || visibleSequence[0];
+    setSelectedPackageId(next?.id ? String(next.id) : '');
+  }, [detailId, routeParams.day, selectedPackageId, visibleSequence]);
+
+  const selectedSequence = visibleSequence.find((item) => String(item.id) === String(selectedPackageId))
+    || visibleSequence.find((item) => item.isCurrent)
+    || visibleSequence[0];
+  const selectedItem = selectedSequence?.contentPackage;
+  const selectedCampaign = findById(data.campaigns, selectedItem?.campaignId);
+  const selectedStrategy = findById(data.strategies, selectedItem?.strategyId || selectedStrategyId);
+  const selectedCharacter = findById(data.characters, selectedItem?.characterId);
+  const selectedLora = getLoraInfo(selectedCharacter, selectedItem || {});
+  const selectedLinkedAssets = selectedItem ? assetsForContent(selectedItem, assets) : [];
+  const selectedRuns = selectedItem ? runsForContent(selectedItem, data.workflowRuns || []) : [];
+  const selectedPublishTask = selectedItem
+    ? (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id || '') === String(selectedItem.id))
+    : null;
+  const selectedGuide = selectedItem
+    ? buildProductionGuide({
+      item: selectedItem,
+      character: selectedCharacter,
+      lora: selectedLora,
+      linkedAssets: selectedLinkedAssets,
+      workflowRuns: selectedRuns,
+      publishTask: selectedPublishTask,
+      gateway,
+    })
+    : null;
 
   if (!isSupabaseConfigured) {
     return <EmptyState title="等待数据服务配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
@@ -151,22 +219,15 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
     <section className="page-stack content-workspace-page">
       <div className="hero-panel">
         <p className="eyebrow">内容工作台</p>
-        <h2>内容审核、角色模型、素材引用、图片和视频生成都在同一个流程里</h2>
+        <h2>按策略日程推进每日内容生产</h2>
         <p>
-          每张内容卡都会连接运营活动、策略、账号、角色、角色模型（LoRA）、素材、生成任务和发布队列。
-          你从这里完成：查看内容 → 补素材 → 生成图片/视频 → 人工审核 → 进入发布。
+          从 Day 1 开始，依次完成文案、角色模型、素材、视觉生成、结果审核和发布队列。
+          页面只突出当前需要处理的一天和下一步动作。
         </p>
         <div className="button-row">
           <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>打开素材库</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>打开角色库</button>
         </div>
-      </div>
-
-      <div className="stat-grid compact">
-        <StatCard label="内容包" value={loading ? '-' : contentPackages.length} hint="content_packages + content_library" />
-        <StatCard label="待审核" value={loading ? '-' : countWhere(contentPackages, (item) => ['draft', 'review'].includes(item.reviewStatus))} hint="需要人工确认" />
-        <StatCard label="生成中" value={loading ? '-' : countWhere(contentPackages, (item) => item.status === 'generating')} hint="等待工作流结果" />
-        <StatCard label="可用素材" value={loading ? '-' : assets.length} hint="素材库与历史素材" />
       </div>
 
       {!gateway.loading && !gateway.connected && (
@@ -176,43 +237,174 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId }) {
         </div>
       )}
 
-      <div className="content-workflow-toolbar">
-        <div className="workflow-filter-list" aria-label="内容工作流筛选">
-          {WORKFLOW_FILTERS.map(([id, label]) => (
-            <button className={activeWorkflow === id ? 'active' : ''} type="button" key={id} onClick={() => setActiveWorkflow(id)}>
-              {label}<span>{workflowCounts[id] || 0}</span>
-            </button>
-          ))}
-        </div>
-        <label className="hide-test-toggle">
-          <input type="checkbox" checked={hideTests} onChange={(event) => setHideTests(event.target.checked)} />
-          隐藏测试内容
-        </label>
+      {selectedSequence && selectedGuide && (
+        <StrategyDayProgress
+          campaign={selectedCampaign}
+          strategy={selectedStrategy}
+          sequence={visibleSequence}
+          selected={selectedSequence}
+          guide={selectedGuide}
+          strategyOptions={strategyOptions}
+          selectedStrategyId={selectedStrategyId}
+          onStrategyChange={(strategyId) => {
+            setSelectedStrategyId(strategyId);
+            setSelectedPackageId('');
+            onNavigate('workspace', '', { strategy_id: strategyId, day: 1 });
+          }}
+        />
+      )}
+
+      <div className="day-production-layout">
+        <aside className="day-plan-panel" aria-label="七天内容计划">
+          <div className="day-plan-panel-head">
+            <div><span>策略日程</span><strong>{visibleSequence.length || 0} 天内容计划</strong></div>
+            <small>按 Day 顺序生产</small>
+          </div>
+          <div className="day-plan-list">
+            {visibleSequence.map((sequenceItem) => (
+              <button
+                type="button"
+                key={sequenceItem.id}
+                className={`day-plan-item ${String(sequenceItem.id) === String(selectedSequence?.id) ? 'active' : ''} ${sequenceItem.isCompleted ? 'completed' : ''} ${sequenceItem.isBlocked ? 'blocked' : ''}`}
+                onClick={() => {
+                  setSelectedPackageId(String(sequenceItem.id));
+                  onNavigate('workspace', sequenceItem.id, {
+                    strategy_id: sequenceItem.contentPackage.strategyId || selectedStrategyId,
+                    day: sequenceItem.dayIndex,
+                  });
+                }}
+              >
+                <span className="day-plan-index">{sequenceItem.dayLabel}</span>
+                <span className="day-plan-copy">
+                  <strong>{sequenceItem.pillar}</strong>
+                  <small>{sequenceItem.platform} · {sequenceItem.productionStep.label}</small>
+                </span>
+                <span className={`day-plan-state ${sequenceItem.isCompleted ? 'completed' : sequenceItem.isBlocked ? 'blocked' : 'pending'}`}>
+                  {sequenceItem.isCompleted ? '完成' : sequenceItem.isBlocked ? '阻塞' : '进行中'}
+                </span>
+              </button>
+            ))}
+            {!visibleSequence.length && <div className="empty-card-inline">当前策略还没有可用的 Day 内容包。</div>}
+          </div>
+        </aside>
+
+        <main className="current-day-production">
+          {selectedItem ? (
+            <ContentPackageCard
+              key={`${selectedItem.sourceKey}-${selectedItem.id}`}
+              item={selectedItem}
+              data={data}
+              assets={assets}
+              gateway={gateway}
+              userId={userId}
+              onNavigate={onNavigate}
+              onRefresh={refreshData}
+              initialOpen
+              dayIndex={selectedSequence.dayIndex}
+              strategyId={selectedStrategyId}
+            />
+          ) : (
+            <EmptyState
+              title={loading ? '正在读取内容包' : '没有匹配的内容包'}
+              description="批准策略后，Day 1 到 Day 7 的内容会按顺序显示在这里。"
+            />
+          )}
+        </main>
       </div>
 
-      <div className="content-workspace-list">
-        {visiblePackages.length ? visiblePackages.map((item) => (
-          <ContentPackageCard
-            key={`${item.sourceKey}-${item.id}`}
-            item={item}
-            data={data}
-            assets={assets}
-            gateway={gateway}
-            userId={userId}
-            onNavigate={onNavigate}
-            onRefresh={refreshData}
-            initialOpen={String(detailId) === String(item.id)}
-          />
-        )) : (
-          <EmptyState title="没有匹配的内容包" description="请更换工作流筛选，或关闭“隐藏测试内容”后再查看。" />
-        )}
-      </div>
+      <details className="content-workspace-secondary">
+        <summary>筛选与查看其它内容</summary>
+        <div className="content-workflow-toolbar">
+          <div className="workflow-filter-list" aria-label="内容工作流筛选">
+            {WORKFLOW_FILTERS.map(([id, label]) => (
+              <button className={activeWorkflow === id ? 'active' : ''} type="button" key={id} onClick={() => setActiveWorkflow(id)}>
+                {label}<span>{workflowCounts[id] || 0}</span>
+              </button>
+            ))}
+          </div>
+          <label className="hide-test-toggle">
+            <input type="checkbox" checked={hideTests} onChange={(event) => setHideTests(event.target.checked)} />
+            隐藏测试内容
+          </label>
+        </div>
+      </details>
 
     </section>
   );
 }
 
-function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, onRefresh, initialOpen = false }) {
+function StrategyDayProgress({
+  campaign,
+  strategy,
+  sequence,
+  selected,
+  guide,
+  strategyOptions,
+  selectedStrategyId,
+  onStrategyChange,
+}) {
+  const stages = [
+    ['copy', '文案确认', ['copy']],
+    ['role', '角色 / LoRA 确认', ['role']],
+    ['reference', '素材引用', ['reference']],
+    ['visual', '视觉生成', ['image', 'video', 'results']],
+    ['review', '结果审核', ['approval']],
+    ['publish', '发布队列', ['publish']],
+  ].map(([id, label, ids]) => {
+    const related = guide.steps.filter((step) => ids.includes(step.id));
+    const completed = related.length > 0 && related.every((step) => step.status === 'completed');
+    const active = related.some((step) => step.id === guide.current.id);
+    return { id, label, completed, active };
+  });
+
+  return (
+    <section className="strategy-day-progress">
+      <div className="strategy-day-progress-head">
+        <div>
+          <span>当前运营活动</span>
+          <strong>{campaign?.name || campaign?.title || '未关联运营活动'}</strong>
+        </div>
+        <label>当前策略
+          <select value={selectedStrategyId} onChange={(event) => onStrategyChange(event.target.value)}>
+            {strategyOptions.map((option) => (
+              <option value={option.id} key={option.id}>{option.name || option.title || option.id}</option>
+            ))}
+            {!strategyOptions.length && <option value="">{strategy?.name || strategy?.title || '未关联策略'}</option>}
+          </select>
+        </label>
+        <div className="current-day-badge">
+          <span>当前日程</span>
+          <strong>{selected.dayLabel} / {Math.max(sequence.length, 1)}</strong>
+        </div>
+        <div>
+          <span>当前生产阶段</span>
+          <strong>{guide.current.label}</strong>
+        </div>
+      </div>
+      <div className="strategy-production-stages" aria-label="当前 Day 生产阶段">
+        {stages.map((stage, index) => (
+          <div className={`strategy-production-stage ${stage.completed ? 'completed' : ''} ${stage.active ? 'active' : ''}`} key={stage.id}>
+            <span>{stage.completed ? '✓' : index + 1}</span>
+            <strong>{stage.label}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ContentPackageCard({
+  item,
+  data,
+  assets,
+  gateway,
+  userId,
+  onNavigate,
+  onRefresh,
+  initialOpen = false,
+  dayIndex = 1,
+  strategyId = '',
+}) {
   const campaign = findById(data.campaigns, item.campaignId);
   const strategy = findById(data.strategies, item.strategyId);
   const account = findById(data.accounts, item.accountId);
@@ -233,7 +425,7 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
 
   function openSection(target) {
     setStudioOpen(true);
-    onNavigate('workspace', item.id);
+    onNavigate('workspace', item.id, { strategy_id: strategyId || item.strategyId, day: dayIndex });
     window.setTimeout(() => document.getElementById(sectionIds[target])?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   }
 
@@ -242,6 +434,14 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
   }, [initialOpen]);
 
   function followNextStep() {
+    if (productionGuide.current.status === 'completed') {
+      if (dayIndex < 7) {
+        onNavigate('workspace', '', { strategy_id: strategyId || item.strategyId, day: dayIndex + 1 });
+      } else {
+        onNavigate('publish');
+      }
+      return;
+    }
     if (productionGuide.nextAction.page) {
       onNavigate(productionGuide.nextAction.page);
       return;
@@ -254,7 +454,7 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
       <div className="content-card-header section-head">
         <div>
           <p className="eyebrow">{item.sourceLabel}</p>
-          <h3>{item.title}</h3>
+          <h3>{formatDayPackageTitle(item.title, dayIndex)}</h3>
           <p className="body-preview">{truncate(displayText(item.body, '等待生成正文'), 220)}</p>
         </div>
         <div className="badge-stack">
@@ -264,7 +464,7 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
         </div>
       </div>
 
-      <ProductionSteps guide={productionGuide} onNext={followNextStep} />
+      <ProductionSteps guide={productionGuide} onNext={followNextStep} dayIndex={dayIndex} />
 
       <details className="content-card-context">
         <summary>查看内容、策略与素材概览</summary>
@@ -294,11 +494,17 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
       </details>
 
       <div className="button-row content-card-quick-actions">
-        <button className="primary-button" type="button" onClick={followNextStep}>{productionGuide.nextAction.label}</button>
-        <button className="ghost-button" type="button" onClick={() => openSection('studio')}>打开完整工作室</button>
+        <button className="primary-button" type="button" onClick={followNextStep}>
+          {productionGuide.current.status === 'completed'
+            ? dayIndex < 7 ? `进入 Day ${dayIndex + 1} 内容生成` : '查看发布队列'
+            : productionGuide.current.id === 'role'
+              ? `为 Day ${dayIndex} 选择角色 / LoRA`
+              : productionGuide.nextAction.label}
+        </button>
+        <button className="ghost-button" type="button" onClick={() => openSection('studio')}>展开完整生产面板</button>
         {studioOpen && <button className="ghost-button" type="button" onClick={() => {
           setStudioOpen(false);
-          onNavigate('workspace');
+          onNavigate('workspace', '', { strategy_id: strategyId || item.strategyId, day: dayIndex });
         }}>收起工作室</button>}
       </div>
 
@@ -309,18 +515,29 @@ function ContentPackageCard({ item, data, assets, gateway, userId, onNavigate, o
         onToggle={(event) => {
           const nextOpen = event.currentTarget.open;
           setStudioOpen(nextOpen);
-          onNavigate('workspace', nextOpen ? item.id : '');
+          onNavigate('workspace', nextOpen ? item.id : '', { strategy_id: strategyId || item.strategyId, day: dayIndex });
         }}
       >
         <summary>🎬 人物角色模型（LoRA）图片和视频生成</summary>
         <p className="strategy-link-note">关联策略：{strategy?.name || strategy?.title || '未找到关联策略，将只使用当前内容包要求'}</p>
-        <ContentPackageStudio item={item} data={data} assets={assets} gateway={gateway} userId={userId} onNavigate={onNavigate} onRefresh={onRefresh} sectionIds={sectionIds} />
+        <ContentPackageStudio
+          item={item}
+          data={data}
+          assets={assets}
+          gateway={gateway}
+          userId={userId}
+          onNavigate={onNavigate}
+          onRefresh={onRefresh}
+          sectionIds={sectionIds}
+          currentStep={productionGuide.current.id}
+          dayIndex={dayIndex}
+        />
       </details>
     </article>
   );
 }
 
-function ProductionSteps({ guide, onNext }) {
+function ProductionSteps({ guide, onNext, dayIndex }) {
   const groupedSteps = [
     {
       id: 'copy',
@@ -361,7 +578,9 @@ function ProductionSteps({ guide, onNext }) {
       </div>
       <div className="production-next-action">
         <div><span>当前阻塞原因</span><strong>{guide.reason}</strong></div>
-        <button className="ghost-button" type="button" onClick={onNext}>{guide.nextAction.label}</button>
+        <button className="ghost-button" type="button" onClick={onNext}>
+          {guide.current.id === 'role' ? `为 Day ${dayIndex} 选择角色 / LoRA` : guide.nextAction.label}
+        </button>
       </div>
     </section>
   );
@@ -374,7 +593,7 @@ function summarizeProductionStatus(steps) {
   return 'blocked';
 }
 
-function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate, onRefresh, sectionIds }) {
+function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate, onRefresh, sectionIds, currentStep, dayIndex }) {
   const campaign = findById(data.campaigns, item.campaignId);
   const account = findById(data.accounts, item.accountId);
   const referenceAccount = findById(data.accounts, item.referenceAccountId);
@@ -571,27 +790,19 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
     setBindingStatus({ loading: false, message: '提示词已保存到提示词库。', error: false });
   }
 
+  async function handleFinalized() {
+    await onRefresh();
+    onNavigate('workspace', '', {
+      strategy_id: item.strategyId || selectedStrategyId,
+      day: Math.min(dayIndex + 1, 7),
+    });
+  }
+
   return (
     <div className="inline-content-studio" aria-label={`${item.title} 的内容生成工作室`}>
-        <section className="studio-simple-progress" aria-label="内容生产主流程">
-          <div className="simple-progress-step completed">
-            <span>✓</span>
-            <div><strong>1 文案确认</strong><small>标题、开场钩子、正文与行动引导</small></div>
-          </div>
-          <div className="simple-progress-line active" />
-          <div className="simple-progress-step active">
-            <span>2</span>
-            <div><strong>视觉生成</strong><small>角色、角色模型、素材与提示词</small></div>
-          </div>
-          <div className="simple-progress-line" />
-          <div className="simple-progress-step">
-            <span>3</span>
-            <div><strong>结果审核</strong><small>采用素材并进入发布</small></div>
-          </div>
-        </section>
-
         <div className="studio-focus-grid">
-          <section className="studio-focus-card copy-focus-card" id={sectionIds.copy}>
+          <details className="studio-focus-card studio-step-panel copy-focus-card" id={sectionIds.copy} defaultOpen={currentStep === 'copy'}>
+            <summary>Day {dayIndex} · 文案确认</summary>
             <div className="studio-focus-heading">
               <div>
                 <p className="eyebrow">当前文案</p>
@@ -627,9 +838,10 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
                 保存草稿
               </ExecutionButton>
             </div>
-          </section>
+          </details>
 
-          <section className="studio-focus-card visual-focus-card" id={sectionIds.media}>
+          <details className="studio-focus-card studio-step-panel visual-focus-card" id={sectionIds.media} defaultOpen={['role', 'reference', 'image', 'video'].includes(currentStep)}>
+            <summary>Day {dayIndex} · 角色、素材与视觉生成</summary>
             <div className="studio-focus-heading">
               <div>
                 <p className="eyebrow">视觉生成</p>
@@ -761,10 +973,11 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
               </div>
             </details>
             {bindingStatus.message && <div className={`notice ${bindingStatus.error ? 'error' : ''}`}>{bindingStatus.message}</div>}
-          </section>
+          </details>
         </div>
 
-        <section className="studio-focus-card result-focus-card" id={sectionIds.results}>
+        <details className="studio-focus-card studio-step-panel result-focus-card" id={sectionIds.results} defaultOpen={['results', 'approval', 'publish'].includes(currentStep)}>
+          <summary>Day {dayIndex} · 生成结果与审核</summary>
           <div className="studio-focus-heading">
             <div>
               <p className="eyebrow">生成结果</p>
@@ -779,7 +992,35 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             selectedId={selectedGeneratedId}
             onSelect={setSelectedGeneratedId}
           />
-        </section>
+          <div className="review-checklist compact-review-checklist">
+            <Check label="正文已确认" ok={Boolean(draft.body.trim())} />
+            <Check label="行动引导已确认" ok={Boolean(draft.cta.trim())} />
+            <Check label="角色 / LoRA 已确认" ok={Boolean(selectedCharacter && hasLora(lora))} />
+            <Check label="可用素材已确认" ok={Boolean(selectedAssets.length || linkedAssets.length)} />
+          </div>
+          <div className="button-row">
+            <ExecutionButton
+              action="finalize_content_package"
+              actionName={`审核通过并将 Day ${dayIndex} 加入发布队列`}
+              resourceType="content_package"
+              resourceId={item.id}
+              payload={{
+                content_package_id: item.id,
+                selected_asset_id: selectedGeneratedId || null,
+                selected_asset_ids: selectedAssetIds,
+                final_body: draft.body,
+                final_cta: draft.cta,
+                final_tags: normalizeList(draft.tags),
+                scheduled_at: draft.scheduledAt ? new Date(draft.scheduledAt).toISOString() : null,
+                platform_account_id: item.accountId,
+              }}
+              reason={finalReviewReason}
+              onCompleted={handleFinalized}
+            >
+              审核通过并加入发布队列
+            </ExecutionButton>
+          </div>
+        </details>
 
         <details className="studio-advanced-workflow">
           <summary>完整设置、素材导入与终审发布</summary>
@@ -1196,6 +1437,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
               platform_account_id: item.accountId,
             }}
             reason={finalReviewReason}
+            onCompleted={handleFinalized}
           >
             审核通过并进入发布队列
           </ExecutionButton>
@@ -1546,6 +1788,14 @@ function normalizeRequirement(value) {
 function truncate(value, length) {
   const text = displayText(value, '');
   return text.length > length ? `${text.slice(0, length)}…` : text;
+}
+
+function formatDayPackageTitle(title, dayIndex) {
+  const value = String(title || '待生成内容')
+    .replace(/^Day\s*\d+\s*[｜|:：-]?\s*/i, '')
+    .replace(/\s*[/／]\s*\d+\s*$/, '')
+    .trim();
+  return `Day ${dayIndex}｜${value || '待生成内容'}`;
 }
 
 function booleanText(value) {

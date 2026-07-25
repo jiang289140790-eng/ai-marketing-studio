@@ -42,11 +42,11 @@ const pageTitles = {
 pageTitles.prompts = '提示词库';
 
 export default function App() {
-  const { page: activePage, detailId, navigate } = useAppRoute();
+  const { page: activePage, detailId, routeParams, navigate } = useAppRoute();
   const { error: authError, loading: authLoading, session, userId } = useAuth();
 
   const page = useMemo(() => {
-    const props = { userId, onNavigate: navigate, detailId };
+    const props = { userId, onNavigate: navigate, detailId, routeParams };
 
     switch (activePage) {
       case 'campaigns':
@@ -82,7 +82,7 @@ export default function App() {
       default:
         return <CommandCenter {...props} />;
     }
-  }, [activePage, detailId, navigate, userId]);
+  }, [activePage, detailId, navigate, routeParams, userId]);
 
   return (
     <div className="app-shell">

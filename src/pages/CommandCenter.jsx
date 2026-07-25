@@ -1,19 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
-import { ExecutionStatus } from '../components/ExecutionStatus';
-import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
-import {
-  countWhere,
-  displayText,
-  getAssets,
-  getContentPackages,
-  getKnowledgeItems,
-  getLatest,
-  loadCommandCenterData,
-  normalizeStatus,
-} from '../services/ops-service';
+import { buildUserActionQueue } from '../services/action-queue-service';
+import { getExecutionStatus } from '../services/execution-gateway';
+import { displayText, getLatest, loadCommandCenterData } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { getContentPackageDay, normalizeCampaignDailyPlan } from '../utils/campaign-daily-plan';
 import { formatDate } from '../utils/formatters';
 
 const EMPTY_DATA = {
@@ -37,6 +29,14 @@ const EMPTY_DATA = {
   agentRuns: [],
   workflowRuns: [],
   platformConnections: [],
+  __errors: [],
+};
+
+const PRIORITY_LABELS = {
+  urgent: '紧急',
+  high: '高优先级',
+  medium: '普通',
+  low: '低优先级',
 };
 
 export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignContext }) {
@@ -46,33 +46,37 @@ export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignCo
 
   useEffect(() => {
     if (!userId || !isSupabaseConfigured) return undefined;
+    let cancelled = false;
     setLoading(true);
-    loadCommandCenterData()
-      .then((nextData) => setData(scopeCommandCenterData({ ...EMPTY_DATA, ...nextData }, activeCampaignId, campaignContext)))
-      .finally(() => setLoading(false));
-    return undefined;
-  }, [activeCampaignId, campaignContext, userId]);
-
-  const summary = useMemo(() => {
-    const contentPackages = getContentPackages(data);
-    const assets = getAssets(data);
-    const knowledge = getKnowledgeItems(data);
-    const allTasks = [...data.publishTasks, ...data.agentRuns, ...data.workflowRuns];
-
-    return {
-      contentPackages,
-      assets,
-      knowledge,
-      activeCampaigns: countWhere(data.campaigns, (item) => !['completed', 'archived', 'cancelled'].includes(String(item.status).toLowerCase())),
-      pendingStrategies: countWhere(data.strategies, (item) => item.status === 'review'),
-      pendingContent: countWhere(contentPackages, (item) => ['draft', 'review'].includes(item.reviewStatus || item.status)),
-      generating: countWhere([...data.agentRuns, ...data.workflowRuns], (item) => ['running', 'queued', 'generating'].includes(item.status)),
-      pendingPublish: countWhere(data.publishTasks, (item) => item.approval_status === 'pending' || item.status === 'pending'),
-      failedTasks: countWhere(allTasks, (item) => ['failed', 'error'].includes(item.status)),
-      connectedAccounts: countWhere(data.platformConnections, (item) => item.status === 'connected'),
-      accountReports: data.accountReports.length + data.accountProfiles.length,
+    Promise.all([
+      loadCommandCenterData(),
+      getExecutionStatus({ force: true }).catch(() => ({ connected: false })),
+    ]).then(([nextData, nextGatewayStatus]) => {
+      if (cancelled) return;
+      setData({ ...EMPTY_DATA, ...nextData });
+      setGatewayStatus({ loading: false, ...nextGatewayStatus });
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => {
+      cancelled = true;
     };
-  }, [data]);
+  }, [userId]);
+
+  const actionQueue = useMemo(() => buildUserActionQueue(data), [data]);
+  const currentActions = useMemo(
+    () => actionQueue.filter((item) => !activeCampaignId || String(item.campaign_id || '') === String(activeCampaignId)),
+    [actionQueue, activeCampaignId],
+  );
+  const timeline = useMemo(
+    () => buildSevenDayTimeline(campaignContext, data),
+    [campaignContext, data],
+  );
+  const exceptions = useMemo(
+    () => buildBusinessExceptions(data, actionQueue, gatewayStatus),
+    [actionQueue, data, gatewayStatus],
+  );
+  const recommendations = useMemo(() => buildRecommendations(data), [data]);
 
   if (!isSupabaseConfigured) {
     return (
@@ -85,282 +89,393 @@ export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignCo
   if (!userId) {
     return (
       <section className="page-stack">
-        <div className="hero-panel command-hero">
-          <p className="eyebrow">AI 营销操作系统</p>
+        <div className="hero-panel command-hero command-hero-simple">
+          <p className="eyebrow">AI 运营指挥中心</p>
           <h2>请先登录你的个人运营工作台</h2>
-          <p>登录后，这里会直接显示待审批策略、待审核内容、生成任务、待发布审批、失败任务、最近账号智能报告和知识沉淀。</p>
+          <p>登录后，这里只展示今天需要处理的事项、当前活动进度和真正影响业务的异常。</p>
         </div>
       </section>
     );
   }
 
-  const latestRuns = getLatest([...data.agentRuns, ...data.workflowRuns], 5);
-  const latestContent = getLatest(summary.contentPackages, 5);
-  const latestKnowledge = getLatest(summary.knowledge, 5);
-  const pipelineSteps = [
-    {
-      step: 1,
-      label: '情报发现',
-      status: summary.accountReports > 0 ? 'done' : data.insights.length > 0 ? 'active' : 'idle',
-      count: summary.accountReports || data.insights.length,
-    },
-    { step: 2, label: '策略生成', status: data.strategies.length > 0 ? 'done' : 'idle', attention: summary.pendingStrategies, count: summary.pendingStrategies },
-    { step: 3, label: '内容生产', status: summary.contentPackages.length > 0 ? 'done' : 'idle', attention: summary.pendingContent, count: summary.pendingContent },
-    { step: 4, label: '素材生成', status: summary.generating > 0 ? 'active' : summary.assets.length > 0 ? 'done' : 'idle', count: summary.generating || summary.assets.length },
-    { step: 5, label: '发布审批', status: data.publishTasks.length > 0 ? 'done' : 'idle', attention: summary.pendingPublish, count: summary.pendingPublish },
-    { step: 6, label: '数据回收', status: data.contentMetrics.length > 0 ? 'done' : 'idle', count: data.contentMetrics.length },
-  ];
-  const actionItems = [
-    { label: '待审批策略', description: '确认 AI 生成的定位、内容支柱和执行计划。', value: summary.pendingStrategies, page: 'campaigns', button: '去审批策略' },
-    { label: '待审核内容', description: '检查文案、行动引导、角色模型与最终素材。', value: summary.pendingContent, page: 'workspace', button: '去审核内容' },
-    { label: '待确认发布', description: '确认发布时间、目标账号和发布安全条件。', value: summary.pendingPublish, page: 'publish', button: '去发布队列' },
-    { label: '失败任务', description: '查看失败原因并决定重试、重生成或人工处理。', value: summary.failedTasks, page: 'health', button: '查看异常', danger: true },
-  ];
-  const latestReport = getLatest([...data.accountReports, ...data.accountProfiles], 1)[0];
-  const latestStrategyMemory = getLatest(data.strategyMemory, 1)[0];
-  const bestContentMemory = [...data.contentMemory]
-    .sort((left, right) => Number(right.success_rate || right.score || 0) - Number(left.success_rate || left.score || 0))[0];
-  const recommendations = [
-    {
-      emoji: '🔎',
-      title: '账号情报发现',
-      text: recommendationText(latestReport, ['key_findings', 'summary', 'analysis', 'report', 'description']),
-      empty: '完成一次账号分析后，这里会显示最新的受众、内容模式和增长机会。',
-    },
-    {
-      emoji: '🧭',
-      title: '策略复盘教训',
-      text: recommendationText(latestStrategyMemory, ['lessons_learned', 'learning', 'summary', 'description']),
-      empty: '策略执行并回收数据后，这里会提示下一轮应该保留或调整的方向。',
-    },
-    {
-      emoji: '⚡',
-      title: '推荐内容模式',
-      text: recommendationText(bestContentMemory, ['pattern', 'winning_pattern', 'recommendation', 'summary', 'description']),
-      empty: '积累内容表现后，这里会推荐成功率最高的开场钩子、结构和行动引导模式。',
-    },
-  ];
-
-  function scrollToGateway() {
-    document.getElementById('execution-gateway-status')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!loading && data.campaigns.length === 0) {
+    return <FirstUseGuide onNavigate={onNavigate} />;
   }
 
+  const primaryAction = currentActions[0] || actionQueue[0];
+
   return (
-    <section className="page-stack">
-      <div className="hero-panel command-hero">
+    <section className="page-stack command-center-v2">
+      <header className="command-focus-header">
         <div>
           <p className="eyebrow">AI 运营指挥中心</p>
-          <h2>你管理方向，AI 员工负责推进每天的运营流水线</h2>
+          <h2>{actionQueue.length ? `今天有 ${actionQueue.length} 项需要你处理` : '今天没有阻塞中的人工任务'}</h2>
           <p>
-            线上站点已按本地运营指挥中心的真实流程重构：从运营活动目标，到策略审批、内容生成与审核、素材和角色选择、发布安全审批，
-            最后沉淀到账号画像和知识库。页面只暴露业务决策，不再把数据库表和技术模块摊开给你操作。
+            {primaryAction
+              ? `${primaryAction.campaign_name}：${primaryAction.summary}`
+              : '当前流程运行正常，可以查看即将发布的内容或继续推进当前活动。'}
           </p>
         </div>
-        <div className="hero-actions">
-          {gatewayStatus.loading ? (
-            <div className="execution-hero-state pending">
-              <strong>正在检查执行服务</strong>
-              <span>业务数据仍可正常查看和审核。</span>
-            </div>
-          ) : gatewayStatus.connected ? (
-            <div className="execution-hero-state connected">
-              <strong>执行服务已连接</strong>
-              <span>可以从具体运营活动、内容或发布任务发起受控动作。</span>
-              <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>查看待处理内容</button>
-            </div>
-          ) : (
-            <div className="execution-hero-state unavailable">
-              <strong>执行服务暂未连接</strong>
-              <span>请先完成 MCP 安全连接服务部署，之后才能运行每日 AI 运营。</span>
-              <div className="button-row">
-                <button className="ghost-button" type="button" onClick={scrollToGateway}>查看执行网关状态</button>
-                <button className="ghost-button" type="button" onClick={() => onNavigate('connections')}>查看连接详情</button>
-                <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>查看待处理内容</button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+        {primaryAction && (
+          <button className="primary-button" type="button" onClick={() => navigateToAction(primaryAction, onNavigate)}>
+            {primaryAction.recommended_action}
+          </button>
+        )}
+      </header>
 
-      <ExecutionStatus onStatus={setGatewayStatus} />
-      <DataReadErrors errors={data.__errors} />
-
-      <section className="daily-ops-panel">
+      <section className="command-section action-queue-section">
         <div className="section-head compact-head">
           <div>
-            <p className="eyebrow">每日 AI 运营</p>
-            <h3>今日运营工作流</h3>
-            <p>实时读取数据服务状态，快速判断流程推进到哪一步、哪里需要人工确认。</p>
+            <p className="eyebrow">待我处理</p>
+            <h3>按业务优先级排列</h3>
           </div>
-          <StatusBadge status={summary.failedTasks ? 'failed' : summary.generating ? 'running' : 'success'} />
+          <span className="command-count">{actionQueue.length} 项</span>
         </div>
-        <div className="daily-ops-pipeline" aria-label="AI Daily Ops 六步工作流">
-          {pipelineSteps.map((item) => <PipelineStep key={item.step} {...item} />)}
-        </div>
+        {actionQueue.length ? (
+          <div className="action-queue-list">
+            {actionQueue.slice(0, 8).map((item) => (
+              <ActionQueueRow key={`${item.action_type}-${item.entity_id}`} item={item} onNavigate={onNavigate} />
+            ))}
+          </div>
+        ) : (
+          <div className="command-clear-state">
+            <span>✓</span>
+            <div>
+              <strong>暂时没有需要人工处理的任务</strong>
+              <p>系统不会把正常连接状态或无意义的 0 填满首页。</p>
+            </div>
+          </div>
+        )}
       </section>
 
-      <div className="stat-grid compact">
-        <StatCard label="活跃运营活动" value={loading ? '-' : summary.activeCampaigns} hint="当前运营目标" />
-        <StatCard label="待你审批" value={loading ? '-' : summary.pendingStrategies + summary.pendingContent + summary.pendingPublish} hint="策略、内容与发布" />
-        <StatCard label="授权连接记录" value={loading ? '-' : summary.connectedAccounts} hint="账号授权不等于 MCP / 发布能力" />
-        <StatCard label="知识库条目" value={loading ? '-' : summary.knowledge.length} hint="知识库与运营记忆" />
+      <div className="command-main-grid">
+        <CurrentCampaignPanel
+          context={campaignContext}
+          actions={currentActions}
+          onNavigate={onNavigate}
+        />
+        <SevenDaySchedule timeline={timeline} onNavigate={onNavigate} />
       </div>
 
-      <section className="attention-panel">
-        <div className="section-head compact-head">
-          <div><p className="eyebrow">待办中心</p><h3>需要你处理</h3></div>
-          <span className="attention-total">{actionItems.reduce((total, item) => total + item.value, 0)} 项待办</span>
-        </div>
-        <div className="attention-grid">
-          {actionItems.map((item) => <WorkItem key={item.label} {...item} onNavigate={onNavigate} />)}
-        </div>
-      </section>
-
-      <section className="recommendation-panel">
-        <div className="section-head compact-head">
-          <div><p className="eyebrow">AI 下一步行动</p><h3>下一步建议</h3><p>从账号报告、策略记忆和内容记忆中提取最新可执行建议。</p></div>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
-        </div>
-        <div className="recommendation-grid">
-          {recommendations.map((item) => <RecommendationCard key={item.title} {...item} />)}
-        </div>
-      </section>
-
-      <div className="dashboard-grid">
-        <section className="table-card mini-panel">
-          <div className="panel-title">
-            <h3>最近智能体与工作流</h3>
-            <button className="ghost-button" type="button" onClick={() => onNavigate('health')}>系统状态</button>
-          </div>
-          <RecordList rows={latestRuns} empty="还没有智能体或工作流执行记录。" />
-        </section>
-
-        <section className="table-card mini-panel">
-          <div className="panel-title">
-            <h3>最近内容包</h3>
-            <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>内容工作台</button>
-          </div>
-          <RecordList rows={latestContent} empty="策略审批后，内容包会进入这里。" />
-        </section>
-
-        <section className="table-card mini-panel">
-          <div className="panel-title">
-            <h3>最近知识与洞察</h3>
-            <StatusBadge status={summary.knowledge.length ? 'success' : 'pending'} />
-          </div>
-          <RecordList rows={latestKnowledge} empty="账号分析、内容分析、策略复盘会沉淀到这里。" />
-        </section>
+      <div className="command-secondary-grid">
+        <BusinessExceptions exceptions={exceptions} onNavigate={onNavigate} />
+        <AiRecommendations items={recommendations} onNavigate={onNavigate} />
       </div>
     </section>
   );
 }
 
-function scopeCommandCenterData(data, campaignId, context) {
-  if (!campaignId) return { ...EMPTY_DATA };
-  const packageIds = new Set((context?.contentPackages || []).map((item) => String(item.id)));
-  const taskIds = new Set((context?.publishTasks || []).map((item) => String(item.id)));
-  const accountIds = new Set([
-    context?.primaryAccount?.id,
-    ...(context?.competitorAccounts || []).map((item) => item.id),
-  ].filter(Boolean).map(String));
-  return {
-    ...data,
-    campaigns: data.campaigns.filter((item) => String(item.id) === String(campaignId)),
-    strategies: data.strategies.filter((item) => String(item.campaign_id || '') === String(campaignId)),
-    accounts: data.accounts.filter((item) => accountIds.has(String(item.id))),
-    accountReports: data.accountReports.filter((item) => accountIds.has(String(item.social_account_id || item.account_id))),
-    contentPackages: data.contentPackages.filter((item) => packageIds.has(String(item.id))),
-    legacyContent: data.legacyContent.filter((item) => (context?.contentItems || []).some((row) => row.id === item.id)),
-    legacyAssets: data.legacyAssets.filter((item) => (
-      String(item.campaign_id || '') === String(campaignId)
-      || packageIds.has(String(item.content_package_id || ''))
-    )),
-    publishTasks: data.publishTasks.filter((item) => taskIds.has(String(item.id))),
-    publishMetrics: data.publishMetrics.filter((item) => taskIds.has(String(item.publish_task_id || item.id))),
-    contentMetrics: data.contentMetrics.filter((item) => (
-      packageIds.has(String(item.content_package_id || ''))
-      || taskIds.has(String(item.publish_task_id || ''))
-    )),
-    insights: data.insights.filter((item) => String(item.campaign_id || '') === String(campaignId)),
-  };
-}
-
-function DataReadErrors({ errors = [] }) {
-  if (!errors.length) return null;
+function ActionQueueRow({ item, onNavigate }) {
   return (
-    <div className="error-banner">
-      <strong>数据读取异常</strong>
-      <span>部分统计可能不完整，请优先检查数据表权限或网络连接。</span>
-      <ul>
-        {errors.slice(0, 5).map((error) => (
-          <li key={`${error.key}-${error.message}`}>{error.message}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function PipelineStep({ step, label, status, attention, count }) {
-  const visualStatus = attention ? 'attention' : status;
-  const icon = visualStatus === 'done' ? '✓' : visualStatus === 'active' ? '⚡' : visualStatus === 'attention' ? '!' : '·';
-  return (
-    <div className={`pipeline-step ${visualStatus}`}>
-      <div className="pipeline-marker"><span>{icon}</span></div>
-      <small>步骤 {step}</small>
-      <strong>{label}</strong>
-      <span className="pipeline-count">{count || 0}</span>
-    </div>
-  );
-}
-
-function WorkItem({ label, description, value, page, button, onNavigate, danger = false }) {
-  return (
-    <article className={`attention-card ${danger ? 'danger' : ''} ${value ? 'has-work' : 'clear'}`}>
-      <div className="attention-card-head"><strong>{label}</strong><span>{value}</span></div>
-      <p>{description}</p>
-      <button className={value ? 'primary-button' : 'ghost-button'} type="button" onClick={() => onNavigate(page)}>{value ? button : '查看'}</button>
+    <article className={`action-queue-row priority-${item.priority}`}>
+      <div className="action-priority">
+        <span>{PRIORITY_LABELS[item.priority] || '普通'}</span>
+        <small>{actionTypeLabel(item.action_type)}</small>
+      </div>
+      <div className="action-copy">
+        <strong>{item.title}</strong>
+        <p>{truncate(item.summary, 120)}</p>
+        <small>
+          {item.campaign_name} · {item.account_name}{item.day ? ` · Day ${item.day}` : ''}
+        </small>
+      </div>
+      <button className="ghost-button" type="button" onClick={() => navigateToAction(item, onNavigate)}>
+        {item.recommended_action}
+      </button>
     </article>
   );
 }
 
-function RecommendationCard({ emoji, title, text, empty }) {
-  return (
-    <article className="recommendation-card">
-      <span className="recommendation-icon">{emoji}</span>
-      <div><h4>{title}</h4><p>{truncate(text || empty, 100)}</p></div>
-    </article>
-  );
-}
-
-function recommendationText(row, fields) {
-  if (!row) return '';
-  for (const field of fields) {
-    const value = row[field];
-    if (value != null && value !== '') return displayText(value, '');
+function CurrentCampaignPanel({ context, actions, onNavigate }) {
+  if (!context?.campaign) {
+    return (
+      <section className="command-section current-campaign-panel">
+        <div className="section-head compact-head">
+          <div><p className="eyebrow">当前运营活动</p><h3>请选择一个运营活动</h3></div>
+        </div>
+        <p>选择活动后，这里会显示目标、主账号、Day 1 进度和当前阻塞。</p>
+        <button className="ghost-button" type="button" onClick={() => onNavigate('campaigns')}>选择运营活动</button>
+      </section>
+    );
   }
-  return displayText(row, '');
+
+  const { campaign, primaryAccount, progress, blockingItems = [], dailyPlan = [], contentPackages = [] } = context;
+  const dayOne = contentPackages.find((item) => getContentPackageDay(item) === 1);
+  const nextAction = actions[0];
+  const planProgress = Math.min(contentPackages.length, dailyPlan.length || 7);
+
+  return (
+    <section className="command-section current-campaign-panel">
+      <div className="section-head compact-head">
+        <div>
+          <p className="eyebrow">当前运营活动</p>
+          <h3>{campaign.name || campaign.title || '未命名运营活动'}</h3>
+        </div>
+        <StatusBadge status={campaign.status || 'active'} />
+      </div>
+      <p className="campaign-goal">{campaign.goal || campaign.objective || campaign.description || '尚未填写活动目标'}</p>
+      <dl className="campaign-summary-grid">
+        <div><dt>主账号</dt><dd>{accountLabel(primaryAccount)}</dd></div>
+        <div><dt>当前阶段</dt><dd>{progress?.currentStage || '等待流程数据'}</dd></div>
+        <div><dt>7 天计划</dt><dd>{planProgress} / {dailyPlan.length || 7}</dd></div>
+        <div><dt>Day 1 状态</dt><dd>{dayOne ? packageStatusLabel(dayOne) : '尚未创建'}</dd></div>
+      </dl>
+      <div className="campaign-progress-track" aria-label="运营活动进度">
+        <span style={{ width: `${progress?.percent || 0}%` }} />
+      </div>
+      <div className="campaign-blocker">
+        <span>当前阻塞</span>
+        <strong>{nextAction?.title || blockingItems[0]?.label || '暂无阻塞'}</strong>
+      </div>
+      <div className="button-row">
+        <button className="ghost-button" type="button" onClick={() => onNavigate('campaigns', campaign.id, { campaign_id: campaign.id })}>
+          查看活动
+        </button>
+        {nextAction && (
+          <button className="primary-button" type="button" onClick={() => navigateToAction(nextAction, onNavigate)}>
+            下一步：{nextAction.recommended_action}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SevenDaySchedule({ timeline, onNavigate }) {
+  return (
+    <section className="command-section seven-day-schedule">
+      <div className="section-head compact-head">
+        <div><p className="eyebrow">未来 7 天发布计划</p><h3>内容与发布时间</h3></div>
+        <button className="ghost-button" type="button" onClick={() => onNavigate('campaigns')}>查看完整计划</button>
+      </div>
+      {timeline.length ? (
+        <div className="schedule-list">
+          {timeline.map((item) => (
+            <article key={item.day}>
+              <div className="schedule-day"><strong>Day {item.day}</strong><span>{item.date || '待排期'}</span></div>
+              <div><strong>{item.topic || '待确定主题'}</strong><small>{item.platform || '待选平台'} · {item.format || '待选形式'}</small></div>
+              <StatusBadge status={item.status} />
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-card-inline">策略批准并生成 7 天计划后，会在这里显示简洁日程。</div>
+      )}
+    </section>
+  );
+}
+
+function BusinessExceptions({ exceptions, onNavigate }) {
+  return (
+    <section className="command-section exception-panel">
+      <div className="section-head compact-head">
+        <div><p className="eyebrow">异常</p><h3>仅显示影响业务的问题</h3></div>
+        <button className="ghost-button" type="button" onClick={() => onNavigate('health')}>系统状态</button>
+      </div>
+      {exceptions.length ? (
+        <div className="exception-list">
+          {exceptions.slice(0, 5).map((item) => (
+            <article key={item.id}>
+              <span>!</span>
+              <div><strong>{item.title}</strong><p>{truncate(item.summary, 120)}</p></div>
+              <button className="ghost-button" type="button" onClick={() => onNavigate(item.page, item.entityId || '')}>处理</button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="command-clear-state compact">
+          <span>✓</span>
+          <div><strong>没有影响当前业务的异常</strong><p>连接正常等技术状态已移至“系统状态”页面。</p></div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AiRecommendations({ items, onNavigate }) {
+  return (
+    <section className="command-section recommendation-panel-v2">
+      <div className="section-head compact-head">
+        <div><p className="eyebrow">AI 建议</p><h3>有依据、可执行</h3></div>
+        <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>知识库</button>
+      </div>
+      {items.length ? (
+        <div className="recommendation-list-v2">
+          {items.slice(0, 3).map((item) => (
+            <article key={item.id}>
+              <span>{item.index}</span>
+              <div><strong>{item.title}</strong><p>{truncate(item.text, 130)}</p><small>依据：{item.evidence}</small></div>
+              <button className="ghost-button" type="button" onClick={() => onNavigate(item.page)}>查看</button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-card-inline">完成账号分析、发布回收或策略复盘后，这里最多显示 3 条有数据依据的建议。</div>
+      )}
+    </section>
+  );
+}
+
+function FirstUseGuide({ onNavigate }) {
+  const steps = [
+    ['1', '添加运营账号', '先确定要经营的主账号。', 'accounts'],
+    ['2', '添加对标账号', '从账号矩阵标记竞品或灵感账号。', 'accounts'],
+    ['3', '创建运营活动', '填写目标、平台和主账号。', 'campaigns'],
+    ['4', '生成并批准策略', '确认定位、内容支柱和风险边界。', 'campaigns'],
+    ['5', '生成 7 天计划', '先批准计划，再进入具体生产。', 'campaigns'],
+    ['6', '开始 Day 1', '在内容工作台完成文案、素材和审核。', 'workspace'],
+  ];
+  return (
+    <section className="page-stack command-center-v2">
+      <header className="command-focus-header onboarding">
+        <div>
+          <p className="eyebrow">首次使用</p>
+          <h2>从第一个运营活动开始</h2>
+          <p>按下面顺序建立最小闭环，首页不会用大量无意义的 0 干扰你。</p>
+        </div>
+        <button className="primary-button" type="button" onClick={() => onNavigate('accounts')}>添加运营账号</button>
+      </header>
+      <section className="command-section">
+        <div className="onboarding-step-list">
+          {steps.map(([number, title, description, page]) => (
+            <button type="button" key={number} onClick={() => onNavigate(page)}>
+              <span>{number}</span>
+              <div><strong>{title}</strong><p>{description}</p></div>
+              <em>进入 →</em>
+            </button>
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function buildSevenDayTimeline(context, data) {
+  if (!context?.currentStrategy) return [];
+  const plan = normalizeCampaignDailyPlan(context.currentStrategy.daily_plan).slice(0, 7);
+  return plan.map((item) => {
+    const contentPackage = context.contentPackages?.find((row) => getContentPackageDay(row) === item.day);
+    const publishTask = data.publishTasks.find((task) => String(task.content_package_id || '') === String(contentPackage?.id || ''));
+    return {
+      day: item.day,
+      date: formatDate(item.planned_date || publishTask?.scheduled_at),
+      topic: item.topic || item.content_pillar,
+      platform: item.platform,
+      format: item.format,
+      status: publishTask?.status || contentPackage?.status || (item.day === 1 ? 'pending' : 'draft'),
+    };
+  });
+}
+
+function buildBusinessExceptions(data, queue, gatewayStatus) {
+  const items = [];
+  for (const error of data.__errors || []) {
+    items.push({
+      id: `read-${error.key}`,
+      title: '关键数据读取失败',
+      summary: error.message,
+      page: 'health',
+    });
+  }
+  for (const action of queue.filter((item) => ['resolve_publish_failure', 'resolve_metrics_failure'].includes(item.action_type))) {
+    items.push({
+      id: `${action.action_type}-${action.entity_id}`,
+      title: action.title,
+      summary: action.summary,
+      page: action.target_page,
+      entityId: action.entity_id,
+    });
+  }
+  const requiresExecution = queue.some((item) => ['generate_day1_content', 'generate_asset', 'resolve_metrics_failure'].includes(item.action_type));
+  if (!gatewayStatus.loading && !gatewayStatus.connected && requiresExecution) {
+    items.push({
+      id: 'execution-gateway',
+      title: '执行服务阻塞当前任务',
+      summary: gatewayStatus.reason || '当前待办需要调用执行服务，但执行网关尚未连接。',
+      page: 'health',
+    });
+  }
+  return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+function buildRecommendations(data) {
+  const candidates = [];
+  const report = getLatest([...data.accountReports, ...data.accountProfiles], 1)[0];
+  const strategyMemory = getLatest(data.strategyMemory, 1)[0];
+  const contentMemory = [...data.contentMemory]
+    .sort((left, right) => Number(right.success_rate || right.score || 0) - Number(left.success_rate || left.score || 0))[0];
+
+  if (report) {
+    candidates.push({
+      id: `account-${report.id || 'latest'}`,
+      title: '应用最新账号洞察',
+      text: firstDisplayText(report, ['key_findings', 'summary', 'analysis', 'report', 'description']),
+      evidence: `最新账号分析 · ${formatDate(report.updated_at || report.created_at)}`,
+      page: 'intelligence',
+    });
+  }
+  if (strategyMemory) {
+    candidates.push({
+      id: `strategy-${strategyMemory.id || 'latest'}`,
+      title: '把复盘结论用于下一步',
+      text: firstDisplayText(strategyMemory, ['lessons_learned', 'learning', 'recommendation', 'summary', 'description']),
+      evidence: `策略记忆 · ${formatDate(strategyMemory.updated_at || strategyMemory.created_at)}`,
+      page: 'analytics',
+    });
+  }
+  if (contentMemory) {
+    candidates.push({
+      id: `content-${contentMemory.id || 'best'}`,
+      title: '复用已验证的内容模式',
+      text: firstDisplayText(contentMemory, ['pattern', 'winning_pattern', 'recommendation', 'summary', 'description']),
+      evidence: `内容记忆 · 成功率 ${Number(contentMemory.success_rate || contentMemory.score || 0)}%`,
+      page: 'knowledge',
+    });
+  }
+  return candidates.filter((item) => item.text).slice(0, 3).map((item, index) => ({ ...item, index: index + 1 }));
+}
+
+function navigateToAction(item, onNavigate) {
+  onNavigate(item.target_page, item.target_id, item.target_params);
+}
+
+function actionTypeLabel(type) {
+  return {
+    approve_strategy: '策略审批',
+    approve_7_day_plan: '计划审批',
+    generate_day1_content: '内容生成',
+    review_copy: '文案审核',
+    generate_asset: '素材生成',
+    confirm_asset: '素材确认',
+    approve_publish: '发布审批',
+    resolve_publish_failure: '发布异常',
+    resolve_metrics_failure: '数据异常',
+  }[type] || '运营任务';
+}
+
+function accountLabel(account) {
+  if (!account) return '未关联账号';
+  const name = account.display_name || account.username || account.handle || account.account_name || '未命名账号';
+  return `${account.platform || '平台待定'} · ${name}`;
+}
+
+function packageStatusLabel(item) {
+  const workbench = item.source_insights?.content_workbench || {};
+  if (item.status === 'published') return '已发布';
+  if (item.status === 'scheduled') return '已排期';
+  if (workbench.copy_approved) return '文案已批准';
+  if (workbench.selected_version_id) return '文案待审核';
+  return '待生成';
+}
+
+function firstDisplayText(row, fields) {
+  for (const field of fields) {
+    if (row?.[field] != null && row[field] !== '') return displayText(row[field], '');
+  }
+  return '';
 }
 
 function truncate(value, length) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > length ? `${text.slice(0, length)}…` : text;
-}
-
-function RecordList({ rows, empty }) {
-  if (!rows.length) return <div className="empty-card-inline">{empty}</div>;
-
-  return (
-    <div className="record-list">
-      {rows.map((row) => (
-        <article className="record-row" key={row.id || `${row.title}-${row.created_at || row.createdAt}`}>
-          <div>
-            <strong>{row.title || row.name || row.agent_name || row.type || row.platform || '未命名记录'}</strong>
-            <small>{row.summary || row.description || row.status || row.model || row.sourceLabel || '运营记录'}</small>
-          </div>
-          <span>{formatDate(row.created_at || row.createdAt || row.updated_at || row.completed_at)}</span>
-          {row.status && <StatusBadge status={normalizeStatus(row.status)} />}
-        </article>
-      ))}
-    </div>
-  );
 }

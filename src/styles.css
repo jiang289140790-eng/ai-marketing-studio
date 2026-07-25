@@ -5642,3 +5642,28 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+.page-error-boundary {
+  margin: 24px;
+  padding: 28px;
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(127, 29, 29, 0.2), rgba(15, 23, 42, 0.92));
+}
+
+.page-error-boundary h2 {
+  margin: 8px 0 10px;
+}
+
+.page-error-boundary details {
+  margin-top: 18px;
+  color: var(--muted);
+}
+
+.page-error-boundary code {
+  display: block;
+  margin-top: 10px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.62);
+}

@@ -109,6 +109,7 @@ const VIDEO_REQUIREMENT_FIELDS = [
 export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams = {}, activeCampaignId, campaignContext }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [activeWorkflow, setActiveWorkflow] = useState('all');
   const [hideTests, setHideTests] = useState(true);
   const [gateway, setGateway] = useState({ loading: true, connected: false });
@@ -118,9 +119,12 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
   const refreshData = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
+    setLoadError('');
     try {
       const nextData = await loadContentWorkspaceData();
       setData({ ...EMPTY, ...nextData });
+    } catch (error) {
+      setLoadError(error?.message || '内容工作台数据读取失败');
     } finally {
       setLoading(false);
     }
@@ -241,6 +245,11 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
 
   return (
     <section className="page-stack content-workspace-page">
+      {loadError && (
+        <div className="notice error" role="alert">
+          内容工作台数据读取失败：{loadError}
+        </div>
+      )}
       <div className="hero-panel">
         <p className="eyebrow">内容工作台</p>
         <h2>按策略日程推进每日内容生产</h2>

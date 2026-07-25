@@ -2,6 +2,7 @@ import { lazy, Suspense, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { CampaignContextBar } from './components/CampaignContextBar';
+import { PageErrorBoundary } from './components/PageErrorBoundary';
 import { useAuth } from './contexts/auth-context';
 import { useCampaignContext } from './contexts/campaign-context';
 import { useAppRoute } from './utils/app-route';
@@ -104,7 +105,9 @@ export default function App() {
         {userId && contextPages.has(activePage) && <CampaignContextBar onNavigate={navigate} />}
         {authLoading && <div className="notice">正在恢复登录状态...</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
-        <Suspense fallback={<div className="notice">正在加载页面...</div>}>{page}</Suspense>
+        <PageErrorBoundary resetKey={`${activePage}:${detailId || ''}`} onNavigate={navigate}>
+          <Suspense fallback={<div className="notice">正在加载页面...</div>}>{page}</Suspense>
+        </PageErrorBoundary>
       </div>
     </div>
   );

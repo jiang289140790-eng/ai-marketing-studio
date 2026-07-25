@@ -41,13 +41,18 @@ const VIEWS = [
 export function PublishQueuePage({ userId, onNavigate, activeCampaignId, campaignContext, detailId }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [activeView, setActiveView] = useState('pending');
 
   const loadData = useCallback(() => {
     if (!userId || !isSupabaseConfigured) return Promise.resolve();
     setLoading(true);
+    setLoadError('');
     return loadPublishQueueData()
       .then((nextData) => setData({ ...EMPTY, ...nextData }))
+      .catch((error) => {
+        setLoadError(error?.message || '发布任务读取失败');
+      })
       .finally(() => setLoading(false));
   }, [userId]);
 
@@ -100,6 +105,12 @@ export function PublishQueuePage({ userId, onNavigate, activeCampaignId, campaig
           <span>dry_run · 不执行真实发布</span>
         </div>
       </header>
+
+      {loadError && (
+        <div className="notice error" role="alert">
+          发布中心数据读取失败：{loadError}
+        </div>
+      )}
 
       <nav className="publish-view-tabs" aria-label="发布任务分类">
         {VIEWS.map(([id, label]) => (

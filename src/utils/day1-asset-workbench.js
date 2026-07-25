@@ -102,7 +102,8 @@ export function getCharacterLoras(character = {}, contentBinding = {}) {
 }
 
 export function getRecommendedWorkflows(character = {}, workflows = [], assetType = 'image') {
-  const recommendations = arrayValue(character.recommended_workflows);
+  const safeCharacter = objectValue(character);
+  const recommendations = arrayValue(safeCharacter.recommended_workflows);
   const recommendationKeys = new Set(recommendations.flatMap((item) => {
     if (typeof item === 'string') return [item.toLowerCase()];
     return [item?.id, item?.name, item?.workflow_id].filter(Boolean).map((value) => String(value).toLowerCase());

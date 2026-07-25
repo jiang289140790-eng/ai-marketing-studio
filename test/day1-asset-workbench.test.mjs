@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   filterUsableAssets,
   getCharacterLoras,
+  getRecommendedWorkflows,
   inspectAssetAvailability,
   listJobsForContent,
 } from '../src/utils/day1-asset-workbench.js';
@@ -43,4 +44,5 @@ test('LoRA values are normalized without creating a second character model', () 
 
 test('content without a selected character has no LoRA options instead of crashing', () => {
   assert.deepEqual(getCharacterLoras(null, null), []);
+  assert.deepEqual(getRecommendedWorkflows(null, [], 'image'), []);
 });

@@ -2,7 +2,8 @@
 
 实施日期：2026-07-25  
 前端实施提交：`e10ed4ef2a3f83d65f5c88935a3faa4edf35238b`  
-MCP 实施提交：`965fc762772c608062276cbc1c687a15c54aeb4b`
+MCP 实施提交：`965fc762772c608062276cbc1c687a15c54aeb4b`  
+MCP 真实外键修正提交：`732f1c0d85f18ed2e33f008d0a3400b734130192`
 
 ## 1. 复用的现有结构
 
@@ -13,6 +14,7 @@ MCP 实施提交：`965fc762772c608062276cbc1c687a15c54aeb4b`
 
 - `campaigns.user_id`：活动所有权。
 - `campaigns.target_accounts` 与 `campaigns.metadata`：主账号、对标账号和灵感账号 ID。
+- `account_intelligence_reports.account_id`：账号分析报告与 Account Brain。该列已经按生产库真实结构复核。
 - `strategy_plans.campaign_id`：当前策略与 `daily_plan`。
 - `content_packages.campaign_id`、`content_packages.strategy_plan_id`：内容包。
 - `characters.lora`、`characters.lora_info` 与内容包 JSON：角色和 LoRA 快照。
@@ -169,6 +171,7 @@ MCP 可回滚提交：
 
 ```text
 965fc762772c608062276cbc1c687a15c54aeb4b
+732f1c0d85f18ed2e33f008d0a3400b734130192
 ```
 
 两部分互不修改数据库结构。回滚前端提交会移除选择器、页面过滤和 Context Service；

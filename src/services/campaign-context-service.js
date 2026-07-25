@@ -276,7 +276,7 @@ export async function getCampaignContext(userId, campaignId) {
   const packageIds = baseRows.contentPackages.map((item) => item.id);
   const followups = await Promise.all([
     accountIds.length
-      ? client.from('account_intelligence_reports').select('*').in('social_account_id', accountIds)
+      ? client.from('account_intelligence_reports').select('*').in('account_id', accountIds)
       : Promise.resolve({ data: [] }),
     packageIds.length
       ? client.from('publish_tasks').select('*').in('content_package_id', packageIds)

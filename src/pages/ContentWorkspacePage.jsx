@@ -90,7 +90,7 @@ const VIDEO_REQUIREMENT_FIELDS = [
   ['negative_prompt', 'negative prompt'],
 ];
 
-export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams = {} }) {
+export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams = {}, activeCampaignId, campaignContext }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
   const [activeWorkflow, setActiveWorkflow] = useState('all');
@@ -124,7 +124,15 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
     return () => { cancelled = true; };
   }, [userId]);
 
-  const contentPackages = useMemo(() => getContentPackages(data), [data]);
+  const contentPackages = useMemo(() => {
+    const all = getContentPackages(data);
+    if (!activeCampaignId) return [];
+    const contextIds = new Set((campaignContext?.contentPackages || []).map((item) => String(item.id)));
+    return all.filter((item) => (
+      String(item.campaignId || item.campaign_id || '') === String(activeCampaignId)
+      || contextIds.has(String(item.id))
+    ));
+  }, [activeCampaignId, campaignContext?.contentPackages, data]);
   const assets = useMemo(() => getAssets(data), [data]);
   const allSequence = useMemo(
     () => normalizeContentPackageSequence(contentPackages, data.strategies),

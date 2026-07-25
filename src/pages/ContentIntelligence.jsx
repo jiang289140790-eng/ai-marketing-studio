@@ -39,7 +39,7 @@ function getAnalysisScore(analysis) {
   return Number(analysis.analysis_result?.ai_score || analysis.fit_score || 0).toFixed(0);
 }
 
-export function ContentIntelligence({ userId, detailId, onNavigate }) {
+export function ContentIntelligence({ userId, detailId, onNavigate, campaignContext }) {
   const { confirm } = useConfirmation();
   const [accounts, setAccounts] = useState([]);
   const [viralContents, setViralContents] = useState([]);
@@ -61,11 +61,18 @@ export function ContentIntelligence({ userId, detailId, onNavigate }) {
       listViralContents(userId, filters),
       listContentAnalysis(userId),
     ]);
-    setAccounts(nextAccounts);
-    setViralContents(nextViralContents);
-    setAnalyses(nextAnalyses);
+    const allowedIds = new Set((campaignContext?.competitorAccounts || []).map((account) => account.id));
+    const scopedAccounts = nextAccounts.filter((account) => allowedIds.has(account.id));
+    const scopedContent = nextViralContents.filter((item) => allowedIds.has(item.social_account_id || item.account_id));
+    const scopedContentIds = new Set(scopedContent.map((item) => item.id));
+    setAccounts(scopedAccounts);
+    setViralContents(scopedContent);
+    setAnalyses(nextAnalyses.filter((item) => (
+      allowedIds.has(item.social_account_id)
+      || scopedContentIds.has(item.viral_content_id || item.content_id)
+    )));
     setLoading(false);
-  }, [userId, filters]);
+  }, [campaignContext?.competitorAccounts, userId, filters]);
 
   useEffect(() => {
     refresh().catch((error) => {

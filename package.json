@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "setup:check": "node scripts/print-setup-checklist.mjs",

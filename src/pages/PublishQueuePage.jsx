@@ -17,7 +17,7 @@ const PUBLISH_FLOW = [
   ['scheduled', '已排期'], ['publishing', '发布中'], ['published', '已发布'], ['failed', '失败'],
 ];
 
-export function PublishQueuePage({ userId, onNavigate }) {
+export function PublishQueuePage({ userId, onNavigate, campaignContext }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
 
@@ -28,7 +28,18 @@ export function PublishQueuePage({ userId, onNavigate }) {
     return undefined;
   }, [userId]);
 
-  const contentPackages = useMemo(() => getContentPackages(data), [data]);
+  const allowedPackageIds = useMemo(
+    () => new Set((campaignContext?.contentPackages || []).map((item) => String(item.id))),
+    [campaignContext?.contentPackages],
+  );
+  const scopedPublishTasks = useMemo(
+    () => data.publishTasks.filter((task) => allowedPackageIds.has(String(task.content_package_id || ''))),
+    [allowedPackageIds, data.publishTasks],
+  );
+  const contentPackages = useMemo(() => getContentPackages({
+    ...data,
+    contentPackages: data.contentPackages.filter((item) => allowedPackageIds.has(String(item.id))),
+  }), [allowedPackageIds, data]);
   const assets = useMemo(() => getAssets(data), [data]);
 
   if (!isSupabaseConfigured) return <EmptyState title="等待数据服务配置" description="配置完成后，发布队列会读取真实发布任务。" />;
@@ -46,14 +57,14 @@ export function PublishQueuePage({ userId, onNavigate }) {
       </div>
 
       <div className="stat-grid compact">
-        <StatCard label="发布任务" value={loading ? '-' : data.publishTasks.length} hint="等待人工检查" />
-        <StatCard label="待批准" value={loading ? '-' : countWhere(data.publishTasks, (item) => ['pending', 'draft', 'ready_for_review', 'scheduled'].includes(item.approval_status || item.status))} hint="不会自动发布" />
-        <StatCard label="已批准" value={loading ? '-' : countWhere(data.publishTasks, (item) => item.approval_status === 'approved')} hint="仍需二次确认" />
-        <StatCard label="失败" value={loading ? '-' : countWhere(data.publishTasks, (item) => item.status === 'failed')} hint="保留错误信息并允许重试" />
+        <StatCard label="发布任务" value={loading ? '-' : scopedPublishTasks.length} hint="等待人工检查" />
+        <StatCard label="待批准" value={loading ? '-' : countWhere(scopedPublishTasks, (item) => ['pending', 'draft', 'ready_for_review', 'scheduled'].includes(item.approval_status || item.status))} hint="不会自动发布" />
+        <StatCard label="已批准" value={loading ? '-' : countWhere(scopedPublishTasks, (item) => item.approval_status === 'approved')} hint="仍需二次确认" />
+        <StatCard label="失败" value={loading ? '-' : countWhere(scopedPublishTasks, (item) => item.status === 'failed')} hint="保留错误信息并允许重试" />
       </div>
 
       <div className="stack-list">
-        {data.publishTasks.length ? data.publishTasks.map((task) => (
+        {scopedPublishTasks.length ? scopedPublishTasks.map((task) => (
           <PublishTaskCard key={task.id} task={task} contentPackages={contentPackages} connections={data.platformConnections} accounts={data.accounts} assets={assets} onNavigate={onNavigate} />
         )) : <EmptyState title="暂无发布任务" description="内容工作台终审通过后，发布任务会进入这里等待人工批准。" />}
       </div>

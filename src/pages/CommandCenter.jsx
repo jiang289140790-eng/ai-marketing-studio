@@ -39,7 +39,7 @@ const EMPTY_DATA = {
   platformConnections: [],
 };
 
-export function CommandCenter({ userId, onNavigate }) {
+export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignContext }) {
   const [data, setData] = useState(EMPTY_DATA);
   const [loading, setLoading] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState({ loading: true, connected: false });
@@ -48,10 +48,10 @@ export function CommandCenter({ userId, onNavigate }) {
     if (!userId || !isSupabaseConfigured) return undefined;
     setLoading(true);
     loadCommandCenterData()
-      .then((nextData) => setData({ ...EMPTY_DATA, ...nextData }))
+      .then((nextData) => setData(scopeCommandCenterData({ ...EMPTY_DATA, ...nextData }, activeCampaignId, campaignContext)))
       .finally(() => setLoading(false));
     return undefined;
-  }, [userId]);
+  }, [activeCampaignId, campaignContext, userId]);
 
   const summary = useMemo(() => {
     const contentPackages = getContentPackages(data);
@@ -253,6 +253,36 @@ export function CommandCenter({ userId, onNavigate }) {
       </div>
     </section>
   );
+}
+
+function scopeCommandCenterData(data, campaignId, context) {
+  if (!campaignId) return { ...EMPTY_DATA };
+  const packageIds = new Set((context?.contentPackages || []).map((item) => String(item.id)));
+  const taskIds = new Set((context?.publishTasks || []).map((item) => String(item.id)));
+  const accountIds = new Set([
+    context?.primaryAccount?.id,
+    ...(context?.competitorAccounts || []).map((item) => item.id),
+  ].filter(Boolean).map(String));
+  return {
+    ...data,
+    campaigns: data.campaigns.filter((item) => String(item.id) === String(campaignId)),
+    strategies: data.strategies.filter((item) => String(item.campaign_id || '') === String(campaignId)),
+    accounts: data.accounts.filter((item) => accountIds.has(String(item.id))),
+    accountReports: data.accountReports.filter((item) => accountIds.has(String(item.social_account_id || item.account_id))),
+    contentPackages: data.contentPackages.filter((item) => packageIds.has(String(item.id))),
+    legacyContent: data.legacyContent.filter((item) => (context?.contentItems || []).some((row) => row.id === item.id)),
+    legacyAssets: data.legacyAssets.filter((item) => (
+      String(item.campaign_id || '') === String(campaignId)
+      || packageIds.has(String(item.content_package_id || ''))
+    )),
+    publishTasks: data.publishTasks.filter((item) => taskIds.has(String(item.id))),
+    publishMetrics: data.publishMetrics.filter((item) => taskIds.has(String(item.publish_task_id || item.id))),
+    contentMetrics: data.contentMetrics.filter((item) => (
+      packageIds.has(String(item.content_package_id || ''))
+      || taskIds.has(String(item.publish_task_id || ''))
+    )),
+    insights: data.insights.filter((item) => String(item.campaign_id || '') === String(campaignId)),
+  };
 }
 
 function DataReadErrors({ errors = [] }) {

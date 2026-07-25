@@ -4,10 +4,11 @@ import {
   installSafeHeadersPatch,
   sanitizeHttpHeaderName,
   sanitizeHttpHeaderValue,
-} from '../utils/safe-headers';
+} from '../utils/safe-headers.js';
 
-export const supabaseUrl = cleanEnvValue(import.meta.env.VITE_SUPABASE_URL);
-export const supabaseAnonKey = cleanEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY);
+const runtimeEnv = import.meta.env || {};
+export const supabaseUrl = cleanEnvValue(runtimeEnv.VITE_SUPABASE_URL);
+export const supabaseAnonKey = cleanEnvValue(runtimeEnv.VITE_SUPABASE_ANON_KEY);
 const authStorageKey = 'ai-marketing-studio-auth-session';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);

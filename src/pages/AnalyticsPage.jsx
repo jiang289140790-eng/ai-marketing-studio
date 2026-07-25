@@ -22,7 +22,7 @@ const DATA_REQUESTS = [
   ['strategyMemory', { limit: 50, orderBy: 'created_at' }],
 ];
 
-export function AnalyticsPage({ userId, onNavigate }) {
+export function AnalyticsPage({ userId, onNavigate, campaignContext }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState([]);
@@ -58,17 +58,35 @@ export function AnalyticsPage({ userId, onNavigate }) {
     };
   }, [userId]);
 
-  const metrics = useMemo(() => [...data.contentMetrics, ...data.publishMetrics], [data.contentMetrics, data.publishMetrics]);
+  const scopedTaskIds = useMemo(
+    () => new Set((campaignContext?.publishTasks || []).map((item) => String(item.id))),
+    [campaignContext?.publishTasks],
+  );
+  const scopedPackageIds = useMemo(
+    () => new Set((campaignContext?.contentPackages || []).map((item) => String(item.id))),
+    [campaignContext?.contentPackages],
+  );
+  const scopedPublishTasks = useMemo(
+    () => data.publishTasks.filter((item) => scopedTaskIds.has(String(item.id))),
+    [data.publishTasks, scopedTaskIds],
+  );
+  const metrics = useMemo(() => [
+    ...data.contentMetrics.filter((item) => (
+      scopedPackageIds.has(String(item.content_package_id || ''))
+      || scopedTaskIds.has(String(item.publish_task_id || ''))
+    )),
+    ...data.publishMetrics.filter((item) => scopedTaskIds.has(String(item.publish_task_id || item.id))),
+  ], [data.contentMetrics, data.publishMetrics, scopedPackageIds, scopedTaskIds]);
 
   const summary = useMemo(() => {
-    const published = data.publishTasks.filter((item) => ['published', 'completed', 'success'].includes(String(item.status).toLowerCase()));
+    const published = scopedPublishTasks.filter((item) => ['published', 'completed', 'success'].includes(String(item.status).toLowerCase()));
     return {
       published: published.length,
       exposure: metrics.reduce((sum, item) => sum + getExposure(item), 0),
       interactions: metrics.reduce((sum, item) => sum + getInteractions(item), 0),
       clicks: metrics.reduce((sum, item) => sum + getMetric(item, 'clicks'), 0),
     };
-  }, [data.publishTasks, metrics]);
+  }, [metrics, scopedPublishTasks]);
 
   const recentMetrics = useMemo(() => [...metrics]
     .sort((left, right) => new Date(getMetricDate(right) || 0) - new Date(getMetricDate(left) || 0))

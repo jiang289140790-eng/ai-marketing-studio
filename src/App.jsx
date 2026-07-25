@@ -1,7 +1,9 @@
 import { lazy, Suspense, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
+import { CampaignContextBar } from './components/CampaignContextBar';
 import { useAuth } from './contexts/auth-context';
+import { useCampaignContext } from './contexts/campaign-context';
 import { useAppRoute } from './utils/app-route';
 
 const CommandCenter = lazy(() => import('./pages/CommandCenter').then((module) => ({ default: module.CommandCenter })));
@@ -44,9 +46,19 @@ pageTitles.prompts = '提示词库';
 export default function App() {
   const { page: activePage, detailId, routeParams, navigate } = useAppRoute();
   const { error: authError, loading: authLoading, session, userId } = useAuth();
+  const campaignState = useCampaignContext();
+  const contextPages = new Set(['dashboard', 'campaigns', 'workspace', 'intelligence', 'assets', 'publish', 'analytics']);
 
   const page = useMemo(() => {
-    const props = { userId, onNavigate: navigate, detailId, routeParams };
+    const props = {
+      userId,
+      onNavigate: navigate,
+      detailId,
+      routeParams,
+      activeCampaignId: campaignState.activeCampaignId,
+      campaignContext: campaignState.campaignContext,
+      refreshCampaignContext: campaignState.refreshCampaignContext,
+    };
 
     switch (activePage) {
       case 'campaigns':
@@ -82,13 +94,14 @@ export default function App() {
       default:
         return <CommandCenter {...props} />;
     }
-  }, [activePage, detailId, navigate, routeParams, userId]);
+  }, [activePage, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, userId]);
 
   return (
     <div className="app-shell">
       <Sidebar activePage={activePage} onNavigate={navigate} />
       <div className="main-shell">
         <Header title={pageTitles[activePage] || pageTitles.dashboard} />
+        {userId && contextPages.has(activePage) && <CampaignContextBar onNavigate={navigate} />}
         {authLoading && <div className="notice">正在恢复登录状态...</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
         <Suspense fallback={<div className="notice">正在加载页面...</div>}>{page}</Suspense>

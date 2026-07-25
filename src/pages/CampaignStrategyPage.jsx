@@ -29,7 +29,7 @@ const INITIAL_FORM = {
   needVideo: false,
 };
 
-export function CampaignStrategyPage({ userId, onNavigate }) {
+export function CampaignStrategyPage({ userId, onNavigate, activeCampaignId, refreshCampaignContext }) {
   const [data, setData] = useState(EMPTY);
   const [form, setForm] = useState(INITIAL_FORM);
   const [loading, setLoading] = useState(false);
@@ -65,6 +65,9 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
     });
     return map;
   }, [data.strategies]);
+  const visibleCampaigns = activeCampaignId
+    ? data.campaigns.filter((campaign) => String(campaign.id) === String(activeCampaignId))
+    : data.campaigns;
 
   const ownedAccounts = data.accounts.filter((account) => ['owned', 'brand', 'personal'].includes(account.account_role || account.account_type || account.account_category || 'owned'));
   const campaignPayload = buildCampaignPayload(form, ownedAccounts);
@@ -105,7 +108,10 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
             ready={canCreate}
             reason={!canCreate ? '请先填写名称和目标' : undefined}
             showGatewayHint={canCreate}
-            onCompleted={reload}
+            onCompleted={async () => {
+              await reload();
+              await refreshCampaignContext?.();
+            }}
           >
             创建运营活动
           </ExecutionButton>
@@ -168,7 +174,7 @@ export function CampaignStrategyPage({ userId, onNavigate }) {
           <EmptyState title="暂无运营策略" description="创建运营活动后，智能体生成的策略会以业务卡片方式显示在这里。" />
         ) : (
           <>
-            {data.campaigns.map((campaign) => (
+            {visibleCampaigns.map((campaign) => (
               <CampaignCard
                 key={campaign.id}
                 campaign={campaign}

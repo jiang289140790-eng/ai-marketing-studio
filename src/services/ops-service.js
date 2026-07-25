@@ -124,7 +124,7 @@ export async function loadCampaignData() {
 }
 
 export async function loadContentWorkspaceData() {
-  return loadKeys([
+  const data = await loadKeys([
     'contentPackages',
     'legacyContent',
     'campaigns',
@@ -134,8 +134,39 @@ export async function loadContentWorkspaceData() {
     'legacyAssets',
     'characters',
     'workflowRuns',
+    'comfyWorkflows',
     'publishTasks',
   ]);
+  data.legacyAssets = await hydrateWorkspaceAssetUrls(data.legacyAssets || []);
+  return data;
+}
+
+async function hydrateWorkspaceAssetUrls(rows) {
+  const client = requireSupabase();
+  const bucket = import.meta.env.VITE_MARKETING_ASSET_BUCKET || 'marketing-assets';
+  return Promise.all(rows.map(async (row) => {
+    if (!row.output_storage_path) return row;
+    const { data, error } = await client.storage.from(bucket).createSignedUrl(row.output_storage_path, 60 * 30);
+    if (error || !data?.signedUrl) {
+      return {
+        ...row,
+        metadata: {
+          ...normalizeObject(row.metadata),
+          storage_missing: true,
+          storage_error: error?.message || '无法生成素材访问地址',
+        },
+      };
+    }
+    return {
+      ...row,
+      output_url: data.signedUrl,
+      metadata: {
+        ...normalizeObject(row.metadata),
+        storage_missing: false,
+        signed_url_expires_at: new Date(Date.now() + 60 * 30 * 1000).toISOString(),
+      },
+    };
+  }));
 }
 
 export async function ensureStrategyContentPackageDayMetadata(strategyId, campaignId, dailyPlan = []) {
@@ -446,6 +477,9 @@ export function getAssets(data) {
     characterId: item.character_id,
     contentId: item.content_id || item.content_package_id,
     campaignId: item.campaign_id,
+    generationJobId: item.generation_job_id || item.generation_task_id || item.metadata?.generation_job_id,
+    isPrimary: Boolean(item.is_primary || item.metadata?.is_primary),
+    approvedForPublishing: Boolean(item.approved_for_publishing),
     createdAt: item.created_at,
     updatedAt: item.updated_at || item.created_at,
     raw: item,

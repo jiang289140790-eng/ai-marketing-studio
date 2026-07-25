@@ -26,6 +26,13 @@ import {
   getWorkbenchMetadata,
   statusPrimaryAction,
 } from '../utils/day1-content-workbench';
+import {
+  filterUsableAssets,
+  getCharacterLoras,
+  getRecommendedWorkflows,
+  inspectAssetAvailability,
+  listJobsForContent,
+} from '../utils/day1-asset-workbench';
 import { formatDate } from '../utils/formatters';
 
 const EMPTY = {
@@ -38,6 +45,7 @@ const EMPTY = {
   legacyAssets: [],
   characters: [],
   workflowRuns: [],
+  comfyWorkflows: [],
   publishTasks: [],
 };
 
@@ -432,29 +440,68 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
   );
   const selectedVersion = versions.find((version) => String(version.id) === String(metadata.selected_version_id || ''));
   const [draft, setDraft] = useState(() => copyFromVersion(selectedVersion, item));
-  const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || '');
+  const campaignDefaultCharacterId = campaign?.metadata?.default_character_id || campaign?.metadata?.character_id || '';
+  const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || campaignDefaultCharacterId);
   const selectedCharacter = findById(data.characters, selectedCharacterId) || findById(data.characters, item.characterId);
-  const lora = getLoraInfo(selectedCharacter, item);
+  const loraOptions = getCharacterLoras(selectedCharacter, item);
+  const [selectedLoraKey, setSelectedLoraKey] = useState(item.loraId || '');
+  const lora = loraOptions.find((option) => loraOptionKey(option) === selectedLoraKey) || loraOptions[0] || {};
+  const [loraWeight, setLoraWeight] = useState(Number(item.loraInfo?.weight || lora.weight || lora.strength || 0.8));
+  const [assetType, setAssetType] = useState('image');
+  const workflowOptions = getRecommendedWorkflows(selectedCharacter, data.comfyWorkflows || [], assetType);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
+  const selectedWorkflow = findById(workflowOptions, selectedWorkflowId) || workflowOptions[0] || null;
+  const [runtimeBrokenAssetIds, setRuntimeBrokenAssetIds] = useState([]);
   const linkedAssets = assetsForContent(item, assets);
+  const usableAssets = filterUsableAssets(linkedAssets).filter((asset) => !runtimeBrokenAssetIds.includes(String(asset.id)));
+  const campaignAssetOptions = filterUsableAssets(assets.filter((asset) => (
+    String(asset.campaignId || '') === String(item.campaignId || '')
+    && String(asset.contentId || '') !== String(item.id)
+    && Boolean(asset.raw?.asset_type)
+  ))).filter((asset) => !runtimeBrokenAssetIds.includes(String(asset.id)));
+  const brokenAssets = linkedAssets.filter((asset) => (
+    !inspectAssetAvailability(asset).usable || runtimeBrokenAssetIds.includes(String(asset.id))
+  ));
+  const generationJobs = listJobsForContent(data.workflowRuns || [], item.id);
   const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id || '') === String(item.id));
+  const primaryAsset = usableAssets.find((asset) => asset.isPrimary || asset.raw?.metadata?.is_primary)
+    || usableAssets.find((asset) => String(asset.id) === String(metadata.primary_asset_id || ''));
+  const readinessAssets = primaryAsset ? [primaryAsset] : usableAssets;
   const readiness = buildReadiness({
     contentPackage: item,
     copy: draft,
-    assets: linkedAssets,
+    assets: readinessAssets,
     publishTask,
     character: selectedCharacter,
     lora,
   });
   const displayStatus = deriveContentDisplayStatus({
     contentPackage: item,
-    assets: linkedAssets,
+    assets: usableAssets,
     publishTask,
     selectedVersionId: metadata.selected_version_id,
   });
-  const approvedAsset = readiness.approvedAssets[0];
+  const approvedAsset = primaryAsset?.approvedForPublishing || primaryAsset?.raw?.approved_for_publishing
+    ? primaryAsset
+    : readiness.approvedAssets[0];
   const nextAction = statusPrimaryAction(displayStatus);
   const imageRequirements = normalizeRequirement(item.imageRequirements || item.assetRequirement);
   const videoRequirements = normalizeRequirement(item.videoRequirements || item.assetRequirement);
+  const boundAccountIds = normalizeList(
+    selectedCharacter?.bound_account_ids
+    || selectedCharacter?.lora_info?.bound_account_ids
+    || selectedCharacter?.prompt_templates?.bound_account_ids,
+  );
+  const boundAccounts = boundAccountIds
+    .map((id) => findById(data.accounts, id))
+    .filter(Boolean);
+  const characterReferences = filterUsableAssets(assets.filter((asset) => (
+    String(asset.characterId || asset.raw?.metadata?.character_id || '') === String(selectedCharacter?.id || '')
+    && asset.raw?.metadata?.role === 'reference'
+  )));
+  const selectedReferenceAsset = characterReferences.find((asset) => item.referenceAssetIds?.map(String).includes(String(asset.id)))
+    || characterReferences[0]
+    || null;
   const generationReason = !selectedCharacter
     ? '请先选择角色'
     : !hasLora(lora)
@@ -468,20 +515,34 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
   }, [item, selectedVersion]);
 
   useEffect(() => {
-    setSelectedCharacterId(item.characterId || '');
-  }, [item.characterId, item.id]);
+    setSelectedCharacterId(item.characterId || campaignDefaultCharacterId);
+    setSelectedLoraKey(item.loraId || '');
+    setLoraWeight(Number(item.loraInfo?.weight || 0.8));
+  }, [campaignDefaultCharacterId, item.characterId, item.id, item.loraId, item.loraInfo?.weight]);
+
+  useEffect(() => {
+    setSelectedWorkflowId('');
+  }, [assetType, selectedCharacterId]);
+
+  useEffect(() => {
+    setRuntimeBrokenAssetIds([]);
+  }, [item.id]);
 
   async function saveCharacterBinding() {
     await saveContentProductionBinding(item, {
       strategyId: item.strategyId || null,
       characterId: selectedCharacter?.id || null,
       loraId: lora.id || lora.model || lora.filename || null,
-      loraInfo: hasLora(lora) ? lora : null,
+      loraInfo: hasLora(lora) ? { ...lora, weight: loraWeight } : null,
       referenceAssetIds: item.referenceAssetIds || [],
       referenceSource: item.referenceSource || '',
-      generationMode: item.generationMode || 'character_lora_video',
+      generationMode: selectedWorkflow?.id || item.generationMode || 'character_lora_video',
     });
     await onRefresh();
+  }
+
+  function markRuntimeBrokenAsset(assetId) {
+    setRuntimeBrokenAssetIds((current) => current.includes(String(assetId)) ? current : [...current, String(assetId)]);
   }
 
   return (
@@ -727,79 +788,278 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
           <div><p className="eyebrow">3 · 角色、LoRA 与素材</p><h3>视觉生产与素材确认</h3></div>
           <span className="context-sync-badge">{linkedAssets.length} 个关联素材</span>
         </div>
-        <div className="production-binding-selectors">
-          <label>角色
-            <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
-              <option value="">请选择角色</option>
-              {(data.characters || []).filter((character) => character.status !== 'archived').map((character) => (
-                <option key={character.id} value={character.id}>{character.display_name || character.name}</option>
+        <div className="day1-character-panel">
+          <div className="production-binding-selectors">
+            <label>角色来源
+              <select
+                value={selectedCharacterId}
+                onChange={(event) => {
+                  const nextCharacter = findById(data.characters, event.target.value);
+                  const nextLora = getCharacterLoras(nextCharacter, item)[0];
+                  setSelectedCharacterId(event.target.value);
+                  setSelectedLoraKey(nextLora ? loraOptionKey(nextLora) : '');
+                  setLoraWeight(Number(nextLora?.weight || nextLora?.strength || 0.8));
+                }}
+              >
+                <option value="">请选择角色</option>
+                {(data.characters || []).filter((character) => character.status !== 'archived').map((character) => (
+                  <option key={character.id} value={character.id}>
+                    {character.display_name || character.name}
+                    {String(character.id) === String(campaignDefaultCharacterId) ? '（Campaign 默认）' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>LoRA
+              <select value={hasLora(lora) ? loraOptionKey(lora) : ''} onChange={(event) => setSelectedLoraKey(event.target.value)}>
+                {!loraOptions.length && <option value="">未配置 LoRA</option>}
+                {loraOptions.map((option) => (
+                  <option key={loraOptionKey(option)} value={loraOptionKey(option)}>
+                    {option.name || option.model || option.filename} {option.version ? `· ${option.version}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>本次 LoRA 权重
+              <input
+                type="number"
+                min="0"
+                max="2"
+                step="0.05"
+                value={loraWeight}
+                onChange={(event) => setLoraWeight(Number(event.target.value))}
+              />
+            </label>
+            <button className="ghost-button" type="button" onClick={saveCharacterBinding} disabled={!selectedCharacter || !hasLora(lora)}>
+              保存为 Day 1 覆盖配置
+            </button>
+          </div>
+          <div className="character-context-summary">
+            <Info label="人物身份" value={selectedCharacter?.content_positioning || selectedCharacter?.description} />
+            <Info label="外观" value={selectedCharacter?.appearance || selectedCharacter?.visual_spec} />
+            <Info label="性格" value={selectedCharacter?.personality || selectedCharacter?.personality_traits} />
+            <Info label="文案语气" value={selectedCharacter?.prompt_templates?.copy_tone || selectedCharacter?.prompt_templates?.tone} />
+            <Info label="基础 Prompt" value={selectedCharacter?.prompt || selectedCharacter?.prompt_templates?.base_prompt} />
+            <Info label="Negative Prompt" value={selectedCharacter?.prompt_templates?.negative_prompt || selectedCharacter?.forbidden_styles} />
+            <Info label="绑定账号" value={boundAccounts.map((entry) => entry.account_name || entry.username)} />
+            <Info label="参考图" value={characterReferences.length ? `${characterReferences.length} 个可用` : '暂无可用参考图'} />
+            <Info label="角色状态" value={selectedCharacter?.status || '待选择'} />
+          </div>
+          <p className="form-hint">这里保存的是当前 Day 1 覆盖配置，不会改写角色库的全局 LoRA、权重或推荐工作流。</p>
+        </div>
+
+        <div className="day1-generation-config">
+          <div className="asset-type-tabs">
+            <button className={assetType === 'image' ? 'active' : ''} type="button" onClick={() => setAssetType('image')}>图片任务</button>
+            <button className={assetType === 'video' ? 'active' : ''} type="button" onClick={() => setAssetType('video')}>视频任务</button>
+          </div>
+          <label>推荐工作流
+            <select value={selectedWorkflow?.id || ''} onChange={(event) => setSelectedWorkflowId(event.target.value)}>
+              {!workflowOptions.length && <option value="">暂无可用工作流</option>}
+              {workflowOptions.map((workflow) => (
+                <option key={workflow.id} value={workflow.id}>
+                  {workflow.name} · {workflow.version || '当前版本'}
+                </option>
               ))}
             </select>
           </label>
-          <Info label="LoRA" value={lora.name || lora.model || lora.filename || '未配置'} />
-          <button className="ghost-button" type="button" onClick={saveCharacterBinding} disabled={!selectedCharacter}>保存角色与 LoRA</button>
-        </div>
-
-        <div className="button-row">
+          <Info label="角色参考素材" value={selectedReferenceAsset?.name || '不使用参考素材'} />
           <ExecutionButton
-            action="generate_character_image"
-            actionName="生成图片"
+            action="create_asset_generation_job"
+            actionName={`创建${assetType === 'image' ? '图片' : '视频'}生成任务`}
             resourceType="content_package"
             resourceId={item.id}
-            reason={generationReason}
+            reason={generationReason || (!selectedWorkflow ? `没有可用的${assetType === 'image' ? '图片' : '视频'}工作流` : undefined)}
             payload={{
+              campaign_id: item.campaignId,
               content_package_id: item.id,
+              content_item_id: metadata.selected_version_id,
               character_id: selectedCharacter?.id,
-              strategy_plan_id: item.strategyId,
-              mode: 'text_to_image',
-              prompt: imageRequirements.positive_prompt || `${draft.hook}。${draft.body}`,
+              asset_type: assetType,
+              lora,
+              lora_weight: loraWeight,
+              workflow_id: selectedWorkflow?.id,
+              reference_asset_id: selectedReferenceAsset?.id,
+              prompt: assetType === 'image'
+                ? imageRequirements.positive_prompt || `${draft.hook}。${draft.body}`
+                : videoRequirements.script || `${draft.hook}。${draft.body}`,
+              negative_prompt: imageRequirements.negative_prompt || videoRequirements.negative_prompt || lora.negative_prompt,
+              provider: 'autodl',
             }}
             onCompleted={onRefresh}
           >
-            生成图片
+            创建{assetType === 'image' ? '图片' : '视频'}生成任务
           </ExecutionButton>
-          <ExecutionButton
-            action="generate_character_video"
-            actionName="生成视频"
-            resourceType="content_package"
-            resourceId={item.id}
-            reason={generationReason}
-            payload={{
-              content_package_id: item.id,
-              character_id: selectedCharacter?.id,
-              strategy_plan_id: item.strategyId,
-              mode: 'text_to_video',
-              prompt: videoRequirements.script || `${draft.hook}。${draft.body}`,
-            }}
-            onCompleted={onRefresh}
-          >
-            生成视频
-          </ExecutionButton>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>从素材库选择</button>
         </div>
 
-        <div className="day1-asset-grid">
-          {linkedAssets.map((asset) => (
-            <article className={`day1-asset-card ${asset.raw?.approved_for_publishing ? 'approved' : ''}`} key={asset.id}>
-              <AssetPreview asset={asset} compact />
-              <div><strong>{asset.name}</strong><small>{asset.type} · {asset.status}</small></div>
-              {!asset.raw?.approved_for_publishing && asset.status === 'completed' && (
+        <div className="day1-generation-jobs">
+          <div className="section-head compact"><strong>生成任务</strong><span>{generationJobs.length} 个</span></div>
+          {generationJobs.map((job) => (
+            <article className="generation-job-row" key={job.id}>
+              <div>
+                <strong>{job.assetType === 'video' ? '视频' : '图片'} · {job.workflowName}</strong>
+                <small>{job.provider} · {formatDate(job.createdAt)}</small>
+              </div>
+              <span className={`status-badge ${job.status}`}>{job.statusLabel}</span>
+              <progress max="100" value={job.progress} />
+              {job.errorSummary && <small className="error-text">{job.errorSummary}</small>}
+              <ExecutionButton
+                action="get_generation_job"
+                actionName="刷新任务进度"
+                className="ghost-button"
+                resourceType="workflow_run"
+                resourceId={job.id}
+                payload={{ generation_job_id: job.id }}
+                onCompleted={onRefresh}
+              >
+                刷新进度
+              </ExecutionButton>
+              {['failed', 'cancelled', 'canceled'].includes(job.status) && (
                 <ExecutionButton
-                  action="review_generated_asset"
-                  actionName="确认素材可用"
+                  action="retry_generation_job"
+                  actionName="重试生成任务"
                   className="ghost-button"
-                  resourceType="asset"
-                  resourceId={asset.id}
-                  payload={{ asset_id: asset.id, action: 'approve', feedback: 'Day 1 human asset confirmation.' }}
+                  resourceType="workflow_run"
+                  resourceId={job.id}
+                  payload={{ generation_job_id: job.id }}
                   onCompleted={onRefresh}
                 >
-                  确认可用
+                  重试
                 </ExecutionButton>
               )}
             </article>
           ))}
-          {!linkedAssets.length && <div className="empty-card-inline">文案批准后，可以生成或从素材库选择图片/视频。</div>}
+          {!generationJobs.length && <div className="empty-card-inline">还没有生成任务。确认文案、角色、LoRA 和工作流后创建任务。</div>}
         </div>
+
+        <div className="day1-asset-grid">
+          {usableAssets.map((asset) => {
+            const primary = String(asset.id) === String(primaryAsset?.id || '');
+            const approved = asset.approvedForPublishing || asset.raw?.approved_for_publishing;
+            return (
+              <article className={`day1-asset-card ${approved ? 'approved' : ''} ${primary ? 'primary' : ''}`} key={asset.id}>
+                <AssetPreview asset={asset} compact onBroken={() => markRuntimeBrokenAsset(asset.id)} />
+                <div>
+                  <strong>{asset.name}</strong>
+                  <small>{asset.type} · {approved ? '已批准' : '待审核'} {primary ? '· 主素材' : ''}</small>
+                </div>
+                <div className="button-row">
+                  <ExecutionButton
+                    action="attach_asset_to_content"
+                    actionName="关联到 Day 1"
+                    className="ghost-button"
+                    resourceType="asset"
+                    resourceId={asset.id}
+                    payload={{ campaign_id: item.campaignId, content_package_id: item.id, asset_id: asset.id, usage: 'candidate' }}
+                    onCompleted={onRefresh}
+                  >
+                    关联
+                  </ExecutionButton>
+                  {!primary && (
+                    <ExecutionButton
+                      action="set_primary_asset"
+                      actionName="设为主素材"
+                      className="ghost-button"
+                      resourceType="asset"
+                      resourceId={asset.id}
+                      payload={{ campaign_id: item.campaignId, content_package_id: item.id, asset_id: asset.id }}
+                      onCompleted={onRefresh}
+                    >
+                      设为主素材
+                    </ExecutionButton>
+                  )}
+                  {!approved && (
+                    <ExecutionButton
+                      action="approve_asset"
+                      actionName="批准素材"
+                      resourceType="asset"
+                      resourceId={asset.id}
+                      payload={{ campaign_id: item.campaignId, content_package_id: item.id, asset_id: asset.id, action: 'approve' }}
+                      onCompleted={onRefresh}
+                    >
+                      批准素材
+                    </ExecutionButton>
+                  )}
+                  <ExecutionButton
+                    action="create_asset_generation_job"
+                    actionName="重新生成素材"
+                    className="ghost-button"
+                    resourceType="asset"
+                    resourceId={asset.id}
+                    reason={generationReason}
+                    payload={{
+                      campaign_id: item.campaignId,
+                      content_package_id: item.id,
+                      content_item_id: metadata.selected_version_id,
+                      character_id: selectedCharacter?.id,
+                      asset_type: String(asset.type).includes('video') ? 'video' : 'image',
+                      lora,
+                      lora_weight: loraWeight,
+                      prompt: asset.prompt || `${draft.hook}。${draft.body}`,
+                      negative_prompt: asset.raw?.generation_params?.negative_prompt || lora.negative_prompt,
+                      provider: asset.source || 'autodl',
+                      reference_asset_id: asset.raw?.metadata?.reference_asset_id,
+                      parameters: { parent_asset_id: asset.id },
+                    }}
+                    onCompleted={onRefresh}
+                  >
+                    重新生成
+                  </ExecutionButton>
+                  <ExecutionButton
+                    action="approve_asset"
+                    actionName="标记不可用"
+                    className="ghost-button"
+                    resourceType="asset"
+                    resourceId={asset.id}
+                    payload={{ campaign_id: item.campaignId, content_package_id: item.id, asset_id: asset.id, action: 'unavailable' }}
+                    onCompleted={onRefresh}
+                  >
+                    标记不可用
+                  </ExecutionButton>
+                </div>
+              </article>
+            );
+          })}
+          {!usableAssets.length && <div className="empty-card-inline">暂无真实可用成果。排队中、失败、缺少文件或 URL 损坏的记录不会进入可用素材区。</div>}
+        </div>
+        {campaignAssetOptions.length > 0 && (
+          <details className="day1-asset-picker">
+            <summary>从当前 Campaign 素材库选择（{campaignAssetOptions.length}）</summary>
+            <div className="day1-asset-grid">
+              {campaignAssetOptions.map((asset) => (
+                <article className="day1-asset-card" key={asset.id}>
+                  <AssetPreview asset={asset} compact onBroken={() => markRuntimeBrokenAsset(asset.id)} />
+                  <div><strong>{asset.name}</strong><small>{asset.type} · 可用成果</small></div>
+                  <ExecutionButton
+                    action="attach_asset_to_content"
+                    actionName="关联到 Day 1"
+                    resourceType="asset"
+                    resourceId={asset.id}
+                    payload={{ campaign_id: item.campaignId, content_package_id: item.id, asset_id: asset.id, usage: 'candidate' }}
+                    onCompleted={onRefresh}
+                  >
+                    选择此素材
+                  </ExecutionButton>
+                </article>
+              ))}
+            </div>
+          </details>
+        )}
+        {brokenAssets.length > 0 && (
+          <details className="broken-assets-panel">
+            <summary>{brokenAssets.length} 个损坏或未完成素材（已从可用素材中隐藏）</summary>
+            {brokenAssets.map((asset) => (
+              <div key={asset.id}>
+                <strong>{asset.name}</strong>
+                <span>
+                  {runtimeBrokenAssetIds.includes(String(asset.id))
+                    ? '图片或视频加载失败'
+                    : inspectAssetAvailability(asset).reasons.join('；')}
+                </span>
+              </div>
+            ))}
+          </details>
+        )}
       </section>
 
       <section className="day1-workbench-section readiness-section">
@@ -2066,15 +2326,23 @@ function GenerationResults({ item, assets, runs, selectedId, onSelect }) {
   );
 }
 
-function AssetPreview({ asset, compact = false }) {
+function AssetPreview({ asset, compact = false, onBroken }) {
+  const [failed, setFailed] = useState(false);
   const type = asset.type || asset.asset_type || 'asset';
   const url = asset.url || asset.output_url || asset.media_url || asset.storage_url;
   const thumbnail = asset.thumbnail || asset.thumbnail_url || asset.preview_url;
+  const handleError = () => {
+    setFailed(true);
+    onBroken?.();
+  };
+  if (failed) {
+    return <div className={`asset-placeholder ${compact ? 'compact-asset-preview' : ''}`}>素材无法加载</div>;
+  }
   if (thumbnail || url) {
     if (String(type).toLowerCase().includes('video')) {
-      return <video className={compact ? 'compact-asset-preview' : ''} src={url} poster={thumbnail} controls={!compact} muted />;
+      return <video className={compact ? 'compact-asset-preview' : ''} src={url} poster={thumbnail} controls={!compact} muted onError={handleError} />;
     }
-    return <img className={compact ? 'compact-asset-preview' : ''} src={thumbnail || url} alt={asset.name || '素材预览'} />;
+    return <img className={compact ? 'compact-asset-preview' : ''} src={thumbnail || url} alt={asset.name || '素材预览'} onError={handleError} />;
   }
   return <div className={`asset-placeholder ${compact ? 'compact-asset-preview' : ''}`}>{displayText(type, 'asset')}</div>;
 }
@@ -2096,7 +2364,6 @@ function assetsForContent(item, assets) {
   const referenceIds = new Set([item.assetId, item.finalAssetId, ...item.referenceAssetIds].filter(Boolean).map(String));
   return assets.filter((asset) => (
     String(asset.contentId || '') === String(item.id)
-    || String(asset.campaignId || '') === String(item.campaignId)
     || referenceIds.has(String(asset.id))
   ));
 }

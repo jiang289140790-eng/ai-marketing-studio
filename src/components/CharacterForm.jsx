@@ -14,7 +14,19 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
       lora: '',
       tags: [],
     };
-    return { ...base, loraConfig: parseLoraConfig(base.lora) };
+    return {
+      ...base,
+      identity: base.content_positioning || base.description || '',
+      copyTone: base.prompt_templates?.copy_tone || base.prompt_templates?.tone || '',
+      negativePrompt: base.prompt_templates?.negative_prompt || '',
+      recommendedWorkflowsText: toText(base.recommended_workflows),
+      boundAccountsText: toText(base.lora_info?.bound_account_ids),
+      referenceImagesText: toText(base.visual_spec?.reference_images),
+      loraConfig: {
+        ...parseLoraConfig(base.lora),
+        ...(base.lora_info && typeof base.lora_info === 'object' ? base.lora_info : {}),
+      },
+    };
   });
 
   function update(field, value) {
@@ -33,10 +45,40 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
       className="form-card character-form"
       onSubmit={(event) => {
         event.preventDefault();
-        const { tagsText: _tagsText, loraConfig, ...payload } = form;
+        const {
+          tagsText: _tagsText,
+          loraConfig,
+          identity,
+          copyTone,
+          negativePrompt,
+          recommendedWorkflowsText,
+          boundAccountsText,
+          referenceImagesText,
+          ...payload
+        } = form;
+        const loraInfo = {
+          ...(initialValue?.lora_info || {}),
+          ...loraConfig,
+          weight: Number(loraConfig.weight || 0.8),
+          bound_account_ids: toList(boundAccountsText),
+        };
         onSubmit({
           ...payload,
           lora: serializeLoraConfig(loraConfig),
+          lora_info: loraInfo,
+          content_positioning: identity,
+          prompt_templates: {
+            ...(initialValue?.prompt_templates || {}),
+            copy_tone: copyTone,
+            base_prompt: form.prompt || '',
+            negative_prompt: negativePrompt,
+          },
+          recommended_workflows: toList(recommendedWorkflowsText),
+          visual_spec: {
+            ...(initialValue?.visual_spec || {}),
+            reference_images: toList(referenceImagesText),
+          },
+          status: form.status || 'active',
           tags: parseTags(form.tagsText ?? formatTags(form.tags)),
         });
       }}
@@ -59,6 +101,10 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
           描述
           <textarea value={form.description || ''} onChange={(event) => update('description', event.target.value)} />
         </label>
+        <label className="wide-field">
+          人物身份 / 内容定位
+          <textarea value={form.identity || ''} onChange={(event) => update('identity', event.target.value)} placeholder="这个角色是谁、服务什么账号、长期承担什么内容身份" />
+        </label>
         <label>
           性格
           <textarea value={form.personality || ''} onChange={(event) => update('personality', event.target.value)} />
@@ -70,6 +116,34 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
         <label className="wide-field">
           角色提示词
           <textarea value={form.prompt || ''} onChange={(event) => update('prompt', event.target.value)} />
+        </label>
+        <label>
+          文案语气
+          <textarea value={form.copyTone || ''} onChange={(event) => update('copyTone', event.target.value)} placeholder="例如：自然、克制、亲密但不过度承诺" />
+        </label>
+        <label>
+          Negative Prompt
+          <textarea value={form.negativePrompt || ''} onChange={(event) => update('negativePrompt', event.target.value)} />
+        </label>
+        <label className="wide-field">
+          推荐工作流，逗号分隔
+          <input value={form.recommendedWorkflowsText || ''} onChange={(event) => update('recommendedWorkflowsText', event.target.value)} placeholder="工作流 ID 或名称" />
+        </label>
+        <label>
+          绑定账号 ID，逗号分隔
+          <input value={form.boundAccountsText || ''} onChange={(event) => update('boundAccountsText', event.target.value)} />
+        </label>
+        <label>
+          可用状态
+          <select value={form.status || 'active'} onChange={(event) => update('status', event.target.value)}>
+            <option value="active">可用</option>
+            <option value="inactive">暂停使用</option>
+            <option value="archived">已归档</option>
+          </select>
+        </label>
+        <label className="wide-field">
+          角色参考图 URL，逗号分隔
+          <textarea value={form.referenceImagesText || ''} onChange={(event) => update('referenceImagesText', event.target.value)} />
         </label>
         <label>
           标签，逗号分隔
@@ -128,4 +202,13 @@ export function CharacterForm({ initialValue, onSubmit, onCancel }) {
       </div>
     </form>
   );
+}
+
+function toList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  return String(value || '').split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function toText(value) {
+  return toList(value).join(', ');
 }

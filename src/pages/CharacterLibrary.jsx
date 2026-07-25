@@ -118,8 +118,9 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
       ) : (
         <div className="character-library-grid">
           {characters.map((character) => {
-            const hasLora = hasLoraConfig(character.lora);
-            const lora = parseLoraConfig(character.lora);
+            const loraValue = character.lora_info && Object.keys(character.lora_info).length ? character.lora_info : character.lora;
+            const hasLora = hasLoraConfig(loraValue);
+            const lora = parseLoraConfig(loraValue);
             return (
               <article className="character-card" key={character.id}>
                 <button className="card-open" type="button" onClick={() => {
@@ -141,7 +142,7 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
                   <p className="character-card-description">{character.description || character.personality || '暂无描述'}</p>
                   <div className="character-lora-summary">
                     <span>角色模型</span>
-                    <strong>{loraDisplayName(character.lora)}</strong>
+                    <strong>{loraDisplayName(loraValue)}</strong>
                     {hasLora && <small>权重 {lora.weight ?? 0.8} · {lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</small>}
                   </div>
                   <div className="tag-row">
@@ -178,11 +179,15 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
               }}>关闭</button>
             </div>
             {selected.avatar && <img className="character-detail-avatar" src={selected.avatar} alt={`${selected.name} 角色头像`} />}
-            <CharacterLoraDetails value={selected.lora} />
+            <CharacterLoraDetails value={selected.lora_info && Object.keys(selected.lora_info).length ? selected.lora_info : selected.lora} />
             <div className="character-detail-copy">
               <p><strong>描述：</strong>{selected.description || '—'}</p>
               <p><strong>性格：</strong>{selected.personality || '—'}</p>
               <p><strong>外观：</strong>{selected.appearance || '—'}</p>
+              <p><strong>人物身份：</strong>{selected.content_positioning || '—'}</p>
+              <p><strong>文案语气：</strong>{selected.prompt_templates?.copy_tone || '—'}</p>
+              <p><strong>绑定账号：</strong>{(selected.lora_info?.bound_account_ids || []).join('、') || '—'}</p>
+              <p><strong>推荐工作流：</strong>{(selected.recommended_workflows || []).map((item) => typeof item === 'string' ? item : item.name || item.id).join('、') || '—'}</p>
               <p><strong>创建时间：</strong>{formatDate(selected.created_at)}</p>
             </div>
             <div className="character-prompt-block">

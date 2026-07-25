@@ -18,6 +18,14 @@ import { createPrompt } from '../services/prompt-service';
 import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { normalizeContentPackageSequence } from '../utils/content-package-sequence';
+import {
+  buildReadiness,
+  CONTENT_STATUS_LABELS,
+  deriveContentDisplayStatus,
+  getVersionsForPackage,
+  getWorkbenchMetadata,
+  statusPrimaryAction,
+} from '../utils/day1-content-workbench';
 import { formatDate } from '../utils/formatters';
 
 const EMPTY = {
@@ -298,19 +306,30 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
 
         <main className="current-day-production">
           {selectedItem ? (
-            <ContentPackageCard
-              key={`${selectedItem.sourceKey}-${selectedItem.id}`}
-              item={selectedItem}
-              data={data}
-              assets={assets}
-              gateway={gateway}
-              userId={userId}
-              onNavigate={onNavigate}
-              onRefresh={refreshData}
-              initialOpen
-              dayIndex={selectedSequence.dayIndex}
-              strategyId={selectedStrategyId}
-            />
+            selectedSequence.dayIndex === 1 ? (
+              <DayOneContentWorkbench
+                key={`${selectedItem.sourceKey}-${selectedItem.id}`}
+                item={selectedItem}
+                data={data}
+                assets={assets}
+                onNavigate={onNavigate}
+                onRefresh={refreshData}
+              />
+            ) : (
+              <ContentPackageCard
+                key={`${selectedItem.sourceKey}-${selectedItem.id}`}
+                item={selectedItem}
+                data={data}
+                assets={assets}
+                gateway={gateway}
+                userId={userId}
+                onNavigate={onNavigate}
+                onRefresh={refreshData}
+                initialOpen
+                dayIndex={selectedSequence.dayIndex}
+                strategyId={selectedStrategyId}
+              />
+            )
           ) : (
             <EmptyState
               title={loading ? '正在读取内容包' : '没有匹配的内容包'}
@@ -398,6 +417,469 @@ function StrategyDayProgress({
         ))}
       </div>
     </section>
+  );
+}
+
+function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
+  const campaign = findById(data.campaigns, item.campaignId);
+  const strategy = findById(data.strategies, item.strategyId);
+  const account = findById(data.accounts, item.accountId);
+  const metadata = getWorkbenchMetadata(item);
+  const plan = safeJson(item.raw?.source_insights)?.plan_data || {};
+  const versions = useMemo(
+    () => getVersionsForPackage(data.legacyContent, item.id),
+    [data.legacyContent, item.id],
+  );
+  const selectedVersion = versions.find((version) => String(version.id) === String(metadata.selected_version_id || ''));
+  const [draft, setDraft] = useState(() => copyFromVersion(selectedVersion, item));
+  const [selectedCharacterId, setSelectedCharacterId] = useState(item.characterId || '');
+  const selectedCharacter = findById(data.characters, selectedCharacterId) || findById(data.characters, item.characterId);
+  const lora = getLoraInfo(selectedCharacter, item);
+  const linkedAssets = assetsForContent(item, assets);
+  const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id || '') === String(item.id));
+  const readiness = buildReadiness({
+    contentPackage: item,
+    copy: draft,
+    assets: linkedAssets,
+    publishTask,
+    character: selectedCharacter,
+    lora,
+  });
+  const displayStatus = deriveContentDisplayStatus({
+    contentPackage: item,
+    assets: linkedAssets,
+    publishTask,
+    selectedVersionId: metadata.selected_version_id,
+  });
+  const approvedAsset = readiness.approvedAssets[0];
+  const nextAction = statusPrimaryAction(displayStatus);
+  const imageRequirements = normalizeRequirement(item.imageRequirements || item.assetRequirement);
+  const videoRequirements = normalizeRequirement(item.videoRequirements || item.assetRequirement);
+  const generationReason = !selectedCharacter
+    ? '请先选择角色'
+    : !hasLora(lora)
+      ? '所选角色还没有可用的 LoRA'
+      : !metadata.copy_approved
+        ? '文案批准后才能进入正式素材生成'
+        : undefined;
+
+  useEffect(() => {
+    setDraft(copyFromVersion(selectedVersion, item));
+  }, [item, selectedVersion]);
+
+  useEffect(() => {
+    setSelectedCharacterId(item.characterId || '');
+  }, [item.characterId, item.id]);
+
+  async function saveCharacterBinding() {
+    await saveContentProductionBinding(item, {
+      strategyId: item.strategyId || null,
+      characterId: selectedCharacter?.id || null,
+      loraId: lora.id || lora.model || lora.filename || null,
+      loraInfo: hasLora(lora) ? lora : null,
+      referenceAssetIds: item.referenceAssetIds || [],
+      referenceSource: item.referenceSource || '',
+      generationMode: item.generationMode || 'character_lora_video',
+    });
+    await onRefresh();
+  }
+
+  return (
+    <article className="day1-workbench-card">
+      <header className="day1-context-header">
+        <div>
+          <p className="eyebrow">Day 1 内容工作台</p>
+          <h2>{plan.topic || formatDayPackageTitle(item.title, 1)}</h2>
+          <p>{plan.objective || campaign?.goal || '完成 Day 1 内容生产并进入待发布状态。'}</p>
+        </div>
+        <div className="day1-status-block">
+          <span>当前状态</span>
+          <strong>{CONTENT_STATUS_LABELS[displayStatus] || displayStatus}</strong>
+          <small>下一步：{nextAction}</small>
+        </div>
+      </header>
+
+      <div className="day1-context-grid">
+        <Info label="运营活动" value={campaign?.name} />
+        <Info label="运营账号" value={account?.account_name || account?.username} />
+        <Info label="平台" value={item.platform} />
+        <Info label="Day 1 主题" value={plan.topic || item.title} />
+        <Info label="内容目标" value={plan.objective || campaign?.goal} />
+        <Info label="内容支柱" value={plan.content_pillar || plan.pillar} />
+        <Info label="开头类型" value={plan.hook_type || item.hook} />
+        <Info label="计划发布时间" value={item.scheduledAt ? formatDate(item.scheduledAt) : plan.planned_date} />
+        <Info label="角色" value={selectedCharacter?.display_name || selectedCharacter?.name || '待选择'} />
+      </div>
+
+      <section className="day1-workbench-section plan-section">
+        <div className="section-head">
+          <div><p className="eyebrow">1 · 计划说明</p><h3>Day 1 生产简报</h3></div>
+          <StatusBadge status={strategy?.status || 'approved'} />
+        </div>
+        <div className="business-grid">
+          <Info label="内容角色" value={plan.content_role} />
+          <Info label="内容形式" value={plan.format} />
+          <Info label="素材要求" value={plan.media_requirement} />
+          <Info label="行动引导" value={plan.CTA || item.cta} />
+          <Info label="计划备注" value={plan.notes} />
+          <Info label="策略" value={strategy?.name || strategy?.title} />
+        </div>
+      </section>
+
+      <section className="day1-workbench-section copy-section">
+        <div className="section-head">
+          <div><p className="eyebrow">2 · 文案生成与审核</p><h3>候选版本与主版本</h3></div>
+          {!metadata.copy_approved && (
+            <ExecutionButton
+              action="generate_content_for_package"
+              actionName="生成 3 个候选版本"
+              resourceType="content_package"
+              resourceId={item.id}
+              payload={{ campaign_id: item.campaignId, content_package_id: item.id, candidate_count: 3 }}
+              onCompleted={onRefresh}
+            >
+              生成 3 个候选版本
+            </ExecutionButton>
+          )}
+        </div>
+
+        <div className="content-version-grid">
+          {versions.map((version) => {
+            const selected = String(version.id) === String(metadata.selected_version_id || '');
+            return (
+              <article className={`content-version-card ${selected ? 'selected' : ''}`} key={version.id}>
+                <div className="version-card-head">
+                  <strong>版本 {version.versionNumber || '—'}</strong>
+                  <span>{revisionTypeLabel(version.revisionType)}</span>
+                </div>
+                <h4>{version.hook || version.title}</h4>
+                <p>{truncate(version.body, 180)}</p>
+                <div className="button-row">
+                  <ExecutionButton
+                    action="select_content_version"
+                    actionName="设为主版本"
+                    className={selected ? 'ghost-button' : 'primary-button'}
+                    resourceType="content_package"
+                    resourceId={item.id}
+                    ready={!metadata.copy_approved}
+                    reason={metadata.copy_approved ? '文案已批准，如需切换请先要求修改' : undefined}
+                    payload={{ campaign_id: item.campaignId, content_package_id: item.id, version_id: version.id }}
+                    onCompleted={onRefresh}
+                  >
+                    {selected ? '当前主版本' : '设为主版本'}
+                  </ExecutionButton>
+                </div>
+              </article>
+            );
+          })}
+          {!versions.length && <div className="empty-card-inline">还没有候选版本。点击“生成 3 个候选版本”开始。</div>}
+        </div>
+
+        <div className="copy-editor-preview-grid">
+          <div className="day1-copy-editor">
+            <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+            <label>开头<input value={draft.hook} onChange={(event) => setDraft({ ...draft, hook: event.target.value })} /></label>
+            <label>正文<textarea rows="10" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
+            <label>行动引导<input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} /></label>
+            <label>标签<input value={draft.hashtags} onChange={(event) => setDraft({ ...draft, hashtags: event.target.value })} /></label>
+            {!metadata.copy_approved && <div className="button-row">
+              <ExecutionButton
+                action="revise_content"
+                actionName="保存为新版本"
+                resourceType="content_package"
+                resourceId={item.id}
+                ready={Boolean(metadata.selected_version_id && draft.body.trim())}
+                reason={!metadata.selected_version_id ? '请先选择主版本' : !draft.body.trim() ? '正文不能为空' : undefined}
+                payload={{
+                  campaign_id: item.campaignId,
+                  content_package_id: item.id,
+                  version_id: metadata.selected_version_id,
+                  operation: 'manual_edit',
+                  manual_content: {
+                    title: draft.title,
+                    hook: draft.hook,
+                    body: draft.body,
+                    cta: draft.cta,
+                    hashtags: normalizeList(draft.hashtags),
+                    language_style: selectedVersion?.languageStyle || item.languageStyle,
+                  },
+                }}
+                onCompleted={onRefresh}
+              >
+                保存为新版本
+              </ExecutionButton>
+              {[
+                ['shorten', '缩短'],
+                ['enhance_hook', '增强开头'],
+                ['add_question', '增加互动问题'],
+                ['regenerate', '重新生成'],
+              ].map(([operation, label]) => (
+                <ExecutionButton
+                  key={operation}
+                  action="revise_content"
+                  actionName={label}
+                  className="ghost-button"
+                  resourceType="content_package"
+                  resourceId={item.id}
+                  ready={Boolean(metadata.selected_version_id)}
+                  reason={!metadata.selected_version_id ? '请先选择主版本' : undefined}
+                  payload={{
+                    campaign_id: item.campaignId,
+                    content_package_id: item.id,
+                    version_id: metadata.selected_version_id,
+                    operation,
+                  }}
+                  onCompleted={onRefresh}
+                >
+                  {label}
+                </ExecutionButton>
+              ))}
+              <ExecutionButton
+                action="revise_content"
+                actionName="改变语气"
+                className="ghost-button"
+                resourceType="content_package"
+                resourceId={item.id}
+                ready={Boolean(metadata.selected_version_id)}
+                reason={!metadata.selected_version_id ? '请先选择主版本' : undefined}
+                payload={() => ({
+                  campaign_id: item.campaignId,
+                  content_package_id: item.id,
+                  version_id: metadata.selected_version_id,
+                  operation: 'change_tone',
+                  tone: window.prompt('请输入目标语气，例如：自然、克制、有亲和力') || '自然、有亲和力',
+                })}
+                onCompleted={onRefresh}
+              >
+                改变语气
+              </ExecutionButton>
+              <ExecutionButton
+                action="revise_content"
+                actionName="平台本地化"
+                className="ghost-button"
+                resourceType="content_package"
+                resourceId={item.id}
+                ready={Boolean(metadata.selected_version_id)}
+                reason={!metadata.selected_version_id ? '请先选择主版本' : undefined}
+                payload={{
+                  campaign_id: item.campaignId,
+                  content_package_id: item.id,
+                  version_id: metadata.selected_version_id,
+                  operation: 'localize',
+                  locale: item.platform,
+                }}
+                onCompleted={onRefresh}
+              >
+                平台本地化
+              </ExecutionButton>
+            </div>}
+          </div>
+
+          <div className="platform-preview-card">
+            <div className="platform-preview-head">
+              <span>{item.platform || '平台'} 预览</span>
+              <small>{account?.username ? `@${String(account.username).replace(/^@/, '')}` : account?.account_name}</small>
+            </div>
+            <strong>{draft.hook || draft.title || '等待选择主版本'}</strong>
+            <p>{draft.body || '生成并选择候选版本后，这里会显示平台预览。'}</p>
+            <p className="preview-cta">{draft.cta}</p>
+            <div className="preview-tags">{normalizeList(draft.hashtags).map((tag) => <span key={tag}>{tag.startsWith('#') ? tag : `#${tag}`}</span>)}</div>
+          </div>
+        </div>
+
+        <div className="copy-review-actions">
+          {!metadata.copy_approved && (
+            <ExecutionButton
+              action="approve_content"
+              actionName="批准文案"
+              resourceType="content_package"
+              resourceId={item.id}
+              ready={Boolean(metadata.selected_version_id)}
+              reason={!metadata.selected_version_id ? '请先选择主版本' : undefined}
+              payload={{ campaign_id: item.campaignId, content_package_id: item.id, version_id: metadata.selected_version_id }}
+              onCompleted={onRefresh}
+            >
+              批准文案
+            </ExecutionButton>
+          )}
+          <ExecutionButton
+            action="request_content_revision"
+            actionName="要求修改"
+            className="ghost-button"
+            resourceType="content_package"
+            resourceId={item.id}
+            ready={Boolean(metadata.selected_version_id)}
+            reason={!metadata.selected_version_id ? '请先选择主版本' : undefined}
+            payload={() => ({
+              campaign_id: item.campaignId,
+              content_package_id: item.id,
+              feedback: window.prompt('请输入修改意见') || '请根据审核意见修改文案。',
+            })}
+            onCompleted={onRefresh}
+          >
+            要求修改
+          </ExecutionButton>
+        </div>
+      </section>
+
+      <section className="day1-workbench-section production-section">
+        <div className="section-head">
+          <div><p className="eyebrow">3 · 角色、LoRA 与素材</p><h3>视觉生产与素材确认</h3></div>
+          <span className="context-sync-badge">{linkedAssets.length} 个关联素材</span>
+        </div>
+        <div className="production-binding-selectors">
+          <label>角色
+            <select value={selectedCharacterId} onChange={(event) => setSelectedCharacterId(event.target.value)}>
+              <option value="">请选择角色</option>
+              {(data.characters || []).filter((character) => character.status !== 'archived').map((character) => (
+                <option key={character.id} value={character.id}>{character.display_name || character.name}</option>
+              ))}
+            </select>
+          </label>
+          <Info label="LoRA" value={lora.name || lora.model || lora.filename || '未配置'} />
+          <button className="ghost-button" type="button" onClick={saveCharacterBinding} disabled={!selectedCharacter}>保存角色与 LoRA</button>
+        </div>
+
+        <div className="button-row">
+          <ExecutionButton
+            action="generate_character_image"
+            actionName="生成图片"
+            resourceType="content_package"
+            resourceId={item.id}
+            reason={generationReason}
+            payload={{
+              content_package_id: item.id,
+              character_id: selectedCharacter?.id,
+              strategy_plan_id: item.strategyId,
+              mode: 'text_to_image',
+              prompt: imageRequirements.positive_prompt || `${draft.hook}。${draft.body}`,
+            }}
+            onCompleted={onRefresh}
+          >
+            生成图片
+          </ExecutionButton>
+          <ExecutionButton
+            action="generate_character_video"
+            actionName="生成视频"
+            resourceType="content_package"
+            resourceId={item.id}
+            reason={generationReason}
+            payload={{
+              content_package_id: item.id,
+              character_id: selectedCharacter?.id,
+              strategy_plan_id: item.strategyId,
+              mode: 'text_to_video',
+              prompt: videoRequirements.script || `${draft.hook}。${draft.body}`,
+            }}
+            onCompleted={onRefresh}
+          >
+            生成视频
+          </ExecutionButton>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>从素材库选择</button>
+        </div>
+
+        <div className="day1-asset-grid">
+          {linkedAssets.map((asset) => (
+            <article className={`day1-asset-card ${asset.raw?.approved_for_publishing ? 'approved' : ''}`} key={asset.id}>
+              <AssetPreview asset={asset} compact />
+              <div><strong>{asset.name}</strong><small>{asset.type} · {asset.status}</small></div>
+              {!asset.raw?.approved_for_publishing && asset.status === 'completed' && (
+                <ExecutionButton
+                  action="review_generated_asset"
+                  actionName="确认素材可用"
+                  className="ghost-button"
+                  resourceType="asset"
+                  resourceId={asset.id}
+                  payload={{ asset_id: asset.id, action: 'approve', feedback: 'Day 1 human asset confirmation.' }}
+                  onCompleted={onRefresh}
+                >
+                  确认可用
+                </ExecutionButton>
+              )}
+            </article>
+          ))}
+          {!linkedAssets.length && <div className="empty-card-inline">文案批准后，可以生成或从素材库选择图片/视频。</div>}
+        </div>
+      </section>
+
+      <section className="day1-workbench-section readiness-section">
+        <div className="section-head">
+          <div><p className="eyebrow">4 · 风险、审核与发布准备</p><h3>待发布检查</h3></div>
+          <span className={`status-badge ${readiness.readyForPublishTask ? 'approved' : 'draft'}`}>
+            {readiness.readyForPublishTask ? '可创建待发布任务' : '尚未就绪'}
+          </span>
+        </div>
+        <div className="readiness-check-grid">
+          <Check label="已选择主版本" ok={readiness.checks.selectedVersion} />
+          <Check label="文案完整" ok={readiness.checks.copyComplete} />
+          <Check label="文案已人工批准" ok={readiness.checks.copyApproved} />
+          <Check label="角色 / LoRA 可用" ok={readiness.checks.characterReady} />
+          <Check label="素材已人工确认" ok={readiness.checks.mediaConfirmed} />
+          <Check label="无阻断风险" ok={readiness.checks.risksClear} />
+        </div>
+        <div className="risk-check-panel">
+          <strong>风险检查</strong>
+          {!readiness.risks.blocking.length && !readiness.risks.warnings.length
+            ? <p>未发现明显阻断项。</p>
+            : (
+              <ul>
+                {readiness.risks.blocking.map((risk) => <li className="blocking" key={risk}>阻断：{risk}</li>)}
+                {readiness.risks.warnings.map((risk) => <li key={risk}>提醒：{risk}</li>)}
+              </ul>
+            )}
+        </div>
+        <div className="button-row">
+          <ExecutionButton
+            action="finalize_content_package"
+            actionName="创建待发布任务"
+            resourceType="content_package"
+            resourceId={item.id}
+            ready={readiness.readyForPublishTask}
+            reason={!readiness.readyForPublishTask ? '请先完成文案批准、素材确认和风险检查' : undefined}
+            payload={{
+              content_package_id: item.id,
+              selected_asset_id: approvedAsset?.id,
+              final_body: draft.body,
+              final_cta: draft.cta,
+              final_tags: normalizeList(draft.hashtags),
+              scheduled_at: item.scheduledAt || null,
+              platform_account_id: item.accountId,
+            }}
+            onCompleted={onRefresh}
+          >
+            创建待发布任务
+          </ExecutionButton>
+          {publishTask && <button className="ghost-button" type="button" onClick={() => onNavigate('publish', publishTask.id)}>查看发布准备</button>}
+        </div>
+        <p className="form-hint">这里只创建待发布任务；仍需在发布队列人工批准，不会自动发布。</p>
+      </section>
+
+      <section className="day1-workbench-section history-section">
+        <div className="section-head"><div><p className="eyebrow">5 · 版本历史</p><h3>{versions.length} 个已保存版本</h3></div></div>
+        <div className="version-history-list">
+          {[...versions].reverse().map((version) => (
+            <div className="version-history-row" key={version.id}>
+              <strong>版本 {version.versionNumber}</strong>
+              <span>{revisionTypeLabel(version.revisionType)}</span>
+              <small>{formatDate(version.createdAt)}</small>
+              <em>{String(version.id) === String(metadata.selected_version_id || '') ? '当前主版本' : ''}</em>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <details className="day1-advanced-details">
+        <summary>高级详情</summary>
+        <div className="business-grid">
+          <Info label="内容包 ID" value={item.id} />
+          <Info label="策略 ID" value={item.strategyId} />
+          <Info label="Campaign ID" value={item.campaignId} />
+          <Info label="当前主版本 ID" value={metadata.selected_version_id} />
+          <Info label="内部状态" value={item.raw?.source_insights} />
+          <Info label="工作流记录" value={runsForContent(item, data.workflowRuns || [])} />
+        </div>
+      </details>
+    </article>
   );
 }
 
@@ -1768,6 +2250,30 @@ function getLoraOptions(character, item) {
 
 function loraOptionKey(lora) {
   return String(lora?.id || lora?.model || lora?.filename || lora?.name || 'lora');
+}
+
+function copyFromVersion(version, item) {
+  return {
+    title: version?.title || item.title || '',
+    hook: version?.hook || item.hook || '',
+    body: version?.body || item.body || '',
+    cta: version?.cta || item.cta || '',
+    hashtags: normalizeList(version?.hashtags || item.tags).join(', '),
+  };
+}
+
+function revisionTypeLabel(value) {
+  const labels = {
+    generated: 'AI 候选',
+    manual_edit: '人工修改',
+    shorten: '缩短',
+    enhance_hook: '增强开头',
+    add_question: '增加互动问题',
+    change_tone: '改变语气',
+    localize: '平台本地化',
+    regenerate: '重新生成',
+  };
+  return labels[value] || value || '版本';
 }
 
 function safeJson(value) {

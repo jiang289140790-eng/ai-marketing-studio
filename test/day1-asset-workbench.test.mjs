@@ -40,3 +40,7 @@ test('LoRA values are normalized without creating a second character model', () 
   assert.equal(loras.length, 2);
   assert.equal(loras[0].model, 'emma-v2.safetensors');
 });
+
+test('content without a selected character has no LoRA options instead of crashing', () => {
+  assert.deepEqual(getCharacterLoras(null, null), []);
+});

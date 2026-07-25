@@ -76,12 +76,14 @@ export function filterUsableAssets(assets = []) {
 }
 
 export function getCharacterLoras(character = {}, contentBinding = {}) {
+  const safeCharacter = objectValue(character);
+  const safeContentBinding = objectValue(contentBinding);
   const sources = [
-    contentBinding.loraInfo,
-    character.lora_info,
-    character.lora,
-    character.loras,
-    character.lora_configs,
+    safeContentBinding.loraInfo,
+    safeCharacter.lora_info,
+    safeCharacter.lora,
+    safeCharacter.loras,
+    safeCharacter.lora_configs,
   ];
   const values = sources.flatMap((source) => {
     if (!source) return [];

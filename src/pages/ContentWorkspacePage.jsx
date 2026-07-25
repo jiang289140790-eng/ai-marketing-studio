@@ -509,6 +509,18 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
       : !metadata.copy_approved
         ? '文案批准后才能进入正式素材生成'
         : undefined;
+  const journey = buildDayOneJourney({
+    plan,
+    strategy,
+    metadata,
+    generationJobs,
+    usableAssets,
+    approvedAsset,
+    item,
+    publishTask,
+  });
+  const currentJourneyStepId = journey.current.id;
+  const [activeJourneyStep, setActiveJourneyStep] = useState(currentJourneyStepId);
 
   useEffect(() => {
     setDraft(copyFromVersion(selectedVersion, item));
@@ -527,6 +539,10 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
   useEffect(() => {
     setRuntimeBrokenAssetIds([]);
   }, [item.id]);
+
+  useEffect(() => {
+    setActiveJourneyStep(currentJourneyStepId);
+  }, [currentJourneyStepId, item.id]);
 
   async function saveCharacterBinding() {
     await saveContentProductionBinding(item, {
@@ -572,7 +588,23 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
         <Info label="角色" value={selectedCharacter?.display_name || selectedCharacter?.name || '待选择'} />
       </div>
 
-      <section className="day1-workbench-section plan-section">
+      <nav className="day1-journey" aria-label="Day 1 生产流程">
+        {journey.steps.map((step, index) => (
+          <button
+            key={step.id}
+            type="button"
+            className={`${step.state} ${activeJourneyStep === step.id ? 'selected' : ''}`}
+            disabled={step.state === 'waiting'}
+            onClick={() => setActiveJourneyStep(step.id)}
+          >
+            <span>{step.state === 'completed' ? '✓' : index + 1}</span>
+            <strong>{step.label}</strong>
+            <small>{step.state === 'completed' ? '已完成' : step.state === 'current' ? '当前处理' : '等待上一步完成'}</small>
+          </button>
+        ))}
+      </nav>
+
+      <section className="day1-workbench-section plan-section" hidden={activeJourneyStep !== 'plan'}>
         <div className="section-head">
           <div><p className="eyebrow">1 · 计划说明</p><h3>Day 1 生产简报</h3></div>
           <StatusBadge status={strategy?.status || 'approved'} />
@@ -587,7 +619,7 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
         </div>
       </section>
 
-      <section className="day1-workbench-section copy-section">
+      <section className="day1-workbench-section copy-section" hidden={activeJourneyStep !== 'copy'}>
         <div className="section-head">
           <div><p className="eyebrow">2 · 文案生成与审核</p><h3>候选版本与主版本</h3></div>
           {!metadata.copy_approved && (
@@ -783,7 +815,10 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
         </div>
       </section>
 
-      <section className="day1-workbench-section production-section">
+      <section
+        className="day1-workbench-section production-section"
+        hidden={!['visual', 'asset'].includes(activeJourneyStep)}
+      >
         <div className="section-head">
           <div><p className="eyebrow">3 · 角色、LoRA 与素材</p><h3>视觉生产与素材确认</h3></div>
           <span className="context-sync-badge">{linkedAssets.length} 个关联素材</span>
@@ -1062,7 +1097,10 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
         )}
       </section>
 
-      <section className="day1-workbench-section readiness-section">
+      <section
+        className="day1-workbench-section readiness-section"
+        hidden={!['review', 'publish'].includes(activeJourneyStep)}
+      >
         <div className="section-head">
           <div><p className="eyebrow">4 · 风险、审核与发布准备</p><h3>待发布检查</h3></div>
           <span className={`status-badge ${readiness.readyForPublishTask ? 'approved' : 'draft'}`}>
@@ -1114,7 +1152,7 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
         <p className="form-hint">这里只创建待发布任务；仍需在发布队列人工批准，不会自动发布。</p>
       </section>
 
-      <section className="day1-workbench-section history-section">
+      <section className="day1-workbench-section history-section" hidden={activeJourneyStep !== 'data'}>
         <div className="section-head"><div><p className="eyebrow">5 · 版本历史</p><h3>{versions.length} 个已保存版本</h3></div></div>
         <div className="version-history-list">
           {[...versions].reverse().map((version) => (
@@ -1141,6 +1179,43 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
       </details>
     </article>
   );
+}
+
+function buildDayOneJourney({
+  plan,
+  strategy,
+  metadata,
+  generationJobs,
+  usableAssets,
+  approvedAsset,
+  item,
+  publishTask,
+}) {
+  const publishStatus = String(publishTask?.status || '').toLowerCase();
+  const generated = usableAssets.length > 0 || generationJobs.some((job) => (
+    ['completed', 'ready'].includes(String(job.status || '').toLowerCase())
+  ));
+  const checks = [
+    ['plan', '计划确认', Boolean(plan?.topic || plan?.content_pillar || strategy?.status === 'approved')],
+    ['copy', '文案生成与审核', Boolean(metadata.copy_approved)],
+    ['visual', '视觉内容生成', generated],
+    ['asset', '素材确认', Boolean(approvedAsset)],
+    ['review', '内容终审', Boolean(item.approvedForPublishing || ['approved', 'scheduled', 'published'].includes(String(item.reviewStatus || item.status || '').toLowerCase()))],
+    ['publish', '发布准备', Boolean(publishTask)],
+    ['data', '已发布与数据', publishStatus === 'published'],
+  ];
+  const currentIndex = checks.findIndex(([, , complete]) => !complete);
+  const resolvedIndex = currentIndex === -1 ? checks.length - 1 : currentIndex;
+  const steps = checks.map(([id, label, complete], index) => ({
+    id,
+    label,
+    state: complete && index < resolvedIndex
+      ? 'completed'
+      : index === resolvedIndex
+        ? 'current'
+        : 'waiting',
+  }));
+  return { steps, current: steps[resolvedIndex] };
 }
 
 function ContentPackageCard({

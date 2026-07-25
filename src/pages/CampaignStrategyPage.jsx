@@ -91,6 +91,8 @@ export function CampaignStrategyPage({ userId, onNavigate, activeCampaignId, ref
 
       <DataReadErrors errors={data.__errors} />
 
+      <details className="campaign-create-disclosure" open={!visibleCampaigns.length}>
+        <summary>{visibleCampaigns.length ? '创建其他运营活动' : '创建第一个运营活动'}</summary>
       <form className="campaign-form-card" onSubmit={(event) => event.preventDefault()}>
         <div className="section-head">
           <div>
@@ -151,12 +153,21 @@ export function CampaignStrategyPage({ userId, onNavigate, activeCampaignId, ref
           </label>
         </div>
       </form>
+      </details>
 
       <div className="stat-grid compact">
-        <StatCard label="运营活动" value={loading ? '-' : data.campaigns.length} hint="当前运营目标" />
-        <StatCard label="待批准策略" value={loading ? '-' : countWhere(data.strategies, (item) => ['review', 'pending', 'draft'].includes(item.status))} hint="等待人工确认" />
-        <StatCard label="已批准策略" value={loading ? '-' : countWhere(data.strategies, (item) => item.status === 'approved')} hint="可生成 7 天计划" />
-        <StatCard label="内容包" value={loading ? '-' : data.contentPackages.length} hint="按 Day 去重创建" />
+        <StatCard label="当前运营活动" value={loading ? '-' : visibleCampaigns.length} hint="默认只显示当前活动" />
+        <StatCard label="待批准策略" value={loading ? '-' : countWhere(data.strategies, (item) => (
+          visibleCampaigns.some((campaign) => String(campaign.id) === String(item.campaign_id))
+          && ['review', 'pending', 'draft'].includes(item.status)
+        ))} hint="等待人工确认" />
+        <StatCard label="已批准策略" value={loading ? '-' : countWhere(data.strategies, (item) => (
+          visibleCampaigns.some((campaign) => String(campaign.id) === String(item.campaign_id))
+          && item.status === 'approved'
+        ))} hint="可查看 7 天计划" />
+        <StatCard label="当前内容包" value={loading ? '-' : countWhere(data.contentPackages, (item) => (
+          visibleCampaigns.some((campaign) => String(campaign.id) === String(item.campaign_id))
+        ))} hint="当前活动数据" />
       </div>
 
       <div className="stack-list">

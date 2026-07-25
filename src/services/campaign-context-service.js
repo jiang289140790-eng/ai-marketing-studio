@@ -1,6 +1,7 @@
 import { requireSupabase } from './supabase-client.js';
 
 const ACTIVE_STATUSES = new Set(['active', 'draft', 'paused']);
+export const ACCEPTANCE_CAMPAIGN_NAME = 'X 媒体优先短内容测试';
 const REVIEWED_PACKAGE_STATUSES = new Set(['approved', 'scheduled', 'published', 'completed']);
 const ACCOUNT_ROLES = {
   primary: new Set(['owned', 'brand', 'personal']),
@@ -55,9 +56,19 @@ export function selectActiveCampaignFromList(campaigns = [], preferredId = '') {
   if (!campaigns.length) return null;
   const preferred = campaigns.find((campaign) => campaign.id === preferredId);
   if (preferred) return preferred;
+  const acceptanceCampaign = campaigns.find(
+    (campaign) => String(campaign.name || '').trim() === ACCEPTANCE_CAMPAIGN_NAME,
+  );
+  if (acceptanceCampaign) return acceptanceCampaign;
   if (campaigns.length === 1) return campaigns[0];
   return campaigns.find((campaign) => ACTIVE_STATUSES.has(String(campaign.status || '').toLowerCase()))
     || campaigns[0];
+}
+
+export function isHistoricalOrTestCampaign(campaign = {}) {
+  const name = String(campaign.name || campaign.title || '').trim();
+  if (name === ACCEPTANCE_CAMPAIGN_NAME) return false;
+  return /(?:^|\b)(phase\s*[2789]|debug|test|测试数据|回归测试|round[\s_-]*trip|nightly)(?:\b|$)/i.test(name);
 }
 
 export function filterCampaignRows(rows = [], campaignId, strategyIds = []) {

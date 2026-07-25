@@ -76,7 +76,6 @@ export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignCo
     () => buildBusinessExceptions(data, actionQueue, gatewayStatus),
     [actionQueue, data, gatewayStatus],
   );
-  const recommendations = useMemo(() => buildRecommendations(data), [data]);
 
   if (!isSupabaseConfigured) {
     return (
@@ -102,38 +101,30 @@ export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignCo
     return <FirstUseGuide onNavigate={onNavigate} />;
   }
 
-  const primaryAction = currentActions[0] || actionQueue[0];
+  const primaryAction = currentActions[0] || null;
+  const nextPublish = findNextPublishItem(campaignContext, data);
 
   return (
     <section className="page-stack command-center-v2">
-      <header className="command-focus-header">
-        <div>
-          <p className="eyebrow">AI 运营指挥中心</p>
-          <h2>{actionQueue.length ? `今天有 ${actionQueue.length} 项需要你处理` : '今天没有阻塞中的人工任务'}</h2>
-          <p>
-            {primaryAction
-              ? `${primaryAction.campaign_name}：${primaryAction.summary}`
-              : '当前流程运行正常，可以查看即将发布的内容或继续推进当前活动。'}
-          </p>
-        </div>
-        {primaryAction && (
-          <button className="primary-button" type="button" onClick={() => navigateToAction(primaryAction, onNavigate)}>
-            {primaryAction.recommended_action}
-          </button>
-        )}
-      </header>
+      <CurrentCampaignPanel
+        context={campaignContext}
+        actions={currentActions}
+        onNavigate={onNavigate}
+      />
 
-      <section className="command-section action-queue-section">
+      <CurrentDayPanel context={campaignContext} action={primaryAction} onNavigate={onNavigate} />
+
+      <section className="command-section action-queue-section" aria-label="待我处理">
         <div className="section-head compact-head">
           <div>
             <p className="eyebrow">待我处理</p>
-            <h3>按业务优先级排列</h3>
+            <h3>{currentActions.length ? `当前活动有 ${currentActions.length} 项待办` : '当前活动暂无人工待办'}</h3>
           </div>
-          <span className="command-count">{actionQueue.length} 项</span>
+          <span className="command-count">{currentActions.length} 项</span>
         </div>
-        {actionQueue.length ? (
+        {currentActions.length ? (
           <div className="action-queue-list">
-            {actionQueue.slice(0, 8).map((item) => (
+            {currentActions.slice(0, 5).map((item) => (
               <ActionQueueRow key={`${item.action_type}-${item.entity_id}`} item={item} onNavigate={onNavigate} />
             ))}
           </div>
@@ -148,21 +139,73 @@ export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignCo
         )}
       </section>
 
-      <div className="command-main-grid">
-        <CurrentCampaignPanel
-          context={campaignContext}
-          actions={currentActions}
-          onNavigate={onNavigate}
-        />
-        <SevenDaySchedule timeline={timeline} onNavigate={onNavigate} />
-      </div>
+      <NextPublishPanel item={nextPublish} timeline={timeline} onNavigate={onNavigate} />
 
-      <div className="command-secondary-grid">
-        <BusinessExceptions exceptions={exceptions} onNavigate={onNavigate} />
-        <AiRecommendations items={recommendations} onNavigate={onNavigate} />
-      </div>
+      <BusinessExceptions exceptions={exceptions.filter((item) => (
+        !activeCampaignId || !item.campaignId || String(item.campaignId) === String(activeCampaignId)
+      ))} onNavigate={onNavigate} />
     </section>
   );
+}
+
+function CurrentDayPanel({ context, action, onNavigate }) {
+  const dayOne = context?.contentPackages?.find((item) => getContentPackageDay(item) === 1);
+  const stage = context?.progress?.currentStage || '等待活动数据';
+  return (
+    <section className="command-section current-day-panel" aria-label="当前 Day 与当前步骤">
+      <div className="section-head compact-head">
+        <div><p className="eyebrow">当前 Day 与当前步骤</p><h3>Day 1 · {stage}</h3></div>
+        <StatusBadge status={dayOne?.review_status || dayOne?.status || 'draft'} />
+      </div>
+      <p>{action?.summary || '当前步骤没有人工阻塞，可继续查看 Day 1 状态。'}</p>
+      <button
+        className="primary-button"
+        type="button"
+        onClick={() => action ? navigateToAction(action, onNavigate) : onNavigate('workspace', dayOne?.id || '', {
+          campaign_id: context?.campaign?.id,
+          day: 1,
+        })}
+      >
+        {action?.recommended_action || '进入 Day 1 内容生产'}
+      </button>
+    </section>
+  );
+}
+
+function NextPublishPanel({ item, timeline, onNavigate }) {
+  const fallback = timeline.find((entry) => !['published', 'completed'].includes(String(entry.status || '').toLowerCase()));
+  return (
+    <section className="command-section next-publish-panel" aria-label="下一条发布计划">
+      <div className="section-head compact-head">
+        <div><p className="eyebrow">下一条发布计划</p><h3>{item?.title || fallback?.topic || '尚未形成待发布内容'}</h3></div>
+        <StatusBadge status={item?.status || fallback?.status || 'draft'} />
+      </div>
+      <dl className="campaign-summary-grid">
+        <div><dt>Day</dt><dd>{item?.day ? `Day ${item.day}` : fallback?.day ? `Day ${fallback.day}` : 'Day 1'}</dd></div>
+        <div><dt>平台</dt><dd>{item?.platform || fallback?.platform || '待确认'}</dd></div>
+        <div><dt>时间</dt><dd>{item?.scheduled_at ? formatDate(item.scheduled_at) : fallback?.date || '待排期'}</dd></div>
+        <div><dt>状态</dt><dd>{packageStatusLabel(item || fallback || {})}</dd></div>
+      </dl>
+      <button className="ghost-button" type="button" onClick={() => onNavigate(item ? 'publish' : 'campaigns', item?.id || '')}>
+        {item ? '进入发布中心' : '查看 7 天计划'}
+      </button>
+    </section>
+  );
+}
+
+function findNextPublishItem(context, data) {
+  const campaignId = context?.campaign?.id;
+  const tasks = (data.publishTasks || [])
+    .filter((task) => !campaignId || String(task.campaign_id || '') === String(campaignId))
+    .filter((task) => !['published', 'cancelled', 'canceled'].includes(String(task.status || '').toLowerCase()))
+    .sort((left, right) => String(left.scheduled_at || left.publish_time || '').localeCompare(String(right.scheduled_at || right.publish_time || '')));
+  if (!tasks[0]) return null;
+  const contentPackage = (data.contentPackages || []).find((item) => String(item.id) === String(tasks[0].content_package_id || ''));
+  return {
+    ...tasks[0],
+    title: contentPackage?.title || tasks[0].title || 'Day 1 待发布内容',
+    day: getContentPackageDay(contentPackage),
+  };
 }
 
 function ActionQueueRow({ item, onNavigate }) {
@@ -241,7 +284,7 @@ function CurrentCampaignPanel({ context, actions, onNavigate }) {
   );
 }
 
-function SevenDaySchedule({ timeline, onNavigate }) {
+function _SevenDaySchedule({ timeline, onNavigate }) {
   return (
     <section className="command-section seven-day-schedule">
       <div className="section-head compact-head">
@@ -292,7 +335,7 @@ function BusinessExceptions({ exceptions, onNavigate }) {
   );
 }
 
-function AiRecommendations({ items, onNavigate }) {
+function _AiRecommendations({ items, onNavigate }) {
   return (
     <section className="command-section recommendation-panel-v2">
       <div className="section-head compact-head">
@@ -398,7 +441,7 @@ function buildBusinessExceptions(data, queue, gatewayStatus) {
   return [...new Map(items.map((item) => [item.id, item])).values()];
 }
 
-function buildRecommendations(data) {
+function _buildRecommendations(data) {
   const candidates = [];
   const report = getLatest([...data.accountReports, ...data.accountProfiles], 1)[0];
   const strategyMemory = getLatest(data.strategyMemory, 1)[0];

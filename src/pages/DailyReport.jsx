@@ -1,34 +1,52 @@
 import { useCallback, useEffect, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
-import { StatCard } from '../components/StatCard';
+import { MoreActionsMenu } from '../components/MoreActionsMenu';
 import { buildDailyReport, buildDataExport, downloadJson } from '../services/report-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
-export function DailyReport({ userId }) {
+export function DailyReport({
+  activeCampaignId,
+  auxiliaryMode = 'normal',
+  campaignContext,
+  dataScope = 'campaign',
+  userId,
+  onNavigate,
+}) {
   const [report, setReport] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async ({ reveal = false } = {}) => {
     if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
-    const nextReport = await buildDailyReport(userId);
-    setReport(nextReport);
-    setLoading(false);
-  }, [userId]);
+    try {
+      const nextReport = await buildDailyReport(userId, {
+        scope: dataScope,
+        campaignContext,
+        activeCampaignId,
+      });
+      setReport(nextReport);
+      if (reveal) setShowSummary(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeCampaignId, campaignContext, dataScope, userId]);
 
   useEffect(() => {
-    refresh().catch((error) => {
-      setMessage(error.message);
-      setLoading(false);
-    });
+    refresh().catch((error) => setMessage(error.message));
   }, [refresh]);
 
   async function handleExport() {
     try {
-      const payload = await buildDataExport(userId);
+      const payload = await buildDataExport(userId, {
+        scope: dataScope,
+        campaignContext,
+        activeCampaignId,
+      });
       downloadJson(`ai-marketing-studio-backup-${new Date().toISOString().slice(0, 10)}.json`, payload);
-      setMessage('重要数据备份已导出。');
+      setMessage('数据备份已导出。');
     } catch (error) {
       setMessage(error.message);
     }
@@ -39,84 +57,123 @@ export function DailyReport({ userId }) {
     downloadJson(`daily-ops-report-${report.report_for}.json`, report);
   }
 
+  const canShowFullReport = Boolean(report?.has_activity || showSummary);
+
   return (
-    <section className="page-stack">
+    <section className="page-stack daily-report-page">
       <div className="section-head">
         <div>
-          <p className="eyebrow">每日运营报告</p>
-          <h2>运营日报</h2>
-          <p>每天复盘昨日发现、生成、发布、表现、成本和下一步建议。</p>
+          <p className="eyebrow">运营日报</p>
+          <h2>昨天做了什么，今天要做什么</h2>
+          <p>默认汇总当前 Campaign 的真实执行、发布、异常与下一步，不与数据分析或 AI 复盘重复。</p>
         </div>
         <div className="button-row">
-          <button className="ghost-button" type="button" onClick={refresh} disabled={loading}>刷新报告</button>
-          <button className="ghost-button" type="button" onClick={handleReportDownload} disabled={!report}>下载日报</button>
-          <button className="primary-button" type="button" onClick={handleExport} disabled={!isSupabaseConfigured || !userId}>导出备份</button>
+          <button className="primary-button" type="button" disabled={loading} onClick={() => refresh({ reveal: true })}>生成今日运营日报</button>
+          <button type="button" disabled={loading} onClick={() => refresh({ reveal: canShowFullReport })}>刷新</button>
+          <button type="button" disabled={!report} onClick={handleReportDownload}>下载</button>
+          <button type="button" onClick={() => setShowHistory((value) => !value)}>查看历史</button>
+          <MoreActionsMenu>
+            <button type="button" onClick={handleExport} disabled={!isSupabaseConfigured || !userId}>导出数据备份</button>
+          </MoreActionsMenu>
         </div>
       </div>
 
+      {message && <div className="notice">{message}</div>}
+
       {!isSupabaseConfigured ? (
-        <EmptyState title="等待数据服务配置" description="配置后会生成日报和重要数据备份。" />
-      ) : !report ? (
-        <EmptyState title="暂无报告" description="点击刷新报告生成昨日运营日报。" />
-      ) : (
-        <>
-          <div className="stat-grid compact">
-            <StatCard label="报告日期" value={report.report_for} hint="昨日运营数据" />
-            <StatCard label="发现内容" value={report.discovered_content} hint="viral_contents" />
-            <StatCard label="生成内容" value={report.generated_content} hint="workflow + content" />
-            <StatCard label="发布内容" value={report.published_content} hint="publish_tasks published" />
-            <StatCard label="采集指标" value={report.metrics_collected} hint="content_metrics" />
-            <StatCard label="失败任务" value={report.failed_tasks.length} hint="待处理" />
-          </div>
+        <EmptyState title="等待数据服务配置" description="配置后才能读取执行记录并生成日报。" />
+      ) : report && !report.has_activity && !showSummary ? (
+        <EmptyState
+          title="尚无已执行任务，无法生成完整日报"
+          reason="当前 Campaign 昨日没有内容、工作流、发布或指标回收记录。"
+          prerequisite="可以先生成一份当前执行摘要，或查看指挥中心待办。"
+          action={(
+            <div className="button-row">
+              <button className="primary-button" type="button" onClick={() => setShowSummary(true)}>生成执行摘要</button>
+              <a className="ghost-button" href="#/dashboard">查看指挥中心</a>
+              <a className="ghost-button" href="#/publish">查看发布中心</a>
+            </div>
+          )}
+        />
+      ) : canShowFullReport ? (
+        <DailyReportBody auxiliaryMode={auxiliaryMode} report={report} />
+      ) : null}
 
-          <div className="stat-grid compact">
-            <StatCard label="最佳内容" value={report.best_content} hint="最高表现内容" />
-            <StatCard label="最佳账号" value={report.best_account} hint="最高转化/互动账号类型" />
-            <StatCard label="昨日成本" value={Number(report.cost || 0).toFixed(4)} hint="tool_usage / cost_records" />
-            <StatCard label="本月成本" value={Number(report.month_cost || 0).toFixed(4)} hint="个人AI运营成本" />
-            <StatCard label="单条内容成本" value={Number(report.average_content_cost || 0).toFixed(4)} hint="本月成本 / 内容数" />
-            <StatCard label="效果值" value={Number(report.effect_value || 0).toFixed(2)} hint="转化/收入/业务价值" />
-          </div>
-
-          {message && <div className="notice">{message}</div>}
-
-          <div className="table-card">
-            <table>
-              <thead>
-                <tr>
-                  <th>失败任务</th>
-                  <th>类型</th>
-                  <th>错误详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.failed_tasks.map((task, index) => (
-                  <tr key={`${task.title}-${index}`}>
-                    <td>{task.title}</td>
-                    <td>{task.type}</td>
-                    <td>{task.message}</td>
-                  </tr>
-                ))}
-                {report.failed_tasks.length === 0 && (
-                  <tr>
-                    <td colSpan="3">昨日暂无失败任务</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <article className="form-card">
-            <p className="eyebrow">下一步行动</p>
-            <h3>今日建议</h3>
-            <ul>
-              {report.recommendations.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </article>
-        </>
+      {showHistory && (
+        <section className="table-card">
+          <div className="panel-title"><div><p className="eyebrow">历史日报</p><h3>最近生成记录</h3></div></div>
+          {report
+            ? <article className="record-row"><strong>{report.report_for} 运营日报</strong><span>本次根据实时数据生成，未新建重复日报表。</span></article>
+            : <div className="empty-card-inline">尚无可查看的日报记录。</div>}
+        </section>
       )}
+
+      {!userId && <button type="button" onClick={() => onNavigate('dashboard')}>返回指挥中心</button>}
     </section>
+  );
+}
+
+function DailyReportBody({ auxiliaryMode, report }) {
+  return (
+    <>
+      {!report.has_activity && <div className="notice warning">这是当前状态执行摘要，不是完整日报；昨日没有真实执行记录。</div>}
+      <div className="daily-report-grid">
+        <ReportSection title="昨日完成" rows={report.yesterday_completed} empty="昨日没有完成记录。" />
+        <ReportSection title="今日待办" rows={report.today_actions} empty="当前没有待办。" />
+        <ReportSection
+          title="发布表现"
+          rows={[
+            `已发布：${report.publish_performance.published}`,
+            report.publish_performance.metrics_collected
+              ? `已回收指标：${report.publish_performance.metrics_collected}`
+              : '指标：平台暂不提供或尚未回收',
+            report.publish_performance.best_content ? `最佳内容：${report.publish_performance.best_content}` : '',
+          ]}
+          empty="尚无发布表现。"
+        />
+        <ReportSection title="阻塞异常" rows={report.blockers} empty="当前没有影响业务的异常。" tone={report.blockers.length ? 'warning' : ''} />
+        <ReportSection
+          title="Agent 运行摘要"
+          rows={[
+            `运行 ${report.agent_summary.total} 次`,
+            `完成 ${report.agent_summary.completed} 次`,
+            `失败 ${report.agent_summary.failed} 次`,
+          ]}
+        />
+        <ReportSection
+          title="工作流任务摘要"
+          rows={[
+            `任务 ${report.workflow_summary.total} 个`,
+            `完成 ${report.workflow_summary.completed} 个`,
+            `运行中 ${report.workflow_summary.running} 个`,
+            `失败 ${report.workflow_summary.failed} 个`,
+          ]}
+        />
+      </div>
+
+      <section className="table-card">
+        <div className="panel-title"><div><p className="eyebrow">下一步建议</p><h3>今天优先推进</h3></div></div>
+        <ol className="review-action-list">
+          {(report.recommendations || []).slice(0, 5).map((item) => <li key={item}>{item}</li>)}
+        </ol>
+      </section>
+
+      {auxiliaryMode === 'advanced' && report.failed_tasks.length > 0 && (
+        <details className="table-card">
+          <summary>技术错误详情</summary>
+          {report.failed_tasks.map((task, index) => <p key={`${task.title}-${index}`}>{task.title}：{task.message}</p>)}
+        </details>
+      )}
+    </>
+  );
+}
+
+function ReportSection({ empty = '暂无记录。', rows = [], title, tone = '' }) {
+  const values = (rows || []).filter(Boolean);
+  return (
+    <article className={`table-card daily-report-section ${tone}`}>
+      <h3>{title}</h3>
+      {values.length ? <ul>{values.map((item) => <li key={item}>{item}</li>)}</ul> : <p>{empty}</p>}
+    </article>
   );
 }

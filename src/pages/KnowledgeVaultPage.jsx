@@ -1,113 +1,87 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { StatCard } from '../components/StatCard';
-import { displayText, normalizeList, readRows } from '../services/ops-service';
+import { listKnowledgeHistory } from '../services/knowledge-governance-service';
+import { readRows } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
 import { formatDate } from '../utils/formatters';
+import {
+  findKnowledgeDuplicates,
+  KNOWLEDGE_CATEGORIES,
+  KNOWLEDGE_STATUS_LABELS,
+  normalizeKnowledge,
+  sanitizeAdvancedKnowledgeData,
+  summarizeKnowledge,
+} from '../utils/knowledge-governance';
 
-const TYPE_FILTERS = [
-  { id: 'all', label: '全部' }, { id: 'account', label: '账号' },
-  { id: 'character', label: '角色' }, { id: 'content', label: '内容' },
-  { id: 'strategy', label: '策略' }, { id: 'insight', label: '洞察' },
-  { id: 'campaign', label: '运营活动' }, { id: 'research', label: '研究' },
+const PAGE_SIZE = 24;
+const DETAIL_TABS = [
+  ['conclusion', '结论'],
+  ['evidence', '证据'],
+  ['source', '来源'],
+  ['scope', '适用范围'],
+  ['relations', '关联对象'],
+  ['usage', '使用历史'],
+  ['versions', '版本历史'],
+  ['advanced', '高级数据'],
 ];
 
-function getTypeGroup(item) {
-  const type = String(item.type || item.entry_type || item.category || '').toLowerCase();
-  if (type.includes('account')) return 'account';
-  if (type.includes('character')) return 'character';
-  if (type.includes('strategy')) return 'strategy';
-  if (type.includes('campaign')) return 'campaign';
-  if (type.includes('research')) return 'research';
-  if (type.includes('insight')) return 'insight';
-  return 'content';
+function sourceClass(source) {
+  if (source.id === 'x_native') return 'source-native';
+  if (source.id === 'human_approved') return 'source-human';
+  if (source.id === 'external_inference') return 'source-inference';
+  return 'source-other';
 }
 
-function getContent(item) {
-  const value = item.content || item.summary || item.description || item.insight || item.metadata?.summary || '';
-  return readableValue(value);
+function confidenceLabel(value) {
+  if (value == null) return '待评估';
+  return `${value}%`;
 }
 
-function readableValue(value) {
-  if (value == null) return '';
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-      try { return readableValue(JSON.parse(trimmed)); } catch { /* 保留普通文本 */ }
-    }
-    return value;
+function scopeLabel(item, campaignContext) {
+  const values = [
+    ...item.platforms,
+    ...item.accounts,
+    ...item.campaigns,
+  ].filter(Boolean);
+  if (values.length) return values.slice(0, 3).join(' · ');
+  if (item.campaign_id && String(item.campaign_id) === String(campaignContext?.campaign?.id)) {
+    return campaignContext?.campaign?.name || '当前运营活动';
   }
-  if (Array.isArray(value)) return value.map((entry) => readableValue(entry)).filter(Boolean).join('；');
+  return '通用范围';
+}
+
+function readableEvidence(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => readableEvidence(item)).flat().filter(Boolean);
+  if (typeof value === 'string') return [value];
   if (typeof value === 'object') {
-    return Object.entries(value)
-      .filter(([, entry]) => entry !== null && entry !== undefined && entry !== '')
-      .map(([key, entry]) => `${friendlyKey(key)}：${readableValue(entry)}`)
-      .join('\n');
+    return Object.entries(value).map(([key, entry]) => `${key}：${typeof entry === 'object' ? JSON.stringify(entry) : entry}`);
   }
-  return String(value);
+  return [String(value)];
 }
 
-function friendlyKey(key) {
-  const labels = {
-    hook: '开场钩子', cta: '行动引导', summary: '摘要', keywords: '关键词', tags: '标签',
-    language_style: '语言风格', replicate_strategy: '可复刻策略', next_action: '下一步',
-    source: '来源', importance: '重要性', campaign: '运营活动', account: '关联账号',
-  };
-  return labels[key] || String(key).replaceAll('_', ' ');
-}
-
-function getTags(item) {
-  const source = item.metadata?.tags ?? item.tags ?? item.metadata?.keywords ?? item.keywords ?? [];
-  return normalizeList(source).map((tag) => (typeof tag === 'object' ? tag.name || tag.label : tag)).filter(Boolean);
-}
-
-function getSearchText(item) {
-  return [autoTitle(item), item.type, getContent(item), ...getTags(item), readableValue(item.metadata || {})]
-    .filter(Boolean).join(' ').toLocaleLowerCase();
-}
-
-function autoTitle(item) {
-  const explicit = String(item.title || '').trim();
-  if (explicit && !/^(未命名(?:记录)?|untitled|knowledge|new entry|记录|运营记录|分析记录)$/i.test(explicit)) return explicit;
-  const meta = item.metadata || {};
-  const account = item.account_name || item.source_account || meta.account_name || meta.handle;
-  const topic = item.topic || meta.topic || meta.subject || getTags(item)[0];
-  const groupLabel = TYPE_FILTERS.find((filter) => filter.id === getTypeGroup(item))?.label || '知识';
-  const contentHint = getContent(item).replace(/\s+/g, ' ').trim().slice(0, 36);
-  return [account, topic, groupLabel].filter(Boolean).join(' · ') || (contentHint ? `${groupLabel} · ${contentHint}` : `${groupLabel}知识条目`);
-}
-
-function getSource(item) {
-  const meta = item.metadata || {};
-  return String(item.source || item.source_type || meta.source || meta.origin || '').trim();
-}
-
-function getAccount(item) {
-  const meta = item.metadata || {};
-  return String(item.account_name || item.source_account || meta.account_name || meta.handle || item.account_id || '').trim();
-}
-
-function getBusinessDetails(item) {
-  const meta = item.metadata || {};
-  return [
-    ['来源', item.source || item.source_type || meta.source || meta.origin],
-    ['关联账号', item.account_name || item.source_account || meta.account_name || meta.handle || item.account_id],
-    ['运营活动', item.campaign_name || meta.campaign_name || item.campaign_id],
-    ['类型', item.type || item.entry_type || item.category || getTypeGroup(item)],
-    ['重要性', item.importance || item.priority || meta.importance || meta.priority || meta.score],
-    ['可复刻策略', item.replicate_strategy || meta.replicate_strategy || meta.reusable_strategy || meta.winner_rule],
-    ['下一步', item.next_action || item.recommendation || meta.next_action || meta.recommendation],
-  ].filter(([, value]) => value !== undefined && value !== null && value !== '');
-}
-
-export function KnowledgeVaultPage({ userId, onNavigate }) {
-  const [items, setItems] = useState([]);
+export function KnowledgeVaultPage({
+  activeCampaignId,
+  auxiliaryMode = 'normal',
+  campaignContext,
+  dataScope = 'campaign',
+  userId,
+  onNavigate,
+}) {
+  const [rows, setRows] = useState([]);
   const [query, setQuery] = useState('');
-  const [activeType, setActiveType] = useState('all');
+  const [activeCategory, setActiveCategory] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
-  const [accountFilter, setAccountFilter] = useState('all');
-  const [expandedId, setExpandedId] = useState(null);
+  const [showTechnical, setShowTechnical] = useState(false);
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState(null);
+  const [detailTab, setDetailTab] = useState('conclusion');
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -116,95 +90,321 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
     setLoading(true);
     setError('');
     readRows('knowledge', { limit: 500 })
-      .then((rows) => { if (!cancelled) setItems(rows); })
-      .catch((nextError) => { if (!cancelled) setError(nextError.message || '知识记录读取失败'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .then((nextRows) => {
+        if (!cancelled) setRows(nextRows);
+      })
+      .catch((nextError) => {
+        if (!cancelled) setError(nextError.message || '知识记录读取失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => { cancelled = true; };
   }, [userId]);
 
-  const counts = useMemo(() => items.reduce((result, item) => {
-    const group = getTypeGroup(item);
-    result[group] = (result[group] || 0) + 1;
-    return result;
-  }, {}), [items]);
+  const normalizedAll = useMemo(() => rows.map(normalizeKnowledge), [rows]);
+  const scopedRows = useMemo(() => filterRecordsForAuxiliaryScope(rows, {
+    scope: dataScope,
+    campaignContext,
+    activeCampaignId,
+  }), [activeCampaignId, campaignContext, dataScope, rows]);
+  const scopedItems = useMemo(() => scopedRows.map(normalizeKnowledge), [scopedRows]);
+  const summary = useMemo(() => summarizeKnowledge(normalizedAll), [normalizedAll]);
+  const duplicateMap = useMemo(() => findKnowledgeDuplicates(normalizedAll), [normalizedAll]);
 
-  const sourceOptions = useMemo(() => [...new Set(items.map(getSource).filter(Boolean))].sort(), [items]);
-  const accountOptions = useMemo(() => [...new Set(items.map(getAccount).filter(Boolean))].sort(), [items]);
+  const mainItems = useMemo(() => scopedItems.filter((item) => (
+    !item.excludedFromMain
+    || (auxiliaryMode === 'advanced' && showTechnical)
+    || dataScope === 'test'
+  )), [auxiliaryMode, dataScope, scopedItems, showTechnical]);
+
+  const categoryCounts = useMemo(() => mainItems.reduce((result, item) => {
+    result[item.category] = (result[item.category] || 0) + 1;
+    return result;
+  }, {}), [mainItems]);
+
+  const sourceOptions = useMemo(() => (
+    [...new Map(mainItems.map((item) => [item.source.id, item.source])).values()]
+  ), [mainItems]);
 
   const filteredItems = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    return items.filter((item) => (
-      (activeType === 'all' || getTypeGroup(item) === activeType)
-      && (sourceFilter === 'all' || getSource(item) === sourceFilter)
-      && (accountFilter === 'all' || getAccount(item) === accountFilter)
-      && (!needle || getSearchText(item).includes(needle))
-    ));
-  }, [accountFilter, activeType, items, query, sourceFilter]);
+    return mainItems
+      .filter((item) => (
+        (activeCategory === 'all' || item.category === activeCategory)
+        && (statusFilter === 'all' || item.status === statusFilter)
+        && (sourceFilter === 'all' || item.source.id === sourceFilter)
+        && (!needle || [
+          item.title,
+          item.conclusion,
+          item.source.label,
+          ...item.tags,
+        ].join(' ').toLocaleLowerCase().includes(needle))
+      ))
+      .sort((a, b) => {
+        const aCurrent = String(a.campaign_id || '') === String(activeCampaignId || '');
+        const bCurrent = String(b.campaign_id || '') === String(activeCampaignId || '');
+        if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+        return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+      });
+  }, [activeCampaignId, activeCategory, mainItems, query, sourceFilter, statusFilter]);
 
-  if (!userId) return <EmptyState title="请先登录" description="登录后才能读取知识库与智能体运营记忆。" />;
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
+  const visibleItems = filteredItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeCategory, dataScope, query, sourceFilter, statusFilter]);
+
+  useEffect(() => {
+    if (!selected?.id || !userId) {
+      setHistory([]);
+      return;
+    }
+    listKnowledgeHistory(userId, selected.id).then(setHistory).catch((nextError) => setMessage(nextError.message));
+  }, [selected?.id, userId]);
+
+  function openDetail(item, tab = 'conclusion') {
+    setSelected(item);
+    setDetailTab(tab);
+  }
+
+  function explainProtectedAction(action) {
+    setMessage(`${action}需要通过可信执行网关写入。目前数据库仅开放知识读取权限，因此没有绕过 RLS 直接修改。`);
+  }
+
+  function openApplicationTarget(target) {
+    setMessage('已为你保留知识来源和当前 Campaign；正式应用前仍需在目标页面人工确认。');
+    onNavigate(target === 'strategy' ? 'campaigns' : 'workspace');
+  }
+
+  if (!userId) {
+    return <EmptyState title="请先登录" description="登录后才能读取知识库。" />;
+  }
 
   return (
-    <section className="page-stack knowledge-vault-page">
-      <div className="hero-panel knowledge-vault-hero">
+    <section className="page-stack knowledge-governance-page">
+      <div className="section-head">
         <div>
-          <p className="eyebrow">知识库与智能体记忆</p>
-          <h2>把账号、内容、策略与研究结果变成智能体可复用的知识</h2>
-          <p>这里显示业务摘要、来源、关联账号、重要性、可复刻策略和下一步，不再把原始 JSON 直接摊给你。</p>
+          <p className="eyebrow">知识库语义治理</p>
+          <h2>只保留能够复用的业务结论</h2>
+          <p>素材、任务、运行日志和原始 API 响应仍保留在数据库，但默认回到各自业务页面，不再混入知识主列表。</p>
         </div>
         <div className="button-row">
-          <button className="ghost-button" type="button" onClick={() => onNavigate('accounts')}>打开账号矩阵</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('analytics')}>查看分析优化</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('analytics')}>从 AI 复盘沉淀知识</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('intelligence')}>查看内容情报</button>
         </div>
       </div>
 
       <div className="stat-grid compact">
-        <StatCard label="知识记录" value={loading ? '-' : items.length} hint="从数据服务实时读取" />
-        <StatCard label="当前结果" value={loading ? '-' : filteredItems.length} hint="搜索与分类筛选结果" />
-        <StatCard label="知识类型" value={loading ? '-' : Object.keys(counts).length} hint="账号、内容、策略、研究等" />
-        <StatCard label="最新写入" value={loading || !items[0] ? '-' : formatDate(items[0].created_at || items[0].updated_at)} hint="按数据返回顺序" />
+        <StatCard label="已验证知识" value={loading ? '—' : summary.verified} hint="有明确验证或人工批准" />
+        <StatCard label="待验证假设" value={loading ? '—' : summary.pending} hint="初步信号与待验证结论" />
+        <StatCard label="即将过期" value={loading ? '—' : summary.expiring} hint="已过期或 30 天内过期" />
+        <StatCard label="测试记录" value={loading ? '—' : summary.test} hint="默认隐藏，可切换测试数据查看" />
       </div>
 
-      <div className="knowledge-toolbar">
-        <label className="knowledge-search"><span aria-hidden="true">⌕</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、开场钩子、关键词、策略或研究报告…" /></label>
-        <div className="knowledge-selectors">
-          <label><span>来源</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">全部来源</option>{sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
-          <label><span>账号</span><select value={accountFilter} onChange={(event) => setAccountFilter(event.target.value)}><option value="all">全部账号</option>{accountOptions.map((account) => <option key={account} value={account}>{account}</option>)}</select></label>
-        </div>
-        <div className="knowledge-type-filters" aria-label="知识类型筛选">
-          {TYPE_FILTERS.map((filter) => {
-            const count = filter.id === 'all' ? items.length : (counts[filter.id] || 0);
-            return <button className={activeType === filter.id ? 'active' : ''} key={filter.id} type="button" onClick={() => setActiveType(filter.id)}>{filter.label}<span>{count}</span></button>;
-          })}
-        </div>
+      <div className="knowledge-governance-toolbar">
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索结论、来源、标签或适用范围"
+        />
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <option value="all">全部知识状态</option>
+          {Object.entries(KNOWLEDGE_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+          <option value="all">全部来源</option>
+          {sourceOptions.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
+        </select>
+        {auxiliaryMode === 'advanced' && (
+          <label className="technical-record-toggle">
+            <input type="checkbox" checked={showTechnical} onChange={(event) => setShowTechnical(event.target.checked)} />
+            显示当前范围的技术归档
+          </label>
+        )}
       </div>
 
+      {message && <div className="notice">{message}</div>}
       {error && <div className="notice error">{error}</div>}
 
-      {!loading && filteredItems.length > 0 ? (
-        <div className="knowledge-grid">
-          {filteredItems.map((item, index) => {
-            const itemId = item.id || `${item.type || 'knowledge'}-${index}`;
-            const content = getContent(item);
-            const tags = getTags(item);
-            const details = getBusinessDetails(item);
-            const expanded = expandedId === itemId;
-            const preview = content.length > 260 ? `${content.slice(0, 260)}…` : content;
+      <div className="knowledge-governance-layout">
+        <aside className="knowledge-category-sidebar">
+          <button className={activeCategory === 'all' ? 'active' : ''} type="button" onClick={() => setActiveCategory('all')}>
+            <span>全部知识</span><strong>{mainItems.length}</strong>
+          </button>
+          {KNOWLEDGE_CATEGORIES.map((category) => (
+            <button
+              className={activeCategory === category.id ? 'active' : ''}
+              key={category.id}
+              type="button"
+              onClick={() => setActiveCategory(category.id)}
+            >
+              <span>{category.label}</span><strong>{categoryCounts[category.id] || 0}</strong>
+            </button>
+          ))}
+          <div className="knowledge-governance-note">
+            <strong>当前主列表已排除</strong>
+            <span>素材与文件：{normalizedAll.filter((item) => item.exclusionReason === '技术或素材记录').length}</span>
+            <span>测试记录：{summary.test}</span>
+            <small>历史数据没有被删除。</small>
+          </div>
+        </aside>
 
+        <main className="knowledge-semantic-list">
+          <div className="knowledge-list-summary">
+            <div>
+              <strong>{filteredItems.length} 条可复用知识</strong>
+              <span>每页最多 {PAGE_SIZE} 条，当前 Campaign 相关内容优先</span>
+            </div>
+            {duplicateMap.size > 0 && <span>{duplicateMap.size} 条存在疑似重复候选</span>}
+          </div>
+
+          {!loading && visibleItems.length ? visibleItems.map((item) => {
+            const category = KNOWLEDGE_CATEGORIES.find((entry) => entry.id === item.category);
+            const duplicates = duplicateMap.get(item.id) || [];
             return (
-              <article className={`knowledge-card${expanded ? ' expanded' : ''}`} key={itemId}>
-                <div className="knowledge-card-topline"><span className={`knowledge-type-badge type-${getTypeGroup(item)}`}>{item.type || getTypeGroup(item)}</span><time>{formatDate(item.created_at || item.updated_at)}</time></div>
-                <h3>{autoTitle(item)}</h3>
-                <p className="knowledge-content">{expanded ? content : preview || '这条记录暂时没有正文摘要。'}</p>
-                <div className="knowledge-business-details">
-                  {details.map(([label, value]) => <div key={label}><span>{label}</span><strong>{displayText(value)}</strong></div>)}
+              <article className="knowledge-semantic-card" key={item.id}>
+                <button className="card-open" type="button" onClick={() => openDetail(item)}>查看详情</button>
+                <div className="card-meta">
+                  <span>{category?.label || '内容知识'}</span>
+                  <span className={`knowledge-source-badge ${sourceClass(item.source)}`}>{item.source.label}</span>
+                  <span className={`knowledge-status-badge status-${item.status}`}>{KNOWLEDGE_STATUS_LABELS[item.status]}</span>
                 </div>
-                {tags.length > 0 && <div className="knowledge-tags">{tags.slice(0, expanded ? tags.length : 8).map((tag) => <span key={String(tag)}>#{tag}</span>)}</div>}
-                {(content.length > 260 || details.length > 4) && <button className="knowledge-expand" type="button" onClick={() => setExpandedId(expanded ? null : itemId)}>{expanded ? '收起详情' : '展开详情'}</button>}
+                <h3>{item.title}</h3>
+                <p>{item.conclusion || '这条知识尚未形成可读结论。'}</p>
+                <div className="knowledge-card-footer">
+                  <span>置信度：{confidenceLabel(item.confidence)}</span>
+                  <span>适用范围：{scopeLabel(item, campaignContext)}</span>
+                  <span>更新：{formatDate(item.updatedAt)}</span>
+                  {duplicates.length > 0 && <button type="button" onClick={() => openDetail(item, 'relations')}>疑似重复 {duplicates.length}</button>}
+                </div>
               </article>
             );
-          })}
-        </div>
-      ) : !loading && !error ? <EmptyState title="没有匹配的知识" description="尝试更换关键词或类型；MCP 新写入的知识也会在这里显示。" /> : null}
+          }) : !loading && !error ? (
+            <EmptyState
+              title="当前范围没有可复用知识"
+              reason="记录可能属于素材、生成任务、测试数据，或还未形成可复用结论。"
+              prerequisite="先完成当前 Campaign 的内容复盘，或切换到全部历史范围。"
+              actionHref="#/analytics"
+              actionLabel="前往 AI 复盘"
+            />
+          ) : null}
+
+          {pageCount > 1 && (
+            <div className="knowledge-pagination">
+              <button type="button" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>上一页</button>
+              <span>第 {page} / {pageCount} 页</span>
+              <button type="button" disabled={page >= pageCount} onClick={() => setPage((current) => current + 1)}>下一页</button>
+            </div>
+          )}
+        </main>
+      </div>
+
+      {selected && (
+        <aside className="detail-panel knowledge-detail-drawer">
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">知识详情</p>
+              <h2>{selected.title}</h2>
+            </div>
+            <button className="ghost-button" type="button" onClick={() => setSelected(null)}>关闭</button>
+          </div>
+          <div className="capability-tabs detail-tabs">
+            {DETAIL_TABS.map(([value, label]) => (
+              <button
+                className={detailTab === value ? 'active' : ''}
+                key={value}
+                type="button"
+                onClick={() => setDetailTab(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {detailTab === 'conclusion' && (
+            <div className="knowledge-conclusion-panel">
+              <p>{selected.conclusion}</p>
+              <dl className="business-detail-list">
+                <div><dt>类型</dt><dd>{KNOWLEDGE_CATEGORIES.find((entry) => entry.id === selected.category)?.label}</dd></div>
+                <div><dt>状态</dt><dd>{KNOWLEDGE_STATUS_LABELS[selected.status]}</dd></div>
+                <div><dt>置信度</dt><dd>{confidenceLabel(selected.confidence)}</dd></div>
+                <div><dt>样本数</dt><dd>{selected.sampleCount || '未记录'}</dd></div>
+                <div><dt>最后验证</dt><dd>{selected.lastValidatedAt ? formatDate(selected.lastValidatedAt) : '尚未验证'}</dd></div>
+                <div><dt>最后使用</dt><dd>{selected.lastUsedAt ? formatDate(selected.lastUsedAt) : '尚未应用'}</dd></div>
+              </dl>
+            </div>
+          )}
+          {detailTab === 'evidence' && (
+            <div className="knowledge-evidence-list">
+              {readableEvidence(selected.evidence).length
+                ? readableEvidence(selected.evidence).map((evidence, index) => <p key={`${selected.id}-evidence-${index}`}>{evidence}</p>)
+                : <p>当前条目没有结构化证据，请在标记“已验证”前补充来源和样本。</p>}
+            </div>
+          )}
+          {detailTab === 'source' && (
+            <dl className="business-detail-list">
+              <div><dt>来源</dt><dd>{selected.source.label}</dd></div>
+              <div><dt>数据类型</dt><dd>{selected.source.evidenceType}</dd></div>
+              <div><dt>直接证据</dt><dd>{selected.source.direct ? '是' : '否，属于推断或待确认来源'}</dd></div>
+              <div><dt>来源引用</dt><dd>{selected.sourceRef || '未记录'}</dd></div>
+            </dl>
+          )}
+          {detailTab === 'scope' && (
+            <dl className="business-detail-list">
+              <div><dt>适用平台</dt><dd>{selected.platforms.join('、') || '通用'}</dd></div>
+              <div><dt>适用账号</dt><dd>{selected.accounts.join('、') || campaignContext?.primaryAccount?.account_name || '通用'}</dd></div>
+              <div><dt>适用 Campaign</dt><dd>{selected.campaigns.join('、') || (selected.campaign_id ? campaignContext?.campaign?.name : '通用')}</dd></div>
+            </dl>
+          )}
+          {detailTab === 'relations' && (
+            <div className="knowledge-relation-panel">
+              <pre>{JSON.stringify(selected.relatedObjects || {}, null, 2)}</pre>
+              {(duplicateMap.get(selected.id) || []).length ? (
+                <>
+                  <strong>检测到 {(duplicateMap.get(selected.id) || []).length} 条疑似重复知识</strong>
+                  <p>系统只提示合并，不会自动删除或覆盖任何历史记录。</p>
+                  <button type="button" onClick={() => setMessage('重复候选已标记。请人工比较证据后再决定是否合并；本次未删除记录。')}>标记为待人工合并</button>
+                </>
+              ) : <p>没有检测到同标题、同来源引用、同内容哈希或同结论来源的重复项。</p>}
+            </div>
+          )}
+          {detailTab === 'usage' && (
+            <div className="knowledge-history-list">
+              {history.filter((entry) => /suggest|apply|use/i.test(entry.action)).length
+                ? history.filter((entry) => /suggest|apply|use/i.test(entry.action)).map((entry) => (
+                  <article key={entry.id}><strong>{entry.action}</strong><span>{formatDate(entry.created_at)}</span></article>
+                ))
+                : <p>这条知识尚未应用到策略或内容。</p>}
+            </div>
+          )}
+          {detailTab === 'versions' && (
+            <div className="knowledge-history-list">
+              {history.length ? history.map((entry) => (
+                <article key={entry.id}><strong>{entry.action}</strong><span>{formatDate(entry.created_at)}</span></article>
+              )) : <p>当前只有数据库原始版本，尚无后续变更记录。</p>}
+            </div>
+          )}
+          {detailTab === 'advanced' && (
+            auxiliaryMode === 'advanced'
+              ? <pre className="knowledge-advanced-json">{JSON.stringify(sanitizeAdvancedKnowledgeData(selected.raw), null, 2)}</pre>
+              : <p className="notice">切换页面顶部“高级模式”后可查看已脱敏的原始字段。</p>
+          )}
+
+          <div className="knowledge-detail-actions">
+            <button className="primary-button" type="button" onClick={() => openApplicationTarget('strategy')}>应用到当前策略</button>
+            <button type="button" onClick={() => openApplicationTarget('content')}>应用到下一条内容</button>
+            <button type="button" onClick={() => explainProtectedAction('标记已验证')}>标记已验证</button>
+            <button type="button" onClick={() => explainProtectedAction('标记待验证')}>标记待验证</button>
+            <button type="button" onClick={() => explainProtectedAction('标记过期')}>标记过期</button>
+            <button type="button" onClick={() => openDetail(selected, 'relations')}>合并重复知识</button>
+            <button type="button" onClick={() => setDetailTab('source')}>查看来源</button>
+          </div>
+          <p className="knowledge-application-safety">“应用”只创建待审核建议，不会覆盖人工批准策略或直接修改正式内容。</p>
+        </aside>
+      )}
     </section>
   );
 }

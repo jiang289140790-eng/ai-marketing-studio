@@ -6,54 +6,53 @@ export const navigationSections = [
   {
     label: 'AI 运营',
     items: [
-      { id: 'campaigns', label: '运营活动与策略', icon: '◆' },
+      { id: 'campaigns', label: '运营活动', icon: '◆' },
+      { id: 'plan', label: '内容计划', icon: '▤' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
       { id: 'intelligence', label: '内容情报', icon: '⌕' },
-      { id: 'publish', label: '发布队列', icon: '↗' },
-      { id: 'aiworks', label: 'AI 成果', icon: '✦' },
-    ],
-  },
-  {
-    label: '智能分析',
-    items: [
-      { id: 'analytics', label: '分析优化', icon: '▥' },
-      { id: 'dailyreport', label: '运营日报', icon: '▦' },
-      { id: 'knowledge', label: '知识库', icon: '🧠' },
+      { id: 'publish', label: '发布中心', icon: '↗' },
     ],
   },
   {
     label: '资产中心',
     items: [
       { id: 'accounts', label: '账号矩阵', icon: '●' },
-      { id: 'assets', label: '素材库', icon: '■' },
       { id: 'characters', label: '角色库', icon: '✦' },
+      { id: 'assets', label: '素材库', icon: '■' },
+      { id: 'generation', label: '生成任务', icon: '◫' },
+      { id: 'prompts', label: '提示词库', icon: '✎' },
+    ],
+  },
+  {
+    label: '智能分析',
+    items: [
+      { id: 'data-analytics', label: '数据分析', icon: '▥' },
+      { id: 'analytics', label: 'AI 复盘', icon: '◇' },
+      { id: 'dailyreport', label: '运营日报', icon: '▦' },
+      { id: 'knowledge', label: '知识库', icon: '🧠' },
     ],
   },
   {
     label: '系统',
     items: [
       { id: 'connections', label: '平台连接', icon: '🔗' },
+      { id: 'workflows', label: '工作流与模型', icon: '⚙' },
       { id: 'health', label: '系统状态', icon: '▣' },
-      { id: 'workflows', label: '工作流与模型配置', icon: '⚙' },
     ],
   },
 ];
-
-navigationSections[3].items.push({ id: 'prompts', label: '提示词库', icon: '✎' });
 
 export const navigationItems = navigationSections.flatMap((section) => section.items);
 
 export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];
 
 export const promptCategories = [
-  { value: 'general', label: '通用' },
-  { value: 'viral_analysis', label: '爆款分析' },
   { value: 'caption', label: '文案' },
-  { value: 'image', label: '图片生成' },
-  { value: 'video', label: '视频脚本' },
-  { value: 'character', label: '角色 / LoRA' },
-  { value: 'account_persona', label: '账号画像' },
+  { value: 'image', label: '图片' },
+  { value: 'video', label: '视频' },
+  { value: 'viral_analysis', label: '分析' },
   { value: 'workflow', label: '工作流' },
+  { value: 'system', label: '系统' },
 ];
 
 export const platformAdapterIds = ['telegram', 'x', 'youtube', 'instagram', 'tiktok', 'discord'];

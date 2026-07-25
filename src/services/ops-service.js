@@ -5,7 +5,10 @@ const TABLES = {
   accounts: 'social_accounts',
   accountProfiles: 'account_profiles',
   accountReports: 'account_intelligence_reports',
+  viralContents: 'viral_contents',
+  contentAnalysis: 'content_analysis',
   platformConnections: 'platform_connections',
+  platformAdapters: 'platform_adapters',
   campaigns: 'campaigns',
   strategies: 'strategy_plans',
   contentPackages: 'content_packages',
@@ -29,7 +32,10 @@ export const ORDER_FIELDS = {
   accounts: 'created_at',
   accountProfiles: 'updated_at',
   accountReports: 'created_at',
+  viralContents: 'created_at',
+  contentAnalysis: 'created_at',
   platformConnections: 'last_sync',
+  platformAdapters: 'updated_at',
   campaigns: 'created_at',
   strategies: 'created_at',
   contentPackages: 'created_at',
@@ -216,15 +222,48 @@ export async function loadPublishQueueData() {
 }
 
 export async function loadPlatformConnectionData() {
-  return loadKeys(['platformConnections', 'accounts']);
+  return loadKeys(['platformConnections', 'platformAdapters', 'accounts', 'publishTasks']);
+}
+
+export async function loadAccountMatrixData() {
+  return loadKeys([
+    'accountReports',
+    'viralContents',
+    'contentAnalysis',
+    'characters',
+    'campaigns',
+    'publishTasks',
+  ]);
 }
 
 export async function loadSystemStatusData() {
-  return loadKeys(['agentRuns', 'workflowRuns', 'publishTasks', 'publishMetrics', 'contentMetrics']);
+  return loadKeys([
+    'agentRuns',
+    'workflowRuns',
+    'publishTasks',
+    'publishMetrics',
+    'contentMetrics',
+    'comfyWorkflows',
+    'legacyAssets',
+  ]);
 }
 
 export async function loadWorkflowConfigData() {
-  return loadKeys(['comfyWorkflows', 'characters', 'assets', 'legacyAssets', 'workflowRuns']);
+  const data = await loadKeys(['comfyWorkflows', 'characters', 'accounts', 'assets', 'legacyAssets', 'workflowRuns', 'contentPackages', 'campaigns']);
+  data.legacyAssets = await hydrateWorkspaceAssetUrls(data.legacyAssets || []);
+  return data;
+}
+
+export async function loadAssetLibraryData() {
+  const data = await loadKeys(['assets', 'legacyAssets', 'characters', 'contentPackages', 'campaigns', 'publishTasks']);
+  data.legacyAssets = await hydrateWorkspaceAssetUrls(data.legacyAssets || []);
+  return data;
+}
+
+export async function loadGenerationTaskData() {
+  const data = await loadKeys(['workflowRuns', 'characters', 'comfyWorkflows', 'assets', 'legacyAssets', 'contentPackages', 'campaigns']);
+  data.legacyAssets = await hydrateWorkspaceAssetUrls(data.legacyAssets || []);
+  return data;
 }
 
 export async function saveContentProductionBinding(item, binding) {
@@ -459,7 +498,10 @@ export function getContentPackages(data) {
 }
 
 export function getAssets(data) {
-  return [...(data.assets || []), ...(data.legacyAssets || [])].map((item) => ({
+  return [
+    ...(data.assets || []).map((item) => ({ ...item, __sourceKey: 'assets' })),
+    ...(data.legacyAssets || []).map((item) => ({ ...item, __sourceKey: 'legacyAssets' })),
+  ].map((item) => ({
     id: item.id,
     name: item.name || item.title || item.asset_type || item.type || '未命名素材',
     type: item.type || item.asset_type || 'asset',
@@ -482,6 +524,7 @@ export function getAssets(data) {
     approvedForPublishing: Boolean(item.approved_for_publishing),
     createdAt: item.created_at,
     updatedAt: item.updated_at || item.created_at,
+    sourceKey: item.__sourceKey,
     raw: item,
   }));
 }

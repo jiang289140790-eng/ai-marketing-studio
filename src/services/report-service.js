@@ -11,8 +11,10 @@ import {
 import { listCostRecords, listNotifications, listToolUsage, summarizeCosts, summarizeToolUsage } from './stability-service';
 import { getPublishHistory } from './publish-service';
 import { listWorkflowRuns } from './workflow-service';
+import { listAgentRuns } from './agent-service';
+import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
 
-export async function buildDataExport(userId) {
+export async function buildDataExport(userId, scopeOptions = {}) {
   const [contents, assets, workflows, campaigns, metrics, strategies, toolUsage] = await Promise.all([
     listContent(userId),
     listAssets(userId),
@@ -25,20 +27,22 @@ export async function buildDataExport(userId) {
 
   return {
     exported_at: new Date().toISOString(),
-    contents,
-    assets,
-    workflows,
-    campaigns,
-    metrics,
-    strategies,
-    tool_usage: toolUsage,
+    data_scope: scopeOptions.scope || 'campaign',
+    contents: filterRecordsForAuxiliaryScope(contents, scopeOptions),
+    assets: filterRecordsForAuxiliaryScope(assets, scopeOptions),
+    workflows: filterRecordsForAuxiliaryScope(workflows, scopeOptions),
+    campaigns: filterRecordsForAuxiliaryScope(campaigns, scopeOptions),
+    metrics: filterRecordsForAuxiliaryScope(metrics, scopeOptions),
+    strategies: filterRecordsForAuxiliaryScope(strategies, scopeOptions),
+    tool_usage: filterRecordsForAuxiliaryScope(toolUsage, scopeOptions),
   };
 }
 
-export async function buildDailyReport(userId) {
-  const [contents, workflows, viralContents, publishTasks, campaigns, metrics, costs, toolUsage, notifications, strategies] = await Promise.all([
+export async function buildDailyReport(userId, scopeOptions = {}) {
+  const rawRows = await Promise.all([
     listContent(userId),
     listWorkflowRuns(userId),
+    listAgentRuns(userId),
     listViralContents(userId),
     getPublishHistory(userId),
     listCampaignLinks(userId),
@@ -48,10 +52,13 @@ export async function buildDailyReport(userId) {
     listNotifications(userId),
     listContentStrategies(userId),
   ]);
+  const [contents, workflows, agentRuns, viralContents, publishTasks, campaigns, metrics, costs, toolUsage, notifications, strategies] = rawRows
+    .map((rows) => filterRecordsForAuxiliaryScope(rows, scopeOptions));
 
   const yesterday = getRelativeDate(-1);
   const today = getRelativeDate(0);
   const yesterdayWorkflows = byDate(workflows, 'created_at', yesterday);
+  const yesterdayAgentRuns = byDate(agentRuns, 'created_at', yesterday);
   const yesterdayContents = byDate(contents, 'created_at', yesterday);
   const yesterdayDiscovered = byDate(viralContents, 'created_at', yesterday);
   const yesterdayPublished = publishTasks.filter((item) => String(item.published_at || item.created_at || '').slice(0, 10) === yesterday && item.status === 'published');
@@ -69,6 +76,27 @@ export async function buildDailyReport(userId) {
   const yesterdayToolCost = toolUsage
     .filter((item) => String(item.created_at || '').slice(0, 10) === yesterday)
     .reduce((sum, item) => sum + Number(item.total_cost || 0), 0);
+  const campaignContext = scopeOptions.campaignContext || {};
+  const blockers = [
+    ...(campaignContext.blockingItems || []).map((item) => item.label || item.message || item.code),
+    ...yesterdayFailures.map((item) => item.title || item.message),
+  ].filter(Boolean);
+  const todayActions = buildTodayActions(campaignContext, blockers);
+  const yesterdayCompleted = [
+    yesterdayContents.length ? `完成 ${yesterdayContents.length} 条内容处理` : '',
+    yesterdayWorkflows.length ? `完成 ${yesterdayWorkflows.length} 个工作流任务` : '',
+    yesterdayPublished.length ? `发布 ${yesterdayPublished.length} 条内容` : '',
+    yesterdayMetrics.length ? `回收 ${yesterdayMetrics.length} 条指标` : '',
+  ].filter(Boolean);
+  const hasActivity = Boolean(
+    yesterdayContents.length
+    || yesterdayWorkflows.length
+    || yesterdayAgentRuns.length
+    || yesterdayDiscovered.length
+    || yesterdayPublished.length
+    || yesterdayMetrics.length
+    || yesterdayFailures.length,
+  );
 
   return {
     date: today,
@@ -77,6 +105,27 @@ export async function buildDailyReport(userId) {
     generated_content: yesterdayWorkflows.length + yesterdayContents.filter((item) => ['draft', 'generating', 'review'].includes(item.pipeline_stage || item.status)).length,
     published_content: yesterdayPublished.length,
     metrics_collected: yesterdayMetrics.length,
+    has_activity: hasActivity,
+    yesterday_completed: yesterdayCompleted,
+    today_actions: todayActions,
+    publish_performance: {
+      published: yesterdayPublished.length,
+      metrics_collected: yesterdayMetrics.length,
+      best_content: performance.topContentTitle || null,
+      unavailable_reason: yesterdayMetrics.length ? null : '尚无真实回传指标',
+    },
+    blockers,
+    agent_summary: {
+      total: yesterdayAgentRuns.length,
+      completed: yesterdayAgentRuns.filter((item) => ['completed', 'success'].includes(String(item.status).toLowerCase())).length,
+      failed: yesterdayAgentRuns.filter((item) => ['failed', 'error'].includes(String(item.status).toLowerCase())).length,
+    },
+    workflow_summary: {
+      total: yesterdayWorkflows.length,
+      completed: yesterdayWorkflows.filter((item) => ['completed', 'success'].includes(String(item.status).toLowerCase())).length,
+      failed: yesterdayWorkflows.filter((item) => ['failed', 'error'].includes(String(item.status).toLowerCase())).length,
+      running: yesterdayWorkflows.filter((item) => ['running', 'queued', 'pending'].includes(String(item.status).toLowerCase())).length,
+    },
     best_content: performance.topContentTitle,
     best_account: performance.topAccount,
     cost: yesterdayToolCost || costSummary.todayCost,
@@ -88,12 +137,13 @@ export async function buildDailyReport(userId) {
       type: item.type,
       message: item.message,
     })),
-    recommendations: latestStrategy?.recommendations || [
-      '把昨日互动最高的内容拆成 Hook、结构、视觉和 CTA，沉淀为 Prompt 模板。',
-      '将适合度高的爆款内容转为 Content Idea，交给内容生成 Agent 做 3 个变体。',
-      '优先处理 System Health 中的失败发布、失败采集和失败 Workflow。',
-      '记录每次 GPT、图片、视频、API 调用成本，观察单条内容成本是否下降。',
-    ],
+    recommendations: hasActivity
+      ? latestStrategy?.recommendations || [
+        '优先处理昨日发布、采集或工作流中的真实异常。',
+        '将有证据支持的表现信号带入 AI 复盘。',
+        '把经人工确认的结论沉淀到知识库。',
+      ]
+      : todayActions,
   };
 }
 
@@ -115,4 +165,16 @@ function getRelativeDate(offset) {
   const date = new Date();
   date.setDate(date.getDate() + offset);
   return date.toISOString().slice(0, 10);
+}
+
+function buildTodayActions(context, blockers) {
+  const progress = context?.progress || {};
+  const actions = [];
+  if (blockers.length) actions.push(`优先解除阻塞：${blockers[0]}`);
+  if (!context?.currentStrategy) actions.push('生成并批准当前 Campaign 策略');
+  else if ((context?.dailyPlan || []).length < 7) actions.push('生成并批准 7 天计划');
+  else if (!(context?.contentPackages || []).length) actions.push('创建并开始 Day 1 内容包');
+  else if (!(context?.publishTasks || []).length) actions.push('完成 Day 1 终审并创建安全预演发布任务');
+  else if (!progress?.metrics) actions.push('回收 Day 1 真实发布指标');
+  return actions.length ? actions : ['检查当前 Campaign 待办并推进下一步'];
 }

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '../contexts/auth-context';
 import { isSupabaseConfigured } from '../services/supabase-client';
 
-export function Header({ title }) {
+export function Header({ description, title }) {
   const { authUrl, loading, loginWithGitHub, logout, profile, user } = useAuth();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState('');
@@ -30,6 +30,7 @@ export function Header({ title }) {
       <div>
         <p className="eyebrow">个人 AI 运营工作台</p>
         <h1>{title}</h1>
+        {description && <p className="header-description">{description}</p>}
       </div>
 
       <div className="header-actions">

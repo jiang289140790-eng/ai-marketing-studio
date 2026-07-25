@@ -1,66 +1,116 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CharacterForm } from '../components/CharacterForm';
 import { EmptyState } from '../components/EmptyState';
+import { MoreActionsMenu } from '../components/MoreActionsMenu';
+import { StatusBadge } from '../components/StatusBadge';
 import { useConfirmation } from '../contexts/confirmation-context';
-import { createCharacter, deleteCharacter, listCharacters, updateCharacter } from '../services/character-service';
+import { createCharacter, deleteCharacter, updateCharacter } from '../services/character-service';
+import { getAssets, loadWorkflowConfigData } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
+import {
+  characterStatusClass,
+  evaluateCharacterReadiness,
+} from '../utils/character-generation-readiness';
 import { formatDate } from '../utils/formatters';
-import { hasLoraConfig, loraDisplayName, parseLoraConfig } from '../utils/lora';
 
-export function CharacterLibrary({ userId, detailId, onNavigate }) {
+const DETAIL_TABS = [
+  ['profile', '角色设定'],
+  ['visual', '视觉身份'],
+  ['lora', 'LoRA 与模型'],
+  ['references', '参考图'],
+  ['accounts', '绑定账号'],
+  ['workflows', '工作流'],
+  ['tests', '生成测试'],
+  ['history', '版本历史'],
+];
+
+export function CharacterLibrary({
+  activeCampaignId,
+  auxiliaryMode = 'normal',
+  campaignContext,
+  dataScope = 'campaign',
+  userId,
+  detailId,
+  onNavigate,
+}) {
   const { confirm } = useConfirmation();
-  const [characters, setCharacters] = useState([]);
-  const [filters, setFilters] = useState({ search: '', tag: '' });
-  const [isCreating, setIsCreating] = useState(false);
+  const [data, setData] = useState({ characters: [], accounts: [], comfyWorkflows: [], workflowRuns: [], assets: [], legacyAssets: [] });
+  const [search, setSearch] = useState('');
+  const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(detailId || '');
+  const [detailTab, setDetailTab] = useState('profile');
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 
   const refresh = useCallback(async () => {
-    if (!userId || !isSupabaseConfigured) return;
-    setCharacters(await listCharacters(userId, filters));
-  }, [userId, filters]);
-
-  useEffect(() => {
-    refresh().catch((error) => setMessage(error.message));
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!detailId || !characters.length) return;
-    setSelected(characters.find((character) => String(character.id) === String(detailId)) || null);
-  }, [characters, detailId]);
-
-  async function handleSave(payload) {
+    if (!userId || !isSupabaseConfigured) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      if (editing) {
-        await updateCharacter(editing.id, payload);
-        setMessage('角色已更新。');
-      } else {
-        await createCharacter(userId, payload);
-        setMessage('角色已创建。');
-      }
+      const next = await loadWorkflowConfigData();
+      const scopeOptions = { scope: dataScope, campaignContext, activeCampaignId, includeGlobal: true };
+      setData({
+        ...next,
+        characters: filterRecordsForAuxiliaryScope(next.characters, scopeOptions),
+        accounts: filterRecordsForAuxiliaryScope(next.accounts, scopeOptions),
+        workflowRuns: filterRecordsForAuxiliaryScope(next.workflowRuns, scopeOptions),
+        legacyAssets: filterRecordsForAuxiliaryScope(next.legacyAssets, scopeOptions),
+      });
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeCampaignId, campaignContext, dataScope, userId]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { if (detailId) setSelectedId(detailId); }, [detailId]);
+
+  const assets = useMemo(() => getAssets(data), [data]);
+  const characterRows = useMemo(() => data.characters
+    .map((character) => ({
+      character,
+      readiness: evaluateCharacterReadiness(character, {
+        accounts: data.accounts,
+        assets,
+        workflows: data.comfyWorkflows,
+        runs: data.workflowRuns,
+      }),
+    }))
+    .filter(({ character }) => {
+      const text = `${character.name} ${character.description || ''} ${character.personality || ''}`.toLowerCase();
+      return !search || text.includes(search.toLowerCase());
+    }), [assets, data, search]);
+  const selectedRow = characterRows.find(({ character }) => String(character.id) === String(selectedId)) || null;
+
+  async function saveCharacter(payload) {
+    try {
+      if (editing) await updateCharacter(editing.id, payload);
+      else await createCharacter(userId, payload);
+      setMessage(editing ? '角色已更新。' : '角色已创建。');
       setEditing(null);
-      setIsCreating(false);
+      setCreating(false);
       await refresh();
     } catch (error) {
       setMessage(error.message);
     }
   }
 
-  async function handleDelete(character) {
+  async function removeCharacter(character) {
     const accepted = await confirm({
       title: '删除角色？',
-      message: `将删除“${character.name || '未命名角色'}”及其当前角色模型绑定信息。已有生成结果不会被删除。`,
+      message: `将删除“${character.name || '未命名角色'}”的持续生成身份和模型绑定。已有生成任务与素材不会删除。`,
       confirmLabel: '确认删除',
       danger: true,
     });
     if (!accepted) return;
     try {
       await deleteCharacter(character.id);
-      if (selected?.id === character.id) {
-        setSelected(null);
-        onNavigate('characters');
-      }
+      setSelectedId('');
       setMessage('角色已删除。');
       await refresh();
     } catch (error) {
@@ -68,166 +118,206 @@ export function CharacterLibrary({ userId, detailId, onNavigate }) {
     }
   }
 
-  function editCharacter(character) {
-    setSelected(null);
-    setIsCreating(false);
-    setEditing(character);
+  function openDetail(character) {
+    setSelectedId(character.id);
+    setDetailTab('profile');
+    onNavigate?.('characters', character.id);
   }
 
   return (
-    <section className="page-stack">
+    <section className="page-stack character-asset-page">
       <div className="section-head">
         <div>
-          <p className="eyebrow">角色大脑</p>
+          <p className="eyebrow">持续生成身份</p>
           <h2>角色库</h2>
-          <p>保存角色设定、外观、性格、提示词和角色模型（LoRA）。未来素材工厂会根据角色自动选择角色模型、工作流和生成参数。</p>
+          <p>角色库只管理长期复用的人物身份、视觉规范、LoRA 和推荐工作流；生成过程进入生成任务，真实文件进入素材库。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => {
-          setEditing(null);
-          setIsCreating(true);
-        }} disabled={!isSupabaseConfigured || !userId}>
-          新建角色
-        </button>
+        <button className="primary-button" type="button" onClick={() => setCreating(true)}>新建角色</button>
       </div>
 
       <div className="filter-bar">
-        <input placeholder="搜索角色、描述、性格" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
-        <input placeholder="标签" value={filters.tag} onChange={(event) => setFilters({ ...filters, tag: event.target.value })} />
+        <input placeholder="搜索角色、定位或性格" value={search} onChange={(event) => setSearch(event.target.value)} />
       </div>
-
-      {(isCreating || editing) && (
+      {(creating || editing) && (
         <CharacterForm
           key={editing?.id || 'new-character'}
           initialValue={editing}
-          onSubmit={handleSave}
-          onCancel={() => {
-            setIsCreating(false);
-            setEditing(null);
-          }}
+          onSubmit={saveCharacter}
+          onCancel={() => { setCreating(false); setEditing(null); }}
         />
       )}
+      {message && <div className={/失败|错误|不可用/.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
-      {message && <div className={/失败|error|failed/i.test(message) ? 'notice error' : 'notice'}>{message}</div>}
-
-      {!isSupabaseConfigured ? (
-        <EmptyState title="等待数据服务配置" description="配置后这里会读取你的真实角色资产。" />
+      {loading ? (
+        <div className="skeleton-grid">{Array.from({ length: 3 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}</div>
+      ) : !isSupabaseConfigured ? (
+        <EmptyState title="等待数据服务配置" description="配置后这里会读取角色、LoRA、工作流与验证记录。" />
       ) : !userId ? (
-        <EmptyState title="请先登录" description="登录后才能读取和管理你的角色库。" />
-      ) : characters.length === 0 ? (
-        <EmptyState title="暂无角色" description="创建第一个 AI 角色，用来沉淀虚拟模特、品牌人物或内容 IP。" />
+        <EmptyState title="请先登录" description="登录后才能读取和管理角色库。" />
+      ) : !characterRows.length ? (
+        <EmptyState title="当前范围没有角色" description="请先新建角色，补充角色设定和视觉身份，再绑定 LoRA 与可用工作流。" action={<button className="primary-button" type="button" onClick={() => setCreating(true)}>新建角色</button>} />
       ) : (
-        <div className="character-library-grid">
-          {characters.map((character) => {
-            const loraValue = character.lora_info && Object.keys(character.lora_info).length ? character.lora_info : character.lora;
-            const hasLora = hasLoraConfig(loraValue);
-            const lora = parseLoraConfig(loraValue);
-            return (
-              <article className="character-card" key={character.id}>
-                <button className="card-open" type="button" onClick={() => {
-                  setSelected(character);
-                  onNavigate('characters', character.id);
-                }}>查看详情</button>
-                <div className="character-card-media">
-                  {character.avatar
-                    ? <img src={character.avatar} alt={`${character.name} 角色头像`} />
-                    : <div className="character-avatar-fallback">{character.name.slice(0, 2)}</div>}
-                </div>
-                <div className="character-card-body">
-                  <div className="character-card-title">
-                    <h3>{character.name}</h3>
-                    <span className={`status-badge ${hasLora ? 'connected' : 'pending'}`}>
-                      {hasLora ? '已绑定角色模型' : '未绑定角色模型'}
-                    </span>
-                  </div>
-                  <p className="character-card-description">{character.description || character.personality || '暂无描述'}</p>
-                  <div className="character-lora-summary">
-                    <span>角色模型</span>
-                    <strong>{loraDisplayName(loraValue)}</strong>
-                    {hasLora && <small>权重 {lora.weight ?? 0.8} · {lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</small>}
-                  </div>
-                  <div className="tag-row">
-                    {(character.tags || []).map((tag) => <span key={tag} className="tag">{tag}</span>)}
-                  </div>
-                  <small className="character-created-at">{formatDate(character.created_at)}</small>
-                  <div className="character-card-actions">
-                    <button type="button" onClick={() => editCharacter(character)}>{hasLora ? '编辑角色与模型' : '配置角色模型'}</button>
-                    <button type="button" onClick={() => handleDelete(character)}>删除</button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+        <div className="character-readiness-grid">
+          {characterRows.map(({ character, readiness }) => (
+            <CharacterReadinessCard
+              key={character.id}
+              character={character}
+              readiness={readiness}
+              onDetail={() => openDetail(character)}
+              onEdit={() => setEditing(character)}
+              onConfigure={() => { setEditing(character); setCreating(false); }}
+              onTest={() => onNavigate?.('workspace', '', { character_id: character.id, action: 'generation_test' })}
+              onDelete={() => removeCharacter(character)}
+            />
+          ))}
         </div>
       )}
 
-      {selected && (
-        <div className="character-detail-overlay" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) {
-            setSelected(null);
-            onNavigate('characters');
-          }
-        }}>
-          <aside className="detail-panel character-detail-panel">
-            <div className="section-head">
-              <div>
-                <p className="eyebrow">角色详情</p>
-                <h2>{selected.name}</h2>
-              </div>
-              <button className="ghost-button" type="button" onClick={() => {
-                setSelected(null);
-                onNavigate('characters');
-              }}>关闭</button>
-            </div>
-            {selected.avatar && <img className="character-detail-avatar" src={selected.avatar} alt={`${selected.name} 角色头像`} />}
-            <CharacterLoraDetails value={selected.lora_info && Object.keys(selected.lora_info).length ? selected.lora_info : selected.lora} />
-            <div className="character-detail-copy">
-              <p><strong>描述：</strong>{selected.description || '—'}</p>
-              <p><strong>性格：</strong>{selected.personality || '—'}</p>
-              <p><strong>外观：</strong>{selected.appearance || '—'}</p>
-              <p><strong>人物身份：</strong>{selected.content_positioning || '—'}</p>
-              <p><strong>文案语气：</strong>{selected.prompt_templates?.copy_tone || '—'}</p>
-              <p><strong>绑定账号：</strong>{(selected.lora_info?.bound_account_ids || []).join('、') || '—'}</p>
-              <p><strong>推荐工作流：</strong>{(selected.recommended_workflows || []).map((item) => typeof item === 'string' ? item : item.name || item.id).join('、') || '—'}</p>
-              <p><strong>创建时间：</strong>{formatDate(selected.created_at)}</p>
-            </div>
-            <div className="character-prompt-block">
-              <span>角色提示词</span>
-              <p className="draft-preview">{selected.prompt || '暂无角色提示词'}</p>
-            </div>
-            <div className="button-row">
-              <button className="primary-button" type="button" onClick={() => editCharacter(selected)}>编辑角色与模型</button>
-            </div>
-          </aside>
-        </div>
+      {selectedRow && (
+        <CharacterDetailDrawer
+          character={selectedRow.character}
+          readiness={selectedRow.readiness}
+          activeTab={detailTab}
+          mode={auxiliaryMode}
+          onTab={setDetailTab}
+          onEdit={() => setEditing(selectedRow.character)}
+          onTest={() => onNavigate?.('workspace', '', { character_id: selectedRow.character.id, action: 'generation_test' })}
+          onClose={() => { setSelectedId(''); onNavigate?.('characters'); }}
+        />
       )}
     </section>
   );
 }
 
-function CharacterLoraDetails({ value }) {
-  const lora = parseLoraConfig(value);
-  const configured = hasLoraConfig(value);
-
-  if (!configured) {
-    return <div className="notice warning">该角色尚未绑定角色模型（LoRA），暂时不能用于角色一致性图片或视频生成。</div>;
-  }
-
+function CharacterReadinessCard({ character, readiness, onDetail, onEdit, onConfigure, onTest, onDelete }) {
+  const lora = readiness.lora;
+  const workflow = readiness.usableWorkflow;
   return (
-    <section className="character-detail-lora">
-      <div className="character-detail-section-title">
-        <h3>角色模型（LoRA）配置</h3>
-        <span className="status-badge connected">已绑定</span>
+    <article className="character-readiness-card">
+      <div className="character-hero-image">
+        {character.avatar
+          ? <img src={character.avatar} alt={`${character.name} 角色主图`} />
+          : readiness.referenceAssets[0]?.thumbnail
+            ? <img src={readiness.referenceAssets[0].thumbnail} alt={`${character.name} 最近验证图`} />
+            : <span>{String(character.display_name || character.name || '?').slice(0, 2)}</span>}
+        <span className={`readiness-badge ${characterStatusClass(readiness.state)}`}>{readiness.label}</span>
       </div>
-      <dl>
-        <div><dt>名称</dt><dd>{loraDisplayName(value)}</dd></div>
-        <div><dt>模型</dt><dd>{lora.model || '—'}</dd></div>
-        <div><dt>版本</dt><dd>{lora.version || '—'}</dd></div>
-        <div><dt>文件</dt><dd>{lora.filename || '—'}</dd></div>
-        <div><dt>权重</dt><dd>{lora.weight ?? 0.8}</dd></div>
-        <div><dt>工作流</dt><dd>{lora.workflow || '—'}</dd></div>
-        <div><dt>生成能力</dt><dd>{lora.image_enabled ? '图片' : ''}{lora.image_enabled && lora.video_enabled ? ' / ' : ''}{lora.video_enabled ? '视频' : ''}</dd></div>
-        <div><dt>触发词</dt><dd>{lora.trigger_words || '—'}</dd></div>
-      </dl>
-    </section>
+      <div className="character-readiness-body">
+        <div className="panel-title">
+          <div><h3>{character.display_name || character.name}</h3><small>{readiness.boundAccounts.map((account) => account.account_name).join('、') || '尚未绑定账号'}</small></div>
+          <StatusBadge status={character.status || 'active'} />
+        </div>
+        <div className="character-spec-grid">
+          <Spec label="LoRA 状态" value={readiness.hasLora ? (readiness.loraAccessible ? '已验证' : '不可访问') : '未绑定'} />
+          <Spec label="LoRA 版本" value={lora.version || '—'} />
+          <Spec label="基础模型" value={lora.base_model || workflow?.checkpoint || workflow?.model || '—'} />
+          <Spec label="触发词" value={lora.trigger_word || lora.trigger_words || '—'} />
+          <Spec label="推荐权重" value={lora.recommended_weight ?? lora.weight ?? character.recommended_params?.lora_weight ?? '—'} />
+          <Spec label="默认工作流" value={workflow?.name || workflow?.id || '未启用'} />
+          <Spec label="最近验证" value={formatDate(readiness.successfulRun?.completed_at || readiness.successfulRun?.created_at)} />
+          <Spec label="当前阻塞" value={readiness.blocking} warning={readiness.state !== 'ready'} />
+        </div>
+        <div className="character-card-actions">
+          <button className="primary-button compact" type="button" onClick={readiness.state === 'ready' ? onTest : onConfigure}>{readiness.state === 'ready' ? '生成测试' : '继续配置'}</button>
+          <button className="ghost-button compact" type="button" onClick={onEdit}>编辑</button>
+          <button className="ghost-button compact" type="button" onClick={onDetail}>查看详情</button>
+          <MoreActionsMenu><button className="danger-action" type="button" onClick={onDelete}>删除角色</button></MoreActionsMenu>
+        </div>
+      </div>
+    </article>
   );
+}
+
+function CharacterDetailDrawer({ character, readiness, activeTab, mode, onTab, onEdit, onTest, onClose }) {
+  const lora = readiness.lora;
+  return (
+    <aside className="detail-drawer character-generation-drawer">
+      <div className="detail-drawer-header">
+        <div><p className="eyebrow">角色详情</p><h3>{character.display_name || character.name}</h3><p>{readiness.label} · {readiness.blocking}</p></div>
+        <button className="ghost-button" type="button" onClick={onClose}>关闭</button>
+      </div>
+      <div className="drawer-tabs">
+        {DETAIL_TABS.map(([id, label]) => <button className={activeTab === id ? 'active' : ''} type="button" key={id} onClick={() => onTab(id)}>{label}</button>)}
+      </div>
+      <div className="drawer-body">
+        {activeTab === 'profile' && <DetailGrid items={[
+          ['人物身份', character.content_positioning || character.description],
+          ['性格', character.personality || character.personality_traits],
+          ['文案语气', character.prompt_templates?.copy_tone || character.personality],
+          ['禁止风格', character.forbidden_styles],
+        ]} />}
+        {activeTab === 'visual' && <DetailGrid items={[
+          ['外观描述', character.appearance],
+          ['视觉规范', character.visual_spec],
+          ['角色主图', character.avatar ? '已配置' : '未配置'],
+          ['适用内容', character.suitable_content_types],
+        ]} />}
+        {activeTab === 'lora' && <DetailGrid items={[
+          ['LoRA', lora.name || lora.model || '未绑定'],
+          ['版本', lora.version],
+          ['基础模型', lora.base_model || readiness.usableWorkflow?.checkpoint],
+          ['触发词', lora.trigger_word || lora.trigger_words],
+          ['推荐权重', lora.recommended_weight ?? lora.weight],
+          ['可调范围', Array.isArray(lora.weight_range) ? lora.weight_range.join('–') : '—'],
+          ['可访问状态', readiness.loraAccessible ? '可访问' : '不可用'],
+        ]} />}
+        {activeTab === 'references' && <AssetPreviewList assets={readiness.referenceAssets} avatar={character.avatar} />}
+        {activeTab === 'accounts' && <SimpleList rows={readiness.boundAccounts} empty="尚未绑定账号" title={(row) => row.account_name} meta={(row) => row.platform} />}
+        {activeTab === 'workflows' && <DetailGrid items={[
+          ['默认工作流', readiness.usableWorkflow?.name || '未启用'],
+          ['状态', readiness.usableWorkflow?.status || '不可用'],
+          ['Provider', character.recommended_workflows?.[0]?.provider || '—'],
+          ['基础模型', readiness.usableWorkflow?.checkpoint || readiness.usableWorkflow?.model || '—'],
+        ]} />}
+        {activeTab === 'tests' && <GenerationTestTab readiness={readiness} onTest={onTest} />}
+        {activeTab === 'history' && <SimpleList rows={[...readiness.characterAssets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))} empty="暂无角色版本或验证素材" title={(row) => row.name} meta={(row) => formatDate(row.createdAt)} />}
+        {mode === 'advanced' && <details className="technical-details" data-technical-detail><summary>高级技术详情</summary><pre>{JSON.stringify({ lora, workflows: character.recommended_workflows }, null, 2)}</pre></details>}
+      </div>
+      <div className="detail-drawer-footer">
+        <button className="primary-button" type="button" onClick={readiness.state === 'ready' ? onTest : onEdit}>{readiness.state === 'ready' ? '生成测试' : '继续配置'}</button>
+        <button className="ghost-button" type="button" onClick={onEdit}>编辑角色</button>
+      </div>
+    </aside>
+  );
+}
+
+function GenerationTestTab({ readiness, onTest }) {
+  return (
+    <div className="drawer-section-grid">
+      <DetailCard title="最近测试">{readiness.successfulRun ? '已通过' : '尚未通过'}</DetailCard>
+      <DetailCard title="最近验证时间">{formatDate(readiness.successfulRun?.completed_at || readiness.successfulRun?.created_at)}</DetailCard>
+      <DetailCard title="最近验证图">{readiness.referenceAssets[0]?.thumbnail || readiness.referenceAssets[0]?.url ? <img className="mini-validation-image" src={readiness.referenceAssets[0].thumbnail || readiness.referenceAssets[0].url} alt="最近验证图" /> : '暂无'}</DetailCard>
+      <button className="primary-button" type="button" onClick={onTest}>进入内容工作台创建安全测试</button>
+      <p className="security-note">此按钮只进入任务配置，不会自动调用付费工作流。</p>
+    </div>
+  );
+}
+
+function AssetPreviewList({ assets, avatar }) {
+  const rows = avatar ? [{ id: 'avatar', thumbnail: avatar, name: '角色主图' }, ...assets] : assets;
+  if (!rows.length) return <div className="drawer-empty"><strong>缺少参考图</strong><p>请先上传角色主图或审核一张生成结果。</p></div>;
+  return <div className="reference-preview-grid">{rows.slice(0, 8).map((asset) => <figure key={asset.id}><img src={asset.thumbnail || asset.url} alt={asset.name || '角色参考图'} /><figcaption>{asset.name || '参考图'}</figcaption></figure>)}</div>;
+}
+
+function DetailGrid({ items }) {
+  return <div className="drawer-section-grid">{items.map(([label, value]) => <DetailCard title={label} key={label}>{display(value)}</DetailCard>)}</div>;
+}
+
+function DetailCard({ title, children }) {
+  return <section className="detail-card"><span>{title}</span><div>{children || '—'}</div></section>;
+}
+
+function SimpleList({ rows, empty, title, meta }) {
+  if (!rows.length) return <div className="drawer-empty"><strong>{empty}</strong></div>;
+  return <div className="drawer-list">{rows.map((row) => <article key={row.id}><strong>{title(row)}</strong><small>{meta(row)}</small></article>)}</div>;
+}
+
+function Spec({ label, value, warning }) {
+  return <div><span>{label}</span><strong className={warning ? 'quality-warning' : ''}>{value || '—'}</strong></div>;
+}
+
+function display(value) {
+  if (Array.isArray(value)) return value.join('、') || '—';
+  if (value && typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join('；') || '—';
+  return value || '—';
 }

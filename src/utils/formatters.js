@@ -13,8 +13,7 @@ export function formatDate(value) {
   }).format(date);
 }
 
-export function statusLabel(status) {
-  const labels = {
+export const STATUS_LABELS = {
     active: '正常',
     connected: '已连接',
     disconnected: '未连接',
@@ -34,7 +33,12 @@ export function statusLabel(status) {
     archived: '已归档',
     publishing: '发布中',
     published: '已发布',
-    pending: '等待中',
+    pending: '待处理',
+    pending_approval: '待批准',
+    pending_review: '待审核',
+    pending_generation: '待生成',
+    not_started: '未开始',
+    planned: '已计划',
     queued: '排队中',
     running: '运行中',
     success: '成功',
@@ -42,6 +46,17 @@ export function statusLabel(status) {
     failed: '失败',
     approved: '已批准',
     rejected: '已驳回',
+    needs_revision: '需要修改',
+    revision_requested: '需要修改',
+    cancelled: '已取消',
+    canceled: '已取消',
+    ready: '可用',
+    ready_for_publish: '准备发布',
+    dry_run: '安全预演',
+    live: '正式执行',
+    preflight_passed: '预检通过',
+    preflight_failed: '预检未通过',
+    test_completed: '测试执行完成',
     owned: '自有账号',
     brand: '品牌账号',
     personal: '个人账号',
@@ -53,9 +68,12 @@ export function statusLabel(status) {
     prompt: '提示词',
     workflow: '工作流',
     lora: 'LoRA',
+    preparing: '准备中',
   };
 
-  return labels[status] || status || '—';
+export function statusLabel(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  return STATUS_LABELS[normalized] || status || '—';
 }
 
 export function compactNumber(value) {

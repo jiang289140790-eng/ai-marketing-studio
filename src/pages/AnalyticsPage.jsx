@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { ExecutionButton } from '../components/ExecutionButton';
-import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
-import { normalizeList, readRows } from '../services/ops-service';
+import { readRows } from '../services/ops-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
-import { compactNumber, formatDate } from '../utils/formatters';
+import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
+import { buildReviewSuggestions } from '../utils/analytics-review-model';
+import { formatDate } from '../utils/formatters';
 
 const EMPTY = {
   contentMetrics: [],
@@ -15,31 +16,26 @@ const EMPTY = {
   strategyMemory: [],
 };
 
-const DATA_REQUESTS = [
+const REQUESTS = [
   ['contentMetrics', { limit: 100, orderBy: 'fetched_at' }],
   ['publishMetrics', { limit: 100, orderBy: 'last_sync' }],
   ['publishTasks', { limit: 100, orderBy: 'created_at' }],
-  ['contentMemory', { limit: 50, orderBy: 'success_rate' }],
+  ['contentMemory', { limit: 50, orderBy: 'created_at' }],
   ['strategyMemory', { limit: 50, orderBy: 'created_at' }],
 ];
 
-const METRIC_LABELS = {
-  impressions: '曝光 / 浏览',
-  likes: '点赞',
-  comments: '回复 / 评论',
-  shares: '转发 / 分享',
-  saves: '收藏',
-  profile_visits: '主页访问',
-  link_clicks: '链接点击',
-  follows: '新增关注',
-  registrations: '注册',
-  conversions: '转化',
-};
-
-export function AnalyticsPage({ userId, onNavigate, campaignContext, refreshCampaignContext }) {
+export function AnalyticsPage({
+  activeCampaignId,
+  auxiliaryMode = 'normal',
+  campaignContext,
+  dataScope = 'campaign',
+  userId,
+  onNavigate,
+  refreshCampaignContext,
+}) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState([]);
+  const [message, setMessage] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
 
   const reload = useCallback(() => {
@@ -51,255 +47,232 @@ export function AnalyticsPage({ userId, onNavigate, campaignContext, refreshCamp
     if (!userId || !isSupabaseConfigured) return undefined;
     let cancelled = false;
     setLoading(true);
-    setErrors([]);
-    Promise.allSettled(DATA_REQUESTS.map(([key, options]) => readRows(key, options)))
+    Promise.allSettled(REQUESTS.map(([key, options]) => readRows(key, options)))
       .then((results) => {
         if (cancelled) return;
         const next = { ...EMPTY };
-        const nextErrors = [];
         results.forEach((result, index) => {
-          const key = DATA_REQUESTS[index][0];
-          if (result.status === 'fulfilled') next[key] = result.value;
-          else nextErrors.push(result.reason?.message || `${key} 读取失败`);
+          if (result.status === 'fulfilled') next[REQUESTS[index][0]] = result.value;
         });
         setData(next);
-        setErrors(nextErrors);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [userId, reloadKey]);
+  }, [reloadKey, userId]);
 
-  const scopedTaskIds = useMemo(
-    () => new Set((campaignContext?.publishTasks || []).map((item) => String(item.id))),
-    [campaignContext?.publishTasks],
-  );
-  const scopedPackageIds = useMemo(
-    () => new Set((campaignContext?.contentPackages || []).map((item) => String(item.id))),
-    [campaignContext?.contentPackages],
-  );
-  const scopedPublishTasks = useMemo(
-    () => data.publishTasks.filter((item) => scopedTaskIds.has(String(item.id))),
-    [data.publishTasks, scopedTaskIds],
-  );
-  const metrics = useMemo(() => [
-    ...data.contentMetrics.filter((item) => (
-      scopedPackageIds.has(String(item.content_package_id || ''))
-      || scopedTaskIds.has(String(item.publish_task_id || ''))
-    )),
-    ...data.publishMetrics.filter((item) => scopedTaskIds.has(String(item.publish_task_id || item.id))),
-  ], [data.contentMetrics, data.publishMetrics, scopedPackageIds, scopedTaskIds]);
-
-  const summary = useMemo(() => {
-    const published = scopedPublishTasks.filter((item) => ['published', 'completed', 'success'].includes(String(item.status).toLowerCase()));
-    return {
-      published: published.length,
-      exposure: metrics.reduce((sum, item) => sum + getExposure(item), 0),
-      interactions: metrics.reduce((sum, item) => sum + getInteractions(item), 0),
-      clicks: metrics.reduce((sum, item) => sum + getMetric(item, 'link_clicks'), 0),
-    };
-  }, [metrics, scopedPublishTasks]);
+  const scoped = useMemo(() => Object.fromEntries(Object.entries(data).map(([key, rows]) => [
+    key,
+    filterRecordsForAuxiliaryScope(rows, {
+      scope: dataScope,
+      campaignContext,
+      activeCampaignId,
+    }),
+  ])), [activeCampaignId, campaignContext, data, dataScope]);
 
   const dayOne = useMemo(
-    () => getDayOneContext(campaignContext, scopedPublishTasks, data.contentMetrics),
-    [campaignContext, scopedPublishTasks, data.contentMetrics],
+    () => getDayOneReviewContext(campaignContext, scoped.publishTasks, scoped.contentMetrics, scoped.publishMetrics),
+    [campaignContext, scoped.contentMetrics, scoped.publishMetrics, scoped.publishTasks],
   );
-
-  const recentMetrics = useMemo(() => [...metrics]
-    .sort((left, right) => new Date(getMetricDate(right) || 0) - new Date(getMetricDate(left) || 0))
-    .slice(0, 12), [metrics]);
-
-  if (!userId) return <EmptyState title="请先登录" description="登录后才能查看运营分析和学习记忆。" />;
-
-  return (
-    <section className="page-stack analytics-page">
-      <div className="hero-panel analytics-hero">
-        <div>
-          <p className="eyebrow">数据复盘与知识闭环</p>
-          <h2>把真实表现沉淀为下一条内容的依据</h2>
-          <p>只使用平台真实返回的数据。无法获取的指标会标记为“暂不可用”，不会被解释成 0。</p>
-        </div>
-        <div className="button-row">
-          <button className="primary-button" type="button" onClick={() => onNavigate('workspace')}>返回内容工作台</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
-        </div>
-      </div>
-
-      <div className="analytics-loop" aria-label="运营学习闭环">
-        <span>发布内容</span><i>→</i><span>回收指标</span><i>→</i><span>AI 复盘</span><i>→</i><span>人工确认</span><i>→</i><span>沉淀知识</span>
-      </div>
-
-      <DayOneReviewPanel campaignContext={campaignContext} dayOne={dayOne} onCompleted={reload} />
-
-      <div className="stat-grid compact">
-        <StatCard label="已发布" value={loading ? '-' : summary.published} hint="进入数据学习闭环" />
-        <StatCard label="总曝光" value={loading ? '-' : compactNumber(summary.exposure)} hint="只汇总可用指标" />
-        <StatCard label="总互动" value={loading ? '-' : compactNumber(summary.interactions)} hint="点赞、评论与分享" />
-        <StatCard label="链接点击" value={loading ? '-' : compactNumber(summary.clicks)} hint="平台可用时显示" />
-      </div>
-
-      {errors.length > 0 && <div className="notice error">部分数据暂时无法读取：{errors.join('；')}</div>}
-
-      <section className="table-card analytics-performance-section">
-        <div className="panel-title">
-          <div><p className="eyebrow">表现信号</p><h3>最近内容表现</h3><p>优先显示最新回传的内容与发布指标。</p></div>
-          <span>{metrics.length} 条指标</span>
-        </div>
-        {recentMetrics.length > 0 ? (
-          <div className="performance-table" role="table" aria-label="最近内容表现">
-            <div className="performance-row performance-head" role="row">
-              <span>内容 / 平台</span><span>曝光</span><span>互动</span><span>点击</span><span>回传时间</span>
-            </div>
-            {recentMetrics.map((item, index) => (
-              <div className="performance-row" role="row" key={item.id || index}>
-                <strong>{getMetricTitle(item)}</strong>
-                <span>{formatMetricNumber(item, 'impressions')}</span>
-                <span>{compactNumber(getInteractions(item))}</span>
-                <span>{formatMetricNumber(item, 'link_clicks')}</span>
-                <time>{formatDate(getMetricDate(item))}</time>
-              </div>
-            ))}
-          </div>
-        ) : !loading ? <div className="empty-card-inline">发布内容并回传指标后，最近表现会显示在这里。</div> : null}
-      </section>
-
-      <div className="analytics-memory-grid">
-        <MemorySection eyebrow="内容记忆" title="高表现内容模式" description="仅沉淀经过验证或明确标记为初步观察的模式。" count={data.contentMemory.length}>
-          {data.contentMemory.length > 0 ? data.contentMemory.slice(0, 8).map((memory, index) => (
-            <ContentMemoryCard memory={memory} key={memory.id || index} />
-          )) : !loading ? <div className="empty-card-inline">暂无内容记忆。</div> : null}
-        </MemorySection>
-        <MemorySection eyebrow="策略记忆" title="策略学习结果" description="新的调整先作为待审核建议，不覆盖已批准策略。" count={data.strategyMemory.length}>
-          {data.strategyMemory.length > 0 ? data.strategyMemory.slice(0, 8).map((memory, index) => (
-            <StrategyMemoryCard memory={memory} key={memory.id || index} />
-          )) : !loading ? <div className="empty-card-inline">暂无策略记忆。</div> : null}
-        </MemorySection>
-      </div>
-    </section>
-  );
-}
-
-function DayOneReviewPanel({ campaignContext, dayOne, onCompleted }) {
-  const campaignId = campaignContext?.campaign?.id || campaignContext?.id;
-  const payload = {
+  const suggestions = useMemo(() => buildReviewSuggestions(dayOne.review || {}), [dayOne.review]);
+  const hasRealData = dayOne.realMetrics.length > 0;
+  const hasReview = suggestions.length > 0 || Boolean(dayOne.review?.execution_overview);
+  const campaignId = campaignContext?.campaign?.id || activeCampaignId;
+  const executionPayload = {
     campaign_id: campaignId,
     day: 1,
     content_package_id: dayOne.package?.id,
     publish_task_id: dayOne.task?.id,
   };
-  const isPublished = dayOne.task?.status === 'published';
-  const hasMetrics = Boolean(dayOne.metric);
-  const hasReview = Boolean(dayOne.review?.id);
+
+  if (!userId) return <EmptyState title="请先登录" description="登录后才能查看 AI 复盘。" />;
 
   return (
-    <section className="table-card day1-review-panel">
-      <div className="panel-title">
+    <section className="page-stack ai-review-page">
+      <div className="section-head">
         <div>
-          <p className="eyebrow">Day 1 发布后复盘</p>
-          <h3>{dayOne.package?.title || 'Day 1 尚未进入数据回收'}</h3>
-          <p>{dayOne.accountLabel} · {dayOne.task?.platform || dayOne.package?.platform || '平台未确定'}</p>
+          <p className="eyebrow">AI 复盘</p>
+          <h2>解释为什么发生，并给出下一步动作</h2>
+          <p>这里只解释真实数据和证据，不重复展示数据分析表，也不会用一条内容自动改写正式策略。</p>
         </div>
-        <StatusBadge status={isPublished ? (hasReview ? 'completed' : 'published') : dayOne.task?.status || 'not_started'} />
+        <div className="button-row">
+          <button className="ghost-button" type="button" onClick={() => onNavigate('data-analytics')}>查看数据分析</button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
+        </div>
       </div>
 
-      {!isPublished ? (
-        <div className="empty-card-inline">
-          Day 1 真实发布完成后才能回收指标。dry_run 只表示预检或测试完成，不会生成虚假数据。
-        </div>
-      ) : (
-        <>
-          <div className="day1-metric-grid">
-            {Object.keys(METRIC_LABELS).map((key) => (
-              <div className="day1-metric-card" key={key}>
-                <span>{METRIC_LABELS[key]}</span>
-                <strong>{dayOne.metric ? formatMetricNumber(dayOne.metric, key) : '待同步'}</strong>
-                <small>{getMetricAvailability(dayOne.metric, key) === 'unavailable' ? '平台暂不可用' : '真实回传'}</small>
-              </div>
-            ))}
-          </div>
+      {message && <div className="notice">{message}</div>}
 
-          <div className="day1-review-actions">
-            <ExecutionButton
-              action="collect_content_metrics"
-              resourceType="campaign"
-              resourceId={campaignId}
-              payload={payload}
-              onCompleted={onCompleted}
-              ready={Boolean(campaignId && dayOne.task?.id)}
-            >
-              {hasMetrics ? '重新同步指标' : '回收 Day 1 指标'}
-            </ExecutionButton>
+      <section className="table-card review-status-panel">
+        <div className="panel-title">
+          <div>
+            <p className="eyebrow">本轮复盘状态</p>
+            <h3>{dayOne.package?.title || 'Day 1 尚未形成可复盘内容'}</h3>
+            <p>{dayOne.accountLabel} · {dayOne.task?.platform || dayOne.package?.platform || '平台未确定'}</p>
+          </div>
+          <StatusBadge status={hasReview ? 'completed' : hasRealData ? 'review' : 'blocked'} />
+        </div>
+        {!hasRealData ? (
+          <div className="review-blocker-card">
+            <strong>当前阻塞：尚无真实发布指标</strong>
+            <p>{dayOne.task?.status === 'published'
+              ? '内容已经发布，但指标尚未回收。'
+              : '当前只有安全预演或待发布任务，不能据此生成表现结论。'}</p>
+            <div className="button-row">
+              {dayOne.task?.status === 'published' ? (
+                <ExecutionButton
+                  action="collect_content_metrics"
+                  resourceType="campaign"
+                  resourceId={campaignId}
+                  payload={executionPayload}
+                  ready={Boolean(campaignId && dayOne.task?.id)}
+                  onCompleted={reload}
+                >
+                  回收 Day 1 指标
+                </ExecutionButton>
+              ) : <button className="primary-button" type="button" onClick={() => onNavigate('publish')}>查看发布任务</button>}
+              <button type="button" onClick={() => onNavigate('workspace')}>返回内容工作台</button>
+            </div>
+          </div>
+        ) : (
+          <div className="button-row">
             <ExecutionButton
               action="review_content_performance"
               resourceType="campaign"
               resourceId={campaignId}
-              payload={payload}
-              onCompleted={onCompleted}
-              ready={hasMetrics}
-              reason={hasMetrics ? '' : '请先回收指标'}
+              payload={executionPayload}
+              onCompleted={reload}
             >
-              {hasReview ? '重新生成 AI 复盘' : '生成 AI 复盘'}
+              {hasReview ? '重新生成复盘' : '生成 AI 复盘'}
             </ExecutionButton>
           </div>
+        )}
+      </section>
 
-          {hasReview && (
-            <div className="day1-review-body">
-              <div className="notice warning">{dayOne.review.sample_notice || '样本不足，仅作为初步观察'}</div>
-              <section><h4>执行概况</h4><p>{dayOne.review.execution_overview}</p></section>
-              <section>
-                <h4>判断与证据</h4>
-                <div className="review-findings">
-                  {(dayOne.review.findings || []).map((finding, index) => (
-                    <article key={`${finding.title}-${index}`}>
-                      <span className={`evidence-label ${finding.classification}`}>{classificationLabel(finding.classification)}</span>
-                      <strong>{finding.title}</strong>
-                      <p>{finding.conclusion}</p>
-                      <small>{finding.evidence}</small>
-                    </article>
-                  ))}
-                </div>
-              </section>
-              <section><h4>下一步建议</h4><ol>{(dayOne.review.next_steps || []).map((item) => <li key={item}>{item}</li>)}</ol></section>
-              <div className="day1-review-actions">
-                <ExecutionButton action="create_strategy_adjustment_suggestion" resourceType="campaign" resourceId={campaignId} payload={payload} onCompleted={onCompleted}>
-                  应用到下一天（待审核建议）
-                </ExecutionButton>
-                <ExecutionButton action="save_campaign_insight" resourceType="campaign" resourceId={campaignId} payload={payload} onCompleted={onCompleted}>
-                  保存为知识
-                </ExecutionButton>
-                <ExecutionButton action="update_account_memory" resourceType="campaign" resourceId={campaignId} payload={payload} onCompleted={onCompleted}>
-                  加入账号 Brain 待审核观察
-                </ExecutionButton>
+      {hasRealData && (
+        <>
+          {dayOne.realMetrics.length < 3 && <div className="notice warning">样本不足，仅作为初步观察；当前真实样本数为 {dayOne.realMetrics.length}。</div>}
+
+          <section className="table-card">
+            <div className="panel-title"><div><p className="eyebrow">核心结论</p><h3>本轮最值得处理的 3 条结论</h3></div><span>{suggestions.length} 条</span></div>
+            {suggestions.length ? (
+              <div className="review-suggestion-grid">
+                {suggestions.map((suggestion) => (
+                  <ReviewSuggestion
+                    campaignId={campaignId}
+                    key={suggestion.id}
+                    payload={executionPayload}
+                    suggestion={suggestion}
+                    onCompleted={reload}
+                    onDismiss={() => setMessage('已暂不采用；该结论没有写入正式策略。')}
+                  />
+                ))}
               </div>
+            ) : <div className="empty-card-inline">指标已经回收，下一步请生成 AI 复盘。</div>}
+          </section>
+
+          <div className="review-aspect-grid">
+            <ReviewAspect title="文案表现" value={dayOne.review?.copy_review} fallback="尚未形成文案归因。" />
+            <ReviewAspect title="素材表现" value={dayOne.review?.asset_review} fallback="尚未形成素材归因。" />
+            <ReviewAspect title="CTA 表现" value={dayOne.review?.cta_review} fallback="平台未提供足够点击或转化数据。" />
+            <ReviewAspect title="发布时间表现" value={dayOne.review?.timing_review} fallback="样本不足，暂不能判断最佳发布时间。" />
+          </div>
+
+          <section className="table-card">
+            <div className="panel-title"><div><p className="eyebrow">建议动作</p><h3>下一步怎么做</h3></div></div>
+            <ol className="review-action-list">
+              {(dayOne.review?.next_steps || suggestions.map((item) => item.recommendedAction)).slice(0, 5).map((item) => <li key={item}>{item}</li>)}
+            </ol>
+          </section>
+
+          <details className="table-card review-memory-details">
+            <summary>历史经验库（默认折叠）</summary>
+            <p>仅显示当前范围内最近使用的已验证或初步信号；测试记忆需切换“测试数据”范围。</p>
+            <div className="analytics-memory-grid">
+              <MemoryList title="内容经验" rows={filterMemory(scoped.contentMemory).slice(0, 6)} />
+              <MemoryList title="策略经验" rows={filterMemory(scoped.strategyMemory).slice(0, 6)} />
             </div>
-          )}
+            {auxiliaryMode === 'advanced' && <small>高级模式：原始记录仍保留在数据库，当前仅展示经过范围筛选的摘要。</small>}
+          </details>
         </>
+      )}
+
+      {!loading && !hasRealData && (
+        <EmptyState
+          title="没有可以解释的真实发布数据"
+          reason="AI 复盘不会用 dry-run、测试记录或无关历史 Memory 代替当前 Campaign 的真实表现。"
+          prerequisite="先完成 Day 1 正式发布并回收至少一条指标。"
+          actionHref="#/publish"
+          actionLabel="查看发布中心"
+        />
       )}
     </section>
   );
 }
 
-function getDayOneContext(campaignContext, tasks, contentMetrics) {
+function ReviewSuggestion({ campaignId, onCompleted, onDismiss, payload, suggestion }) {
+  return (
+    <article className="review-suggestion-card">
+      <div className="card-meta"><span>{suggestion.dataStatus}</span><span>置信度 {suggestion.confidence == null ? '待评估' : `${suggestion.confidence}%`}</span></div>
+      <h3>{suggestion.conclusion}</h3>
+      <dl>
+        <div><dt>证据</dt><dd>{suggestion.evidence}</dd></div>
+        <div><dt>样本数</dt><dd>{suggestion.sampleCount || '不足'}</dd></div>
+        <div><dt>适用范围</dt><dd>{suggestion.scope}</dd></div>
+        <div><dt>推荐动作</dt><dd>{suggestion.recommendedAction}</dd></div>
+      </dl>
+      <div className="button-row">
+        <ExecutionButton action="create_strategy_adjustment_suggestion" resourceType="campaign" resourceId={campaignId} payload={payload} onCompleted={onCompleted}>应用到下一条内容</ExecutionButton>
+        <ExecutionButton action="create_strategy_adjustment_suggestion" resourceType="campaign" resourceId={campaignId} payload={payload} onCompleted={onCompleted}>创建策略调整草稿</ExecutionButton>
+        <ExecutionButton action="save_campaign_insight" resourceType="campaign" resourceId={campaignId} payload={payload} onCompleted={onCompleted}>保存为待验证假设</ExecutionButton>
+        <button type="button" onClick={onDismiss}>暂不采用</button>
+      </div>
+    </article>
+  );
+}
+
+function ReviewAspect({ fallback, title, value }) {
+  return <article className="table-card review-aspect-card"><h3>{title}</h3><p>{readReviewText(value) || fallback}</p></article>;
+}
+
+function MemoryList({ rows, title }) {
+  return (
+    <section>
+      <h4>{title}</h4>
+      {rows.length ? rows.map((row, index) => (
+        <article className="memory-card" key={row.id || index}>
+          <strong>{row.pattern || row.strategy_name || row.title || '历史经验'}</strong>
+          <p>{row.lessons_learned || row.description || row.summary || '已记录的运营经验。'}</p>
+          <small>{formatDate(row.last_used_at || row.updated_at || row.created_at)}</small>
+        </article>
+      )) : <div className="empty-card-inline">当前 Campaign 暂无符合条件的历史经验。</div>}
+    </section>
+  );
+}
+
+function getDayOneReviewContext(campaignContext, publishTasks, contentMetrics, publishMetrics) {
   const packages = campaignContext?.contentPackages || [];
-  const dayPackage = packages.find((item) => getPackageDay(item) === 1) || null;
-  const task = tasks.find((item) => String(item.content_package_id) === String(dayPackage?.id) && item.status === 'published')
-    || tasks.find((item) => String(item.content_package_id) === String(dayPackage?.id))
+  const packageItem = packages.find((item) => getPackageDay(item) === 1) || null;
+  const task = publishTasks.find((item) => String(item.content_package_id) === String(packageItem?.id) && item.status === 'published')
+    || publishTasks.find((item) => String(item.content_package_id) === String(packageItem?.id))
+    || campaignContext?.publishTasks?.find((item) => String(item.content_package_id) === String(packageItem?.id))
     || null;
-  const metric = [...contentMetrics]
-    .filter((item) => String(item.publish_task_id || '') === String(task?.id || '') || String(item.content_package_id || '') === String(dayPackage?.id || ''))
-    .sort((a, b) => new Date(getMetricDate(b) || 0) - new Date(getMetricDate(a) || 0))[0] || null;
-  const rawPackage = dayPackage?.raw || dayPackage || {};
+  const realMetrics = [...contentMetrics, ...publishMetrics].filter((item) => (
+    String(item.publish_task_id || '') === String(task?.id || '')
+    || String(item.content_package_id || '') === String(packageItem?.id || '')
+  ));
+  const rawPackage = packageItem?.raw || packageItem || {};
   const review = rawPackage.source_insights?.day1_review
     || rawPackage.image_requirements?.day1_review
-    || dayPackage?.source_insights?.day1_review
-    || dayPackage?.image_requirements?.day1_review
+    || packageItem?.source_insights?.day1_review
+    || packageItem?.image_requirements?.day1_review
     || null;
   const account = campaignContext?.primaryAccount;
   return {
-    package: dayPackage,
+    package: packageItem,
     task,
-    metric,
+    realMetrics,
     review,
     accountLabel: account?.account_name || account?.username || account?.name || '运营账号未关联',
   };
@@ -313,87 +286,19 @@ function getPackageDay(item = {}) {
   return match ? Number(match[1]) : null;
 }
 
-function MemorySection({ children, count, description, eyebrow, title }) {
-  return (
-    <section className="table-card memory-section">
-      <div className="panel-title"><div><p className="eyebrow">{eyebrow}</p><h3>{title}</h3><p>{description}</p></div><span>{count} 条</span></div>
-      <div className="memory-card-list">{children}</div>
-    </section>
-  );
+function filterMemory(rows = []) {
+  return [...rows]
+    .filter((row) => {
+      const status = String(row.status || row.results?.suggestion_status || '').toLowerCase();
+      return !/phase[2789]|debug|test|marker/i.test(`${row.strategy_name || ''} ${row.pattern || ''}`)
+        && (!status || ['approved', 'completed', 'success', 'validated', 'verified', 'planned', 'pending_review'].includes(status));
+    })
+    .sort((a, b) => new Date(b.last_used_at || b.updated_at || b.created_at || 0) - new Date(a.last_used_at || a.updated_at || a.created_at || 0));
 }
 
-function ContentMemoryCard({ memory }) {
-  const tags = normalizeList(memory.tags);
-  return (
-    <article className="memory-card">
-      <div className="memory-card-head"><strong>{memory.pattern || memory.content_type || '内容模式'}</strong>{memory.platform && <span className="memory-platform">{memory.platform}</span>}</div>
-      <div className="memory-facts"><span>{memory.content_type || '内容'}</span><span>成功率 {formatRate(memory.success_rate)}</span><span>{memory.source || '分析'}</span></div>
-      {tags.length > 0 && <div className="tag-row">{tags.slice(0, 8).map((tag) => <span className="tag" key={String(tag)}>#{tag}</span>)}</div>}
-    </article>
-  );
-}
-
-function StrategyMemoryCard({ memory }) {
-  return (
-    <article className="memory-card">
-      <div className="memory-card-head"><strong>{memory.strategy_name || memory.strategy_type || '策略复盘'}</strong><StatusBadge status={memory.status || 'completed'} /></div>
-      <p>{memory.lessons_learned || memory.description || '策略执行结果已记录。'}</p>
-      <div className="memory-footer"><span>{memory.results?.suggestion_status === 'pending_review' ? '待审核建议' : '策略记忆'}</span><time>{formatDate(memory.updated_at || memory.created_at)}</time></div>
-    </article>
-  );
-}
-
-function metricContainer(item) {
-  return item?.metrics?.values || item?.metrics_json?.values || item?.metrics || item?.metrics_json || {};
-}
-
-function getMetric(item, key) {
-  const values = metricContainer(item);
-  const aliases = key === 'impressions' ? ['impressions', 'views', 'reach'] : key === 'link_clicks' ? ['link_clicks', 'clicks'] : [key];
-  for (const alias of aliases) {
-    const value = values?.[alias] ?? item?.[alias];
-    if (value === null || value === undefined || value === '') continue;
-    const number = Number(value);
-    if (Number.isFinite(number)) return number;
-  }
-  return 0;
-}
-
-function getMetricAvailability(item, key) {
-  return item?.metrics?.availability?.[key]?.status || item?.metrics_json?.availability?.[key]?.status || 'unknown';
-}
-
-function formatMetricNumber(item, key) {
-  return getMetricAvailability(item, key) === 'unavailable' ? '暂不可用' : compactNumber(getMetric(item, key));
-}
-
-function getExposure(item) {
-  return getMetric(item, 'impressions');
-}
-
-function getInteractions(item) {
-  return getMetric(item, 'likes') + getMetric(item, 'comments') + getMetric(item, 'shares');
-}
-
-function getMetricDate(item) {
-  return item?.fetched_at || item?.last_sync || item?.collected_at || item?.created_at || item?.updated_at;
-}
-
-function getMetricTitle(item) {
-  return item?.title || item?.content_ref || item?.platform_post_id || item?.platform || '内容表现';
-}
-
-function formatRate(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return '—';
-  return `${Math.round(number > 1 ? number : number * 100)}%`;
-}
-
-function classificationLabel(value) {
-  return {
-    verified_conclusion: '已验证结论',
-    initial_signal: '初步信号',
-    hypothesis: '待验证假设',
-    insufficient_data: '无足够数据',
-  }[value] || '待验证假设';
+function readReviewText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.filter(Boolean).join('；');
+  return value.conclusion || value.summary || value.observation || '';
 }

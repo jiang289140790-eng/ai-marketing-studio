@@ -1,97 +1,126 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AccountForm } from '../components/AccountForm';
 import { EmptyState } from '../components/EmptyState';
-import { StatCard } from '../components/StatCard';
+import { MoreActionsMenu } from '../components/MoreActionsMenu';
 import { StatusBadge } from '../components/StatusBadge';
 import { useConfirmation } from '../contexts/confirmation-context';
-import { accountCategories } from '../data/navigation';
 import {
   createSocialAccount,
   deleteSocialAccount,
   listSocialAccounts,
   updateSocialAccount,
 } from '../services/account-service';
+import { loadAccountMatrixData } from '../services/ops-service';
 import { listPlatformConnections } from '../services/platform-connection-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
-import { formatDate, statusLabel } from '../utils/formatters';
+import {
+  buildAccountMatrixRows,
+  getAccountRole,
+  isReferenceAccount,
+  safeBusinessText,
+} from '../utils/account-matrix';
+import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
+import { formatDate } from '../utils/formatters';
 
-function getAccountRole(account) {
-  const role = account.account_role || account.account_type || account.account_category || 'owned';
-  if (role === 'brand' || role === 'personal') return 'owned';
-  return role;
+const ACCOUNT_TABS = [
+  { id: 'owned', label: '自有账号' },
+  { id: 'reference', label: '对标与灵感' },
+  { id: 'all', label: '全部账号' },
+];
+
+const DETAIL_TABS = [
+  ['overview', '概览'],
+  ['brain', '账号大脑'],
+  ['samples', '内容样本'],
+  ['campaigns', '运营活动关联'],
+  ['character', '角色绑定'],
+  ['capabilities', '平台能力'],
+  ['history', '分析历史'],
+  ['quality', '数据质量'],
+];
+
+function isErrorMessage(message) {
+  return /失败|错误|缺少|error|failed/i.test(String(message || ''));
 }
 
-function getConnectionsForAccount(account, allConnections = []) {
-  const embeddedConnections = account.platform_connections || [];
-  const relatedConnections = allConnections.filter((connection) => connection.account_id === account.id);
-  const byId = new Map();
-  [...embeddedConnections, ...relatedConnections].forEach((connection) => {
-    if (connection?.id) byId.set(connection.id, connection);
-  });
-  return Array.from(byId.values());
+function isConnected(row) {
+  return row?.status === 'connected' || row?.is_connected === true;
 }
 
-function connectionIsActive(connection) {
-  return connection?.status === 'connected' || connection?.is_connected === true;
+function TextValue({ value, fallback = '—' }) {
+  const safe = safeBusinessText(value, fallback);
+  return <span className={safe.damaged ? 'damaged-text' : ''}>{safe.text}</span>;
 }
 
-function messageIsError(message) {
-  return /error|failed|missing|失败|异常|缺少/i.test(String(message || ''));
-}
-
-export function AccountsPage({ userId, detailId, onNavigate }) {
+export function AccountsPage({
+  activeCampaignId,
+  auxiliaryMode = 'business',
+  campaignContext,
+  dataScope = 'campaign',
+  userId,
+  detailId,
+  onNavigate,
+}) {
   const { confirm } = useConfirmation();
-  const [accounts, setAccounts] = useState([]);
-  const [connections, setConnections] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [tab, setTab] = useState('owned');
+  const [view, setView] = useState('table');
+  const [detailTab, setDetailTab] = useState('overview');
+  const [selectedId, setSelectedId] = useState(detailId || '');
   const [editing, setEditing] = useState(null);
-  const [selectedAccount, setSelectedAccount] = useState(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) {
-      setIsLoading(false);
+      setLoading(false);
       return;
     }
-    setIsLoading(true);
+    setLoading(true);
     try {
-      const [nextAccounts, nextConnections] = await Promise.all([
+      const [accounts, connections, related] = await Promise.all([
         listSocialAccounts(userId),
         listPlatformConnections(userId),
+        loadAccountMatrixData(),
       ]);
-      setAccounts(nextAccounts);
-      setConnections(nextConnections);
-      setSelectedAccount((current) => {
-        if (!current) return null;
-        return nextAccounts.find((account) => account.id === current.id) || null;
-      });
+      const scopeOptions = { scope: dataScope, campaignContext, activeCampaignId };
+      const scopedAccounts = filterRecordsForAuxiliaryScope(accounts, scopeOptions);
+      const scopedConnections = filterRecordsForAuxiliaryScope(connections, scopeOptions);
+      setRows(buildAccountMatrixRows({
+        accounts: scopedAccounts,
+        connections: scopedConnections,
+        accountReports: related.accountReports,
+        viralContents: related.viralContents,
+        contentAnalysis: related.contentAnalysis,
+        characters: related.characters,
+        campaigns: related.campaigns,
+        publishTasks: related.publishTasks,
+      }));
+    } catch (error) {
+      setMessage(error.message);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  }, [userId]);
+  }, [activeCampaignId, campaignContext, dataScope, userId]);
 
   useEffect(() => {
-    refresh().catch((error) => setMessage(error.message));
+    refresh();
   }, [refresh]);
 
   useEffect(() => {
-    if (!detailId || !accounts.length) return;
-    setSelectedAccount(accounts.find((account) => String(account.id) === String(detailId)) || null);
-  }, [accounts, detailId]);
+    if (detailId) setSelectedId(detailId);
+  }, [detailId]);
 
-  const stats = useMemo(() => {
-    const connectedConnections = connections.filter((connection) => connection.status === 'connected');
-    return {
-      total: accounts.length,
-      owned: accounts.filter((account) => getAccountRole(account) === 'owned').length,
-      intelligence: accounts.filter((account) => ['competitor', 'inspiration'].includes(getAccountRole(account))).length,
-      connected: connectedConnections.length,
-      profiled: accounts.filter((account) => account.account_profiles?.length > 0).length,
-    };
-  }, [accounts, connections]);
+  const visibleRows = useMemo(() => rows.filter((row) => {
+    if (tab === 'owned') return getAccountRole(row) === 'owned';
+    if (tab === 'reference') return isReferenceAccount(row);
+    return true;
+  }), [rows, tab]);
 
-  async function handleSave(payload) {
+  const selected = rows.find((row) => String(row.id) === String(selectedId)) || null;
+
+  async function saveAccount(payload) {
     try {
       if (editing) {
         await updateSocialAccount(editing.id, payload);
@@ -101,187 +130,356 @@ export function AccountsPage({ userId, detailId, onNavigate }) {
         setMessage('账号已创建。');
       }
       setEditing(null);
-      setIsCreating(false);
+      setCreating(false);
       await refresh();
     } catch (error) {
       setMessage(error.message);
     }
   }
 
-  async function handleDelete(account) {
+  async function removeAccount(account) {
     const accepted = await confirm({
       title: '删除账号？',
-      message: `将删除“${account.account_name || account.username || '未命名账号'}”。该账号关联的内容情报、画像和发布配置可能不再可用。`,
+      message: `将删除“${account.account_name || account.username || '未命名账号'}”。关联的情报、账号大脑和发布配置可能不再可用。`,
       confirmLabel: '确认删除',
       danger: true,
     });
     if (!accepted) return;
     try {
       await deleteSocialAccount(account.id);
-      if (selectedAccount?.id === account.id) {
-        setSelectedAccount(null);
-        onNavigate('accounts');
-      }
-      setMessage(`已删除账号：${account.account_name || account.username}`);
+      if (String(selectedId) === String(account.id)) setSelectedId('');
+      setMessage('账号已删除。');
       await refresh();
     } catch (error) {
       setMessage(error.message);
     }
   }
 
-  function renderAccountDetail(account) {
-    if (!account) return null;
-    const profile = account.account_profiles?.[0];
-    const accountConnections = getConnectionsForAccount(account, connections);
-    return (
-      <article className="detail-panel account-detail-panel">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">账号大脑</p>
-            <h3>{account.account_name || account.username}</h3>
-            <p>{account.platform} · {statusLabel(getAccountRole(account))} · {account.account_url || '暂无 URL'}</p>
-          </div>
-          <button className="ghost-button" type="button" onClick={() => {
-            setSelectedAccount(null);
-            onNavigate('accounts');
-          }}>关闭详情</button>
-        </div>
+  function openDetail(row) {
+    setSelectedId(row.id);
+    setDetailTab('overview');
+    onNavigate?.('accounts', row.id);
+  }
 
-        <dl>
-          <div><dt>平台</dt><dd>{account.platform}</dd></div>
-          <div><dt>用户名</dt><dd>{account.username || '—'}</dd></div>
-          <div><dt>账号类型</dt><dd>{statusLabel(getAccountRole(account))}</dd></div>
-          <div><dt>连接记录</dt><dd>{accountConnections.length}</dd></div>
-        </dl>
+  function runNextAction(row) {
+    if (row.nextAction === '连接平台') onNavigate?.('connections');
+    else if (['抓取内容样本', '分析账号'].includes(row.nextAction)) onNavigate?.('intelligence');
+    else openDetail(row);
+  }
 
-        <div className="profile-grid">
-          <section><h4>目标用户</h4><p>{profile?.target_audience || account.target_audience || '等待 AI 画像'}</p></section>
-          <section><h4>内容方向</h4><p>{profile?.content_direction || account.content_strategy || '等待 AI 画像'}</p></section>
-          <section><h4>内容风格</h4><p>{profile?.content_style || '等待 AI 画像'}</p></section>
-          <section><h4>发布频率</h4><p>{profile?.posting_frequency || account.posting_frequency || '等待 AI 画像'}</p></section>
-          <section><h4>品牌定位</h4><p>{profile?.brand_positioning || '等待 AI 画像'}</p></section>
-          <section><h4>AI 策略</h4><p>{profile?.ai_strategy || '等待 AI 画像'}</p></section>
-        </div>
-      </article>
-    );
+  if (!isSupabaseConfigured) {
+    return <EmptyState title="等待数据服务配置" description="完成数据服务连接后，这里会显示账号身份、账号大脑和运营用途。" />;
+  }
+  if (!userId) {
+    return <EmptyState title="请先登录" description="登录后才能读取和管理你的账号矩阵。" />;
   }
 
   return (
-    <section className="page-stack">
+    <section className="page-stack account-matrix-page">
       <div className="section-head">
         <div>
-          <p className="eyebrow">账号智能中心</p>
-          <h2>账号矩阵管理</h2>
-          <p>这里是唯一的账号资产中心。自己的账号、竞品账号和灵感账号都统一放在这里，后续供内容情报、智能体和发布系统调用。</p>
+          <p className="eyebrow">账号业务中心</p>
+          <h2>账号矩阵</h2>
+          <p>管理账号身份、账号大脑和运营用途。OAuth、权限和发布能力统一到“平台连接”管理。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setIsCreating(true)} disabled={!isSupabaseConfigured || !userId}>
-          添加账号
-        </button>
+        <button className="primary-button" type="button" onClick={() => setCreating(true)}>添加账号</button>
       </div>
 
-      {(isCreating || editing) && (
-        <AccountForm initialValue={editing} onSubmit={handleSave} onCancel={() => { setIsCreating(false); setEditing(null); }} />
+      {(creating || editing) && (
+        <AccountForm
+          initialValue={editing}
+          onSubmit={saveAccount}
+          onCancel={() => { setCreating(false); setEditing(null); }}
+        />
       )}
+      {message && <div className={isErrorMessage(message) ? 'notice error' : 'notice'}>{message}</div>}
 
-      {message && <div className={messageIsError(message) ? 'notice error' : 'notice'}>{message}</div>}
-
-      <div className="stat-grid">
-        <StatCard label="账号总数" value={stats.total} hint="统一账号资产" />
-        <StatCard label="自有账号" value={stats.owned} hint="owned" />
-        <StatCard label="情报账号" value={stats.intelligence} hint="competitor / inspiration" />
-        <StatCard label="平台已连接" value={stats.connected} hint="已授权连接" />
-        <StatCard label="已有 AI 画像" value={stats.profiled} hint="账号智能分析" />
+      <div className="account-matrix-toolbar">
+        <div className="segmented-tabs" role="tablist" aria-label="账号分类">
+          {ACCOUNT_TABS.map((item) => (
+            <button
+              className={tab === item.id ? 'active' : ''}
+              type="button"
+              role="tab"
+              aria-selected={tab === item.id}
+              key={item.id}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+              <strong>{rows.filter((row) => (
+                item.id === 'all'
+                  || (item.id === 'owned' ? getAccountRole(row) === 'owned' : isReferenceAccount(row))
+              )).length}</strong>
+            </button>
+          ))}
+        </div>
+        <div className="view-switch" aria-label="视图切换">
+          <button className={view === 'table' ? 'active' : ''} type="button" onClick={() => setView('table')}>表格</button>
+          <button className={view === 'cards' ? 'active' : ''} type="button" onClick={() => setView('cards')}>卡片</button>
+        </div>
       </div>
 
-      {renderAccountDetail(selectedAccount)}
-
-      {isLoading ? (
-        <div className="skeleton-grid" aria-label="账号矩阵加载中">
-          {Array.from({ length: 4 }, (_, index) => <div className="skeleton skeleton-card" key={index} />)}
-        </div>
-      ) : !isSupabaseConfigured ? (
-        <EmptyState title="等待数据服务配置" description="配置完成后，这里会读取你的真实账号、画像和平台连接状态。" />
-      ) : !userId ? (
-        <EmptyState title="请先登录" description="登录后才能读取和管理你的个人账号矩阵。" />
-      ) : accounts.length === 0 ? (
-        <EmptyState title="还没有账号" description="添加第一个自有账号、竞品账号或灵感账号，后续 AI 会基于这些账号做情报分析。" />
+      {loading ? (
+        <div className="skeleton skeleton-card" aria-label="账号矩阵加载中" />
+      ) : visibleRows.length === 0 ? (
+        <EmptyState
+          title={tab === 'owned' ? '当前范围没有自有账号' : '当前范围没有对标或灵感账号'}
+          description={tab === 'owned'
+            ? '先添加一个运营账号，再到平台连接完成授权。'
+            : '先在账号矩阵添加竞争或灵感账号，内容情报会复用同一账号实体。'}
+          action={<button className="primary-button" type="button" onClick={() => setCreating(true)}>添加账号</button>}
+        />
+      ) : view === 'table' ? (
+        tab === 'reference'
+          ? <ReferenceAccountTable rows={visibleRows} onDetail={openDetail} onNext={runNextAction} />
+          : <OwnedAccountTable rows={visibleRows} includeReference={tab === 'all'} onDetail={openDetail} onNext={runNextAction} />
       ) : (
-        <div className="account-card-grid">
-          {accounts.map((account) => {
-            const profile = account.account_profiles?.[0];
-            const accountConnections = getConnectionsForAccount(account, connections);
-            const hasBrain = Boolean(profile || account.strategy_summary || account.brain_data);
-            return (
-              <article className="account-row-card" key={account.id}>
-                <div className="account-card-header">
-                  {account.avatar ? (
-                    <img className="account-avatar-thumb" src={account.avatar} alt="" loading="lazy" />
-                  ) : (
-                    <span className="account-avatar-fallback" aria-hidden="true">{String(account.account_name || account.username || '?').slice(0, 1).toUpperCase()}</span>
-                  )}
-                  <div className="account-card-identity">
-                    <h3>{account.account_name || account.username}</h3>
-                    <small>{account.username ? `@${String(account.username).replace(/^@/, '')}` : formatDate(account.created_at)} · {account.platform} · {statusLabel(getAccountRole(account))}</small>
-                  </div>
-                  <StatusBadge status={account.status} />
-                </div>
-
-                <div className="account-connection-row">
-                  <span>平台连接</span>
-                  <div className="connection-dots" aria-label="账号平台连接状态">
-                    {['x', 'telegram', 'youtube'].map((platform) => {
-                      const connection = accountConnections.find((item) => String(item.platform || '').toLowerCase() === platform);
-                      return (
-                        <span
-                          className={`connection-dot ${connectionIsActive(connection) ? 'connected' : ''}`}
-                          key={platform}
-                          title={`${platform.toUpperCase()}：${connectionIsActive(connection) ? '已连接' : '未连接'}`}
-                        >
-                          {platform.slice(0, 1).toUpperCase()}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="account-card-fields">
-                  <div><span>目标受众</span><p>{profile?.target_audience || account.target_audience || '—'}</p></div>
-                  <div><span>内容方向</span><p>{profile?.content_direction || account.content_strategy || '—'}</p></div>
-                  <div><span>发布频率</span><p>{profile?.posting_frequency || account.posting_frequency || '—'}</p></div>
-                </div>
-
-                <div className="account-card-footer">
-                  <span className={`account-brain-state ${hasBrain ? 'ready' : ''}`}>
-                    {hasBrain ? `AI 已画像 · ${formatDate(profile?.last_analyzed_at || profile?.updated_at)}` : '等待 AI 分析'}
-                  </span>
-                  <div className="table-actions">
-                    <button type="button" onClick={() => {
-                      setSelectedAccount(account);
-                      onNavigate('accounts', account.id);
-                    }}>详情</button>
-                    <button type="button" onClick={() => setEditing(account)}>编辑</button>
-                    {account.account_url && <a className="ghost-button" href={account.account_url} target="_blank" rel="noreferrer">打开</a>}
-                    <button type="button" onClick={() => handleDelete(account)}>删除</button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+        <div className="account-compact-grid">
+          {visibleRows.map((row) => (
+            <AccountCard row={row} key={row.id} onDetail={openDetail} onNext={runNextAction} />
+          ))}
         </div>
       )}
 
-      {isSupabaseConfigured && (
-        <div className="tag-panel">
-          <strong>账号角色</strong>
-          <div className="tag-row">
-            {accountCategories.map((category) => (
-              <span key={category.value} className="tag">
-                {category.label} · {accounts.filter((account) => getAccountRole(account) === category.value).length}
-              </span>
-            ))}
-          </div>
-        </div>
+      {selected && (
+        <AccountDetailDrawer
+          account={selected}
+          activeTab={detailTab}
+          mode={auxiliaryMode}
+          onTab={setDetailTab}
+          onClose={() => { setSelectedId(''); onNavigate?.('accounts'); }}
+          onEdit={() => setEditing(selected)}
+          onDelete={() => removeAccount(selected)}
+          onNavigate={onNavigate}
+        />
       )}
     </section>
   );
+}
+
+function OwnedAccountTable({ rows, includeReference, onDetail, onNext }) {
+  return (
+    <div className="business-table-wrap">
+      <table className="business-table account-matrix-table">
+        <thead>
+          <tr>
+            <th>账号</th><th>平台</th>{includeReference && <th>用途</th>}<th>连接</th>
+            <th>发布</th><th>指标回收</th><th>绑定角色</th><th>当前运营活动</th>
+            <th>最近发布</th><th>最近分析</th><th>账号大脑</th><th>下一步</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td><AccountIdentity row={row} /></td>
+              <td>{row.platform || '—'}</td>
+              {includeReference && <td>{row.role === 'competitor' ? '竞争' : row.role === 'inspiration' ? '灵感' : '自有'}</td>}
+              <td><Capability state={row.connections.some(isConnected) ? 'available' : 'not_connected'} label={row.connections.some(isConnected) ? '已连接' : '未连接'} /></td>
+              <td><Capability {...row.publishCapability} /></td>
+              <td><Capability {...row.metricsCapability} /></td>
+              <td>{row.character?.name || row.character?.character_name || '未绑定'}</td>
+              <td>{row.campaigns[0]?.name || row.campaigns[0]?.title || '未关联'}</td>
+              <td>{formatDate(row.lastPublish?.published_at || row.lastPublish?.updated_at)}</td>
+              <td>{formatDate(row.lastAnalysis?.last_analyzed_at || row.lastAnalysis?.created_at)}</td>
+              <td><StatusBadge status={row.brain.state} /></td>
+              <td><RowActions row={row} onDetail={onDetail} onNext={onNext} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ReferenceAccountTable({ rows, onDetail, onNext }) {
+  return (
+    <div className="business-table-wrap">
+      <table className="business-table account-matrix-table reference-table">
+        <thead>
+          <tr>
+            <th>账号</th><th>平台</th><th>类型</th><th>最近抓取</th><th>有效样本</th>
+            <th>数据来源</th><th>分析可信度</th><th>账号大脑</th><th>可复制模式</th>
+            <th>数据质量</th><th>下一步</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td><AccountIdentity row={row} /></td>
+              <td>{row.platform || '—'}</td>
+              <td>{row.role === 'competitor' ? '竞争' : '灵感'}</td>
+              <td>{formatDate(row.samples[0]?.created_at)}</td>
+              <td>{row.samples.length}</td>
+              <td>{row.sourceLabel}</td>
+              <td>{row.confidence ? `${Math.round(row.confidence * (row.confidence <= 1 ? 100 : 1))}%` : '样本不足'}</td>
+              <td><StatusBadge status={row.brain.state} /></td>
+              <td><span className="line-clamp-2">{row.patterns.slice(0, 2).join('；') || '等待分析'}</span></td>
+              <td>{row.dataWarnings.length ? <span className="quality-warning">{row.dataWarnings[0]}</span> : '正常'}</td>
+              <td><RowActions row={row} onDetail={onDetail} onNext={onNext} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AccountIdentity({ row }) {
+  return (
+    <div className="account-identity-cell">
+      {row.avatar
+        ? <img src={row.avatar} alt="" loading="lazy" />
+        : <span>{String(row.account_name || row.username || '?').slice(0, 1).toUpperCase()}</span>}
+      <div>
+        <strong><TextValue value={row.account_name || row.username} fallback="未命名账号" /></strong>
+        <small>{row.username ? `@${String(row.username).replace(/^@/, '')}` : '未填写账号名'}</small>
+      </div>
+    </div>
+  );
+}
+
+function Capability({ state, label }) {
+  return <span className={`capability-pill capability-${state || 'not_connected'}`}>{label || '未知'}</span>;
+}
+
+function RowActions({ row, onDetail, onNext }) {
+  return (
+    <div className="row-action-stack">
+      <button type="button" className="text-button" onClick={() => onNext(row)}>{row.nextAction}</button>
+      <button type="button" className="text-button subtle" onClick={() => onDetail(row)}>详情</button>
+    </div>
+  );
+}
+
+function AccountCard({ row, onDetail, onNext }) {
+  return (
+    <article className="account-compact-card">
+      <div className="account-card-header"><AccountIdentity row={row} /><StatusBadge status={row.brain.state} /></div>
+      <div className="account-card-facts">
+        <span>平台<strong>{row.platform || '—'}</strong></span>
+        <span>用途<strong>{row.role === 'owned' ? '自有' : row.role === 'competitor' ? '竞争' : '灵感'}</strong></span>
+        <span>{row.role === 'owned' ? '连接' : '样本'}<strong>{row.role === 'owned' ? (row.connections.some(isConnected) ? '已连接' : '未连接') : row.samples.length}</strong></span>
+      </div>
+      {row.dataWarnings.length > 0 && <p className="quality-warning">{row.dataWarnings[0]}</p>}
+      <div className="account-card-footer">
+        <button className="primary-button compact" type="button" onClick={() => onNext(row)}>{row.nextAction}</button>
+        <button className="ghost-button compact" type="button" onClick={() => onDetail(row)}>查看详情</button>
+      </div>
+    </article>
+  );
+}
+
+function AccountDetailDrawer({ account, activeTab, mode, onTab, onClose, onEdit, onDelete, onNavigate }) {
+  const reference = isReferenceAccount(account);
+  return (
+    <aside className="detail-drawer account-detail-drawer" aria-label="账号详情">
+      <div className="detail-drawer-header">
+        <div>
+          <p className="eyebrow">{reference ? '对标与灵感账号' : '自有运营账号'}</p>
+          <h3><TextValue value={account.account_name || account.username} fallback="未命名账号" /></h3>
+          <p>{account.platform || '未知平台'} · {reference ? (account.role === 'competitor' ? '竞争账号' : '灵感账号') : '自有账号'}</p>
+        </div>
+        <button className="ghost-button" type="button" onClick={onClose}>关闭</button>
+      </div>
+      <div className="drawer-tabs" role="tablist">
+        {DETAIL_TABS.map(([id, label]) => (
+          <button className={activeTab === id ? 'active' : ''} key={id} type="button" onClick={() => onTab(id)}>{label}</button>
+        ))}
+      </div>
+      <div className="drawer-body">
+        {activeTab === 'overview' && (reference
+          ? <ReferenceOverview account={account} onNavigate={onNavigate} />
+          : <OwnedOverview account={account} onNavigate={onNavigate} />)}
+        {activeTab === 'brain' && <BrainTab account={account} mode={mode} />}
+        {activeTab === 'samples' && <SamplesTab account={account} />}
+        {activeTab === 'campaigns' && <SimpleList rows={account.campaigns} empty="尚未关联运营活动" getTitle={(row) => row.name || row.title} getMeta={(row) => row.status} />}
+        {activeTab === 'character' && <CharacterTab account={account} onNavigate={onNavigate} />}
+        {activeTab === 'capabilities' && <CapabilitiesTab account={account} onNavigate={onNavigate} />}
+        {activeTab === 'history' && <SimpleList rows={[...account.reports, ...account.analyses]} empty="暂无分析历史" getTitle={(row) => row.title || row.depth || row.analysis_type || '账号分析'} getMeta={(row) => formatDate(row.created_at)} />}
+        {activeTab === 'quality' && <QualityTab account={account} />}
+      </div>
+      <div className="detail-drawer-footer">
+        <button className="primary-button" type="button" onClick={onEdit}>编辑账号</button>
+        <MoreActionsMenu><button className="danger-action" type="button" onClick={onDelete}>删除账号</button></MoreActionsMenu>
+      </div>
+    </aside>
+  );
+}
+
+function OwnedOverview({ account, onNavigate }) {
+  return (
+    <div className="drawer-section-grid">
+      <DetailCard title="运营用途"><TextValue value={account.content_strategy || account.strategy_summary} fallback="尚未填写运营用途" /></DetailCard>
+      <DetailCard title="目标受众"><TextValue value={account.profile?.target_audience || account.target_audience} fallback="等待账号大脑分析" /></DetailCard>
+      <DetailCard title="当前运营活动">{account.campaigns[0]?.name || '未关联'}</DetailCard>
+      <DetailCard title="绑定角色">{account.character?.name || account.character?.character_name || '未绑定'}</DetailCard>
+      <button className="primary-button" type="button" onClick={() => onNavigate?.('campaigns')}>进入运营活动</button>
+    </div>
+  );
+}
+
+function ReferenceOverview({ account, onNavigate }) {
+  return (
+    <div className="drawer-section-grid">
+      <DetailCard title="账号类型">{account.role === 'competitor' ? '竞争账号' : '灵感账号'}</DetailCard>
+      <DetailCard title="有效内容样本">{account.samples.length} 条</DetailCard>
+      <DetailCard title="分析可信度">{account.confidence ? `${Math.round(account.confidence * (account.confidence <= 1 ? 100 : 1))}%` : '样本不足'}</DetailCard>
+      <DetailCard title="可复制模式">{account.patterns.join('；') || '等待分析'}</DetailCard>
+      <button className="primary-button" type="button" onClick={() => onNavigate?.('intelligence')}>进入内容情报</button>
+    </div>
+  );
+}
+
+function BrainTab({ account, mode }) {
+  const brain = account.latestReport?.account_brain || account.brain_data || account.profile;
+  if (!brain) return <DrawerEmpty title="账号大脑尚未生成" action="请先运行账号分析，再回到这里查看结论。" />;
+  const summary = typeof brain === 'string' ? brain : brain.summary || brain.positioning || account.strategy_summary;
+  return (
+    <div className="drawer-section-grid">
+      <DetailCard title="状态"><StatusBadge status={account.brain.state} /></DetailCard>
+      <DetailCard title="核心结论"><TextValue value={summary} fallback="已有结构化结果，请切换高级模式查看。" /></DetailCard>
+      <DetailCard title="内容方向"><TextValue value={account.profile?.content_direction || account.content_strategy} fallback="等待补充" /></DetailCard>
+      {mode === 'advanced' && <pre data-technical-detail>{JSON.stringify(brain, null, 2)}</pre>}
+    </div>
+  );
+}
+
+function SamplesTab({ account }) {
+  return <SimpleList rows={account.samples} empty="暂无内容样本，请先到内容情报抓取或导入。" getTitle={(row) => safeBusinessText(row.title || row.content, '未命名样本').text} getMeta={(row) => `${formatDate(row.published_at || row.created_at)} · 互动分 ${row.engagement_score || 0}`} />;
+}
+
+function CharacterTab({ account, onNavigate }) {
+  if (!account.character) return <DrawerEmpty title="尚未绑定角色" action={<button className="primary-button" type="button" onClick={() => onNavigate?.('characters')}>去角色库绑定</button>} />;
+  return <DetailCard title="当前角色">{account.character.name || account.character.character_name}<br /><small>LoRA 配置在角色库维护，账号矩阵只显示绑定结果。</small></DetailCard>;
+}
+
+function CapabilitiesTab({ account, onNavigate }) {
+  return (
+    <div className="drawer-section-grid">
+      <DetailCard title="读取能力"><Capability {...account.readCapability} /></DetailCard>
+      <DetailCard title="发布能力"><Capability {...account.publishCapability} /></DetailCard>
+      <DetailCard title="指标回收"><Capability {...account.metricsCapability} /></DetailCard>
+      <DetailCard title="连接记录">{account.connections.length} 条</DetailCard>
+      <button className="primary-button" type="button" onClick={() => onNavigate?.('connections')}>管理平台连接</button>
+    </div>
+  );
+}
+
+function QualityTab({ account }) {
+  return account.dataWarnings.length
+    ? <div className="quality-warning-list">{account.dataWarnings.map((warning) => <div key={warning}><strong>需要处理</strong><p>{warning}</p><small>系统仅标记，不会自动覆盖或删除原始记录。</small></div>)}</div>
+    : <DrawerEmpty title="数据质量正常" action="未检测到明显乱码、重复身份或样本缺失。" />;
+}
+
+function DetailCard({ title, children }) {
+  return <section className="detail-card"><span>{title}</span><div>{children}</div></section>;
+}
+
+function SimpleList({ rows, empty, getTitle, getMeta }) {
+  if (!rows?.length) return <DrawerEmpty title={empty} />;
+  return <div className="drawer-list">{rows.slice(0, 30).map((row, index) => <article key={row.id || index}><strong>{getTitle(row)}</strong><small>{getMeta(row)}</small></article>)}</div>;
+}
+
+function DrawerEmpty({ title, action }) {
+  return <div className="drawer-empty"><strong>{title}</strong>{typeof action === 'string' ? <p>{action}</p> : action}</div>;
 }

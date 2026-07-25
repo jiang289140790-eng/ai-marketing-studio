@@ -85,7 +85,17 @@ export async function uploadAsset(userId, file, metadata = {}) {
     thumbnail: metadata.thumbnail || publicUrl,
     prompt: metadata.prompt || null,
     model: metadata.model || null,
-    workflow: metadata.workflow || null,
+    workflow: metadata.workflow || {
+      asset_context: {
+        campaign_id: metadata.campaignId || null,
+        day: metadata.day || null,
+        character_id: metadata.characterId || null,
+        content_package_id: metadata.contentPackageId || null,
+        purpose: metadata.purpose || 'reference',
+        source: metadata.source || 'upload',
+        rights: metadata.rights || '',
+      },
+    },
     tags: metadata.tags || [],
     source: 'upload',
   };
@@ -93,6 +103,21 @@ export async function uploadAsset(userId, file, metadata = {}) {
   const { data, error } = await client.from('assets').insert(asset).select().single();
   if (error) throw error;
   return data;
+}
+
+export async function assertAssetCanBeDeleted(asset) {
+  if (!asset?.id) throw new Error('缺少素材 ID。');
+  if (asset.usedByContentId || asset.contentId || asset.approvedForPublishing || asset.isPrimary) {
+    throw new Error('该素材已被内容或发布流程引用，不能直接删除。请先解除引用。');
+  }
+  const client = requireSupabase();
+  const { count, error } = await client
+    .from('content_library')
+    .select('id', { count: 'exact', head: true })
+    .eq('asset_id', asset.id);
+  if (error) throw error;
+  if (count > 0) throw new Error('该素材已被内容引用，不能直接删除。请先解除引用。');
+  return true;
 }
 
 async function uploadFileToStorage(client, path, file) {

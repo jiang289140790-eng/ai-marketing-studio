@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { navigationItems } from '../data/navigation.js';
 
 const validPages = new Set(navigationItems.map((item) => item.id));
+const legacyAliases = { aiworks: 'generation' };
 
 export function parseAppRoute(hash = window.location.hash) {
   const route = String(hash || '').replace(/^#\/?/, '');
   const [path = '', queryString = ''] = route.split('?');
   const [pageSegment = 'dashboard', detailSegment = ''] = path.split('/');
-  const page = validPages.has(pageSegment) ? pageSegment : 'dashboard';
+  const resolvedPage = legacyAliases[pageSegment] || pageSegment;
+  const page = validPages.has(resolvedPage) ? resolvedPage : 'dashboard';
   return {
     page,
     detailId: detailSegment ? decodeURIComponent(detailSegment) : '',

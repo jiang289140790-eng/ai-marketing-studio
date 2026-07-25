@@ -73,25 +73,27 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: 'Missing Authorization header.' }, 401);
     }
 
-    const body = await request.json().catch(() => ({}));
+    const rawBody = await request.text();
+    const body = rawBody ? JSON.parse(rawBody) : {};
     const action = body.action as PlatformAction | undefined;
     const platform = body.platform || 'Telegram';
+    const trustedOpsContext = await createTrustedOpsClient(request, rawBody, body.user_id);
 
     if (!action || !supportedActions.includes(action)) {
       return jsonResponse({ error: 'Unsupported platform action.' }, 400);
     }
 
     if (platform === 'X') {
-      const { client, user } = await createAuthorizedClient(authHeader);
+      const { client, user } = trustedOpsContext || await createAuthorizedClient(authHeader);
       return jsonResponse(await handleXPlatformAction(client, user.id, action, body));
     }
 
     if (platform !== 'Telegram') {
-      const { user } = await createAuthorizedClient(authHeader);
+      const { user } = trustedOpsContext || await createAuthorizedClient(authHeader);
       return jsonResponse(buildPreparedPlatformResponse(String(platform), action, body, user.id));
     }
 
-    const { client, user } = await createAuthorizedClient(authHeader);
+    const { client, user } = trustedOpsContext || await createAuthorizedClient(authHeader);
 
     if (action === 'notifyAdmin') {
       return jsonResponse(await sendAdminTelegramNotification(user.id, body));
@@ -147,6 +149,37 @@ async function createAuthorizedClient(authHeader: string) {
   const { data, error } = await client.auth.getUser(jwt);
   if (error || !data.user) throw new Error('Invalid user session.');
   return { client, user: data.user };
+}
+
+async function createTrustedOpsClient(request: Request, rawBody: string, delegatedUserId: unknown) {
+  const signature = request.headers.get('x-ops-platform-signature') || '';
+  if (!signature) return null;
+  const secret = Deno.env.get('OPS_MCP_BRIDGE_SECRET') || '';
+  const userId = String(delegatedUserId || '').trim();
+  if (!secret || !isUuid(userId)) throw new Error('Trusted operations invocation is not configured.');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const expectedBytes = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody));
+  const expected = Array.from(new Uint8Array(expectedBytes)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  if (!timingSafeEqual(signature, expected)) throw new Error('Trusted operations signature is invalid.');
+  const { client } = createServiceClient();
+  return { client, user: { id: userId } };
+}
+
+function timingSafeEqual(left: string, right: string) {
+  if (left.length !== right.length) return false;
+  let result = 0;
+  for (let index = 0; index < left.length; index += 1) result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return result === 0;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function createServiceClient() {
@@ -526,10 +559,15 @@ async function publishTelegram(client: ReturnType<typeof createClient>, userId: 
   const chatId = normalizeTelegramChatId(connection.metadata?.telegram?.chat_id || connection.social_accounts?.account_url || connection.social_accounts?.account_name || body.chat_id);
   if (!chatId) throw new Error('Telegram connection is missing chat_id or @channel username.');
 
-  const content = task.content_library || body.content || {};
-  const text = String(content.content_text || content.title || body.text || '').trim();
+  const content = task.content_library || task.content_packages || task.publish_content || body.content || {};
+  const text = String(content.content_text || content.body || content.title || body.text || '').trim();
   const title = String(content.title || '').trim();
-  const mediaUrl = String(content.media_url || '').trim();
+  const mediaUrl = String(
+    content.media_url
+    || task.publish_content?.assets?.find((asset: Record<string, unknown>) => asset.id === task.publish_content?.selected_asset_id)?.output_url
+    || task.publish_content?.assets?.[0]?.output_url
+    || '',
+  ).trim();
   const contentType = String(content.content_type || '').trim();
   const campaignUrl = buildCampaignPublishUrl(task);
   const publishText = appendCampaignLink(text || title, campaignUrl);
@@ -586,7 +624,7 @@ async function loadPublishTask(client: ReturnType<typeof createClient>, userId: 
 
   const { data, error } = await client
     .from('publish_tasks')
-    .select('*, content_library(title, content_text, media_url, content_type, platform), campaign_links(id, url, clicks, registrations, revenue)')
+    .select('*, content_library(title, content_text, media_url, content_type, platform), content_packages(title, body, platform, image_requirements, video_requirements)')
     .eq('id', taskId)
     .eq('user_id', userId)
     .single();
@@ -1106,7 +1144,7 @@ async function loadXPublishTask(client: ReturnType<typeof createClient>, userId:
 
   const { data, error } = await client
     .from('publish_tasks')
-    .select('*, content_library(title, content_text, media_url, content_type, platform), campaign_links(id, url, clicks, registrations, revenue)')
+    .select('*, content_library(title, content_text, media_url, content_type, platform), content_packages(title, body, platform, image_requirements, video_requirements)')
     .eq('id', taskId)
     .eq('user_id', userId)
     .single();
@@ -1446,7 +1484,7 @@ function extractTelegramInteraction(update: Record<string, any>) {
 async function findTelegramPublishTasks(client: ReturnType<typeof createClient>, messageId: string, chatId: string) {
   const { data, error } = await client
     .from('publish_tasks')
-    .select('*, campaign_links(id, clicks, registrations, revenue)')
+    .select('*')
     .eq('platform', 'Telegram')
     .eq('external_id', messageId);
   if (error) throw error;

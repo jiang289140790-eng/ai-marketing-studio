@@ -154,6 +154,19 @@ Deno.serve(async (request) => {
 });
 
 function validatePublishPayload(action: string, payload: Record<string, unknown>) {
+  if (action === 'run_publish_preflight') {
+    if (!payload.execution_mode || payload.execution_mode === 'dry_run') return;
+    throw new GatewayError('INVALID_INPUT', '发布预检只能使用 dry_run。', 400, false);
+  }
+  if (action === 'approve_publish_task') {
+    if (payload.human_confirmed === true) return;
+    throw new GatewayError('INVALID_INPUT', '批准发布任务必须包含明确人工确认。', 400, false);
+  }
+  if (action === 'execute_publish_task' || action === 'retry_publish_task') {
+    if (payload.execution_mode === 'dry_run') return;
+    if (payload.execution_mode === 'live' && payload.human_confirmed === true) return;
+    throw new GatewayError('INVALID_INPUT', '真实发布必须明确选择 live 并完成人工确认。', 400, false);
+  }
   if (action !== 'execute_publish') return;
   const isPreflight = payload.preflight_only === true;
   if (isPreflight && payload.dry_run === true) return;

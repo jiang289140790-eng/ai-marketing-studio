@@ -38,6 +38,20 @@ export const ACTION_REGISTRY = {
   finalize_content_package: { tool: 'finalize_content_package', async: false },
   approve_publish: { tool: 'approve_publish', async: false, transform: (payload) => ({ ...payload, action: 'approve' }) },
   reject_publish: { tool: 'approve_publish', async: false, transform: (payload) => ({ ...payload, action: 'reject' }) },
+  run_publish_preflight: { tool: 'run_publish_preflight', async: false },
+  approve_publish_task: { tool: 'approve_publish_task', async: false },
+  schedule_publish_task: { tool: 'schedule_publish_task', async: false },
+  get_publish_result: { tool: 'get_publish_result', async: false },
+  execute_publish_task: {
+    tool: 'execute_publish_task',
+    async: true,
+    transform: enforcePublishSafety,
+  },
+  retry_publish_task: {
+    tool: 'retry_publish_task',
+    async: true,
+    transform: enforcePublishSafety,
+  },
   execute_publish: {
     tool: 'execute_publish',
     async: true,
@@ -55,6 +69,18 @@ export const ACTION_REGISTRY = {
   },
   analyze_account: { tool: 'analyze_account_intelligence', async: true },
 };
+
+function enforcePublishSafety(payload = {}) {
+  const realPublishEnabled = process.env.ALLOW_REAL_PUBLISH === 'true';
+  const humanConfirmed = payload.human_confirmed === true;
+  const liveRequested = payload.execution_mode === 'live';
+  return {
+    ...payload,
+    execution_mode: realPublishEnabled && humanConfirmed && liveRequested ? 'live' : 'dry_run',
+    human_confirmed: humanConfirmed,
+    real_publish_enabled: realPublishEnabled,
+  };
+}
 
 export const NOT_CONFIGURED_ACTIONS = {
   sync_x_account: 'X MCP 同步需要在 Bridge 运行环境中配置 X MCP 授权。',

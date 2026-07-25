@@ -1,170 +1,451 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
 import { ExecutionButton } from '../components/ExecutionButton';
-import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
-import { countWhere, displayText, findById, getAssets, getContentPackages, loadPublishQueueData, normalizeList } from '../services/ops-service';
+import { findById, getAssets, getContentPackages, loadPublishQueueData } from '../services/ops-service';
+import {
+  buildPublishPreflightChecks,
+  CONTENT_APPROVAL,
+  EXECUTION_MODE,
+  getContentApprovalState,
+  getDryRunPresentation,
+  getExecutionMode,
+  getPublishErrorPresentation,
+  getPublishTaskState,
+  PUBLISH_TASK_STATE,
+} from '../services/publish-state-machine';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { getContentPackageDay } from '../utils/campaign-daily-plan';
 import { formatDate } from '../utils/formatters';
 
 const EMPTY = {
-  publishTasks: [], publishMetrics: [], platformConnections: [], accounts: [],
-  legacyContent: [], contentPackages: [], assets: [], legacyAssets: [],
+  publishTasks: [],
+  publishMetrics: [],
+  platformConnections: [],
+  accounts: [],
+  legacyContent: [],
+  contentPackages: [],
+  assets: [],
+  legacyAssets: [],
 };
 
-const PUBLISH_FLOW = [
-  ['draft', '草稿'], ['ready_for_review', '待审核'], ['approved', '已批准'],
-  ['scheduled', '已排期'], ['publishing', '发布中'], ['published', '已发布'], ['failed', '失败'],
+const VIEWS = [
+  ['pending', '待处理'],
+  ['calendar', '发布日历'],
+  ['scheduled', '已排期'],
+  ['publishing', '发布中'],
+  ['published', '已发布'],
+  ['failed', '失败'],
 ];
 
-export function PublishQueuePage({ userId, onNavigate, campaignContext }) {
+export function PublishQueuePage({ userId, onNavigate, activeCampaignId, campaignContext, detailId }) {
   const [data, setData] = useState(EMPTY);
   const [loading, setLoading] = useState(false);
+  const [activeView, setActiveView] = useState('pending');
+
+  const loadData = useCallback(() => {
+    if (!userId || !isSupabaseConfigured) return Promise.resolve();
+    setLoading(true);
+    return loadPublishQueueData()
+      .then((nextData) => setData({ ...EMPTY, ...nextData }))
+      .finally(() => setLoading(false));
+  }, [userId]);
 
   useEffect(() => {
-    if (!userId || !isSupabaseConfigured) return undefined;
-    setLoading(true);
-    loadPublishQueueData().then((nextData) => setData({ ...EMPTY, ...nextData })).finally(() => setLoading(false));
-    return undefined;
-  }, [userId]);
+    loadData();
+  }, [loadData]);
 
   const allowedPackageIds = useMemo(
     () => new Set((campaignContext?.contentPackages || []).map((item) => String(item.id))),
     [campaignContext?.contentPackages],
   );
-  const scopedPublishTasks = useMemo(
-    () => data.publishTasks.filter((task) => allowedPackageIds.has(String(task.content_package_id || ''))),
-    [allowedPackageIds, data.publishTasks],
-  );
+  const scopedPublishTasks = useMemo(() => {
+    const rows = data.publishTasks.filter((task) => (
+      !activeCampaignId
+      || String(task.campaign_id || '') === String(activeCampaignId)
+      || allowedPackageIds.has(String(task.content_package_id || ''))
+    ));
+    return rows.sort((left, right) => String(right.updated_at || right.created_at || '').localeCompare(
+      String(left.updated_at || left.created_at || ''),
+    ));
+  }, [activeCampaignId, allowedPackageIds, data.publishTasks]);
   const contentPackages = useMemo(() => getContentPackages({
     ...data,
-    contentPackages: data.contentPackages.filter((item) => allowedPackageIds.has(String(item.id))),
-  }), [allowedPackageIds, data]);
+    contentPackages: data.contentPackages.filter((item) => (
+      !activeCampaignId
+      || allowedPackageIds.has(String(item.id))
+      || String(item.campaign_id || item.campaignId || '') === String(activeCampaignId)
+    )),
+  }), [activeCampaignId, allowedPackageIds, data]);
   const assets = useMemo(() => getAssets(data), [data]);
+  const visibleTasks = useMemo(
+    () => filterTasks(scopedPublishTasks, activeView, detailId),
+    [activeView, detailId, scopedPublishTasks],
+  );
+  const counts = useMemo(() => countViews(scopedPublishTasks), [scopedPublishTasks]);
 
-  if (!isSupabaseConfigured) return <EmptyState title="等待数据服务配置" description="配置完成后，发布队列会读取真实发布任务。" />;
-  if (!userId) return <EmptyState title="请先登录" description="登录后才能查看发布队列。" />;
+  if (!isSupabaseConfigured) return <EmptyState title="等待数据服务配置" description="配置完成后，发布中心会读取真实发布任务。" />;
+  if (!userId) return <EmptyState title="请先登录" description="登录后才能查看和批准发布任务。" />;
 
   return (
-    <section className="page-stack publish-queue-page">
-      <div className="hero-panel">
-        <p className="eyebrow">发布队列</p>
-        <h2>先检查，再批准，最后人工二次确认发布</h2>
-        <p>发布动作只能通过安全执行网关完成。内容、账号连接、发布权限、格式和人工确认缺少任何一项，都不能执行真实发布。</p>
-        <div className="publish-status-flow" aria-label="发布状态流">
-          {PUBLISH_FLOW.map(([id, label], index) => <span key={id}>{label}{index < PUBLISH_FLOW.length - 1 && <b>→</b>}</span>)}
+    <section className="page-stack publish-center-v2">
+      <header className="publish-center-header">
+        <div>
+          <p className="eyebrow">发布中心 · Telegram 第一阶段</p>
+          <h2>一个入口完成预检、批准、排期与发布</h2>
+          <p>内容审核、发布任务和执行模式分别展示。测试执行通过不会被标记为发布失败，真实发布仍默认要求人工确认。</p>
         </div>
-      </div>
+        <div className="publish-safety-note">
+          <strong>默认安全模式</strong>
+          <span>dry_run · 不执行真实发布</span>
+        </div>
+      </header>
 
-      <div className="stat-grid compact">
-        <StatCard label="发布任务" value={loading ? '-' : scopedPublishTasks.length} hint="等待人工检查" />
-        <StatCard label="待批准" value={loading ? '-' : countWhere(scopedPublishTasks, (item) => ['pending', 'draft', 'ready_for_review', 'scheduled'].includes(item.approval_status || item.status))} hint="不会自动发布" />
-        <StatCard label="已批准" value={loading ? '-' : countWhere(scopedPublishTasks, (item) => item.approval_status === 'approved')} hint="仍需二次确认" />
-        <StatCard label="失败" value={loading ? '-' : countWhere(scopedPublishTasks, (item) => item.status === 'failed')} hint="保留错误信息并允许重试" />
-      </div>
+      <nav className="publish-view-tabs" aria-label="发布任务分类">
+        {VIEWS.map(([id, label]) => (
+          <button type="button" className={activeView === id ? 'active' : ''} key={id} onClick={() => setActiveView(id)}>
+            <span>{label}</span>
+            {id !== 'calendar' && <strong>{counts[id] || 0}</strong>}
+          </button>
+        ))}
+      </nav>
 
-      <div className="stack-list">
-        {scopedPublishTasks.length ? scopedPublishTasks.map((task) => (
-          <PublishTaskCard key={task.id} task={task} contentPackages={contentPackages} connections={data.platformConnections} accounts={data.accounts} assets={assets} onNavigate={onNavigate} />
-        )) : <EmptyState title="暂无发布任务" description="内容工作台终审通过后，发布任务会进入这里等待人工批准。" />}
-      </div>
+      {activeView === 'calendar' ? (
+        <PublishCalendar tasks={scopedPublishTasks} contentPackages={contentPackages} />
+      ) : (
+        <div className="publish-task-list">
+          {visibleTasks.length ? visibleTasks.map((task) => (
+            <PublishTaskCard
+              key={task.id}
+              task={task}
+              contentPackages={contentPackages}
+              connections={data.platformConnections}
+              accounts={data.accounts}
+              assets={assets}
+              onNavigate={onNavigate}
+              onRefresh={loadData}
+            />
+          )) : (
+            <EmptyState
+              title={loading ? '正在读取发布任务' : '当前分类暂无任务'}
+              description="内容工作台审核通过并创建发布任务后，会进入这里。"
+            />
+          )}
+        </div>
+      )}
     </section>
   );
 }
 
-function PublishTaskCard({ task, contentPackages, connections, accounts, assets, onNavigate }) {
-  const [humanConfirmed, setHumanConfirmed] = useState(false);
+function PublishTaskCard({ task, contentPackages, connections, accounts, assets, onNavigate, onRefresh }) {
   const content = findById(contentPackages, task.content_id || task.content_package_id);
   const connection = findConnection(task, connections, content);
   const account = findById(accounts, task.account_id || connection?.account_id || content?.accountId);
-  const asset = findById(assets, task.asset_id || task.final_asset_id || content?.assetId);
-  const currentStatus = String(task.status || task.approval_status || 'draft').toLowerCase();
-  const checks = buildPreflightChecks(task, content, connection, account);
-  const baseFailure = checks.find((check) => !check.ok)?.detail;
-  const executionReason = baseFailure || (!humanConfirmed ? '请先勾选人工二次确认。' : undefined);
+  const asset = findPrimaryAsset(task, assets, content);
+  const contentApproval = getContentApprovalState(task, content);
+  const publishState = getPublishTaskState(task);
+  const executionMode = getExecutionMode(task);
+  const preflightChecks = buildPublishPreflightChecks({ task, content, connection, account, asset });
+  const dryRun = getDryRunPresentation(task);
+  const error = getPublishErrorPresentation(task);
+  const [humanConfirmed, setHumanConfirmed] = useState(false);
+  const [showError, setShowError] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState(toLocalDateTime(task.scheduled_at || task.scheduled_time, 60));
+  const day = getContentPackageDay(content?.raw || content);
+  const preflightPassed = task.publish_result?.preflight?.passed === true;
+  const canApprove = preflightChecks.every((item) => item.passed);
+
+  const returnToWorkspace = () => onNavigate('workspace', content?.id || task.content_package_id, {
+    campaign_id: content?.campaignId || task.campaign_id || '',
+    day: day || 1,
+  });
 
   return (
-    <article className="strategy-card publish-task-card">
-      <div className="section-head">
+    <article className={`publish-task-card-v2 state-${publishState}`}>
+      <div className="publish-task-summary">
         <div>
-          <p className="eyebrow">发布任务 · {task.id}</p>
+          <p className="eyebrow">{task.platform || content?.platform || 'Telegram'} · {day ? `Day ${day}` : '内容发布'}</p>
           <h3>{content?.title || task.title || '未命名发布任务'}</h3>
-          <p>{displayText(task.final_text || task.content_text || content?.body, '等待内容终审结果')}</p>
+          <p>{truncate(task.publish_content?.body || task.final_text || content?.body || '等待最终文案', 180)}</p>
         </div>
-        <StatusBadge status={currentStatus} />
+        <div className="publish-state-stack">
+          <StatusBadge status={CONTENT_APPROVAL[contentApproval].tone} />
+          <strong>{CONTENT_APPROVAL[contentApproval].label}</strong>
+          <StatusBadge status={publishState} />
+          <strong>{PUBLISH_TASK_STATE[publishState].label}</strong>
+        </div>
       </div>
 
-      <div className="business-grid">
-        <Info label="平台" value={task.platform || connection?.platform || content?.platform} />
-        <Info label="发布账号" value={account?.account_name || account?.username || connection?.account_name} />
-        <Info label="平台连接" value={connection?.status || '未绑定'} />
-        <Info label="排期时间" value={formatDate(task.scheduled_time || task.publish_time || content?.scheduledAt)} />
-        <Info label="内容状态" value={content?.reviewStatus || content?.status || task.status} />
-        <Info label="发布结果" value={task.external_id || (currentStatus === 'published' ? '发布成功' : '尚未发布')} />
+      <div className="publish-facts">
+        <Fact label="Campaign" value={content?.campaignId || task.campaign_id || '未关联'} />
+        <Fact label="发布账号" value={account?.account_name || account?.username || connection?.account_name || '未关联'} />
+        <Fact label="执行模式" value={`${EXECUTION_MODE[executionMode]?.label || executionMode} · ${EXECUTION_MODE[executionMode]?.description || ''}`} />
+        <Fact label="排期" value={formatDate(task.scheduled_at || task.scheduled_time)} />
+        <Fact label="平台返回 ID" value={task.external_id || task.publish_result?.platform_result?.platform_post_id || '尚未发布'} />
       </div>
 
-      <div className="publish-preflight-panel">
-        <div className="section-head"><h4>发布前检查</h4><span>{checks.filter((item) => item.ok).length}/{checks.length} 通过</span></div>
-        <div className="publish-check-list">
-          {checks.map((check) => (
-            <div className={check.ok ? 'passed' : 'blocked'} key={check.label}>
-              <strong>{check.ok ? '✓' : '×'} {check.label}</strong><span>{check.detail}</span>
+      {dryRun && (
+        <div className={`dry-run-result ${dryRun.passed ? 'passed' : 'blocked'}`}>
+          <span>{dryRun.passed ? '✓' : '!'}</span>
+          <div>
+            <strong>{dryRun.title}</strong>
+            <p>{dryRun.summary}</p>
+            <small>{formatDate(dryRun.checkedAt)}</small>
+          </div>
+        </div>
+      )}
+
+      <details className="publish-preflight-compact" open={!preflightPassed && publishState === 'pending_approval'}>
+        <summary>
+          <span>发布前检查</span>
+          <strong>{preflightChecks.filter((item) => item.passed).length}/{preflightChecks.length} 通过</strong>
+        </summary>
+        <div className="publish-check-grid">
+          {preflightChecks.map((check) => (
+            <div className={check.passed ? 'passed' : 'blocked'} key={check.code}>
+              <span>{check.passed ? '✓' : '×'}</span>
+              <div><strong>{check.label}</strong><small>{check.message}</small></div>
             </div>
           ))}
         </div>
+      </details>
+
+      {error && (
+        <div className="publish-error-summary">
+          <div>
+            <strong>{error.summary}</strong>
+            <span>错误编号：{error.code} · {error.retryable ? '可以重试' : '需要人工处理'}</span>
+            <small>建议：{error.recommendedAction}</small>
+          </div>
+          <button className="ghost-button" type="button" onClick={() => setShowError((value) => !value)}>
+            {showError ? '收起原因' : '查看原因'}
+          </button>
+          {showError && <p>技术细节已写入审计日志，页面仅展示可操作的安全摘要。</p>}
+        </div>
+      )}
+
+      {(publishState === 'pending_approval' || publishState === 'draft' || publishState === 'scheduled') && (
+        <div className="publish-schedule-row">
+          <label>
+            <span>发布时间</span>
+            <input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} />
+          </label>
+          {publishState === 'scheduled' && (
+            <ExecutionButton
+              action="schedule_publish_task"
+              actionName="修改发布时间"
+              className="ghost-button"
+              resourceType="publish_task"
+              resourceId={task.id}
+              payload={() => ({ publish_task_id: task.id, scheduled_at: fromLocalDateTime(scheduledAt) })}
+              ready={Boolean(scheduledAt)}
+              reason={scheduledAt ? undefined : '请选择发布时间'}
+              onCompleted={onRefresh}
+            >
+              修改时间
+            </ExecutionButton>
+          )}
+        </div>
+      )}
+
+      {publishState === 'scheduled' && (
         <label className="human-confirmation-row">
           <input type="checkbox" checked={humanConfirmed} onChange={(event) => setHumanConfirmed(event.target.checked)} />
-          我已人工检查正文、素材、账号和排期，并确认允许执行发布
+          我已检查最终文案、素材、账号和发布时间，并明确批准本次 Telegram 正式发布
         </label>
-      </div>
+      )}
 
-      {asset?.url && <div className="asset-preview-large">{String(asset.type).includes('video') ? <video src={asset.url} controls /> : <img src={asset.thumbnail || asset.url} alt="发布素材预览" />}</div>}
-
-      {task.error_message && <div className="notice error"><strong>失败原因：</strong>{task.error_message}</div>}
-
-      <div className="button-row">
-        <button className="ghost-button" type="button" onClick={() => onNavigate('workspace')}>返回内容工作台修改</button>
-        <ExecutionButton action="execute_publish" actionName="发布前检查" className="ghost-button" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: true, preflight_only: true }} reason={baseFailure} executionUnavailableReason="发布前检查暂不可执行：执行服务暂未连接">发布前检查</ExecutionButton>
-        <ExecutionButton action="approve_publish" actionName="批准发布计划" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, action: 'approve' }} reason={baseFailure}>批准发布计划</ExecutionButton>
-        <ExecutionButton action="execute_publish" actionName="二次确认并执行发布" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: false, human_confirmed: humanConfirmed }} reason={executionReason}>二次确认并执行发布</ExecutionButton>
-        {currentStatus === 'failed' && <ExecutionButton action="execute_publish" actionName="失败后重试" className="ghost-button" resourceType="publish_task" resourceId={task.id} payload={{ publish_task_id: task.id, dry_run: false, retry: true, human_confirmed: humanConfirmed }} reason={executionReason}>失败后重试</ExecutionButton>}
+      <div className="publish-dynamic-actions">
+        {publishState === 'pending_approval' && !preflightPassed && (
+          <ExecutionButton
+            action="run_publish_preflight"
+            actionName="运行发布预检"
+            resourceType="publish_task"
+            resourceId={task.id}
+            payload={{ publish_task_id: task.id, execution_mode: 'dry_run' }}
+            reason={preflightChecks.some((item) => !item.passed) ? '请先处理未通过的发布条件' : undefined}
+            onCompleted={onRefresh}
+          >
+            运行一次测试预检
+          </ExecutionButton>
+        )}
+        {publishState === 'pending_approval' && preflightPassed && (
+          <ExecutionButton
+            action="approve_publish_task"
+            actionName="批准并排期"
+            resourceType="publish_task"
+            resourceId={task.id}
+            payload={() => ({
+              publish_task_id: task.id,
+              scheduled_at: fromLocalDateTime(scheduledAt),
+              human_confirmed: true,
+              approved_by: 'human',
+            })}
+            ready={Boolean(scheduledAt) && canApprove}
+            reason={!scheduledAt ? '请先选择发布时间' : !canApprove ? '发布前检查尚未通过' : undefined}
+            onCompleted={onRefresh}
+          >
+            批准并排期
+          </ExecutionButton>
+        )}
+        {(publishState === 'pending_approval' || publishState === 'draft') && (
+          <button className="ghost-button" type="button" onClick={returnToWorkspace}>退回内容工作台</button>
+        )}
+        {publishState === 'draft' && (
+          <ExecutionButton
+            action="schedule_publish_task"
+            actionName="设置排期"
+            resourceType="publish_task"
+            resourceId={task.id}
+            payload={() => ({ publish_task_id: task.id, scheduled_at: fromLocalDateTime(scheduledAt) })}
+            ready={Boolean(scheduledAt)}
+            reason={scheduledAt ? undefined : '请选择发布时间'}
+            onCompleted={onRefresh}
+          >
+            设置排期
+          </ExecutionButton>
+        )}
+        {publishState === 'scheduled' && (
+          <>
+            <ExecutionButton
+              action="execute_publish_task"
+              actionName="立即正式发布"
+              resourceType="publish_task"
+              resourceId={task.id}
+              payload={{ publish_task_id: task.id, execution_mode: 'live', human_confirmed: humanConfirmed }}
+              ready={humanConfirmed}
+              reason={humanConfirmed ? undefined : '请先明确人工确认'}
+              onCompleted={onRefresh}
+            >
+              立即发布
+            </ExecutionButton>
+            <ExecutionButton
+              action="reject_publish"
+              actionName="取消发布"
+              className="ghost-button danger"
+              resourceType="publish_task"
+              resourceId={task.id}
+              payload={{ publish_task_id: task.id, feedback: 'Cancelled by human in Publish Center.' }}
+              onCompleted={onRefresh}
+            >
+              取消
+            </ExecutionButton>
+          </>
+        )}
+        {publishState === 'failed' && (
+          <>
+            <ExecutionButton
+              action="retry_publish_task"
+              actionName="测试重试"
+              resourceType="publish_task"
+              resourceId={task.id}
+              payload={{ publish_task_id: task.id, execution_mode: 'dry_run', human_confirmed: false }}
+              ready={error?.retryable}
+              reason={error?.retryable ? undefined : '该任务当前不可重试'}
+              onCompleted={onRefresh}
+            >
+              重试
+            </ExecutionButton>
+            <button className="ghost-button" type="button" onClick={returnToWorkspace}>返回修改</button>
+          </>
+        )}
+        {(publishState === 'publishing' || publishState === 'published') && (
+          <ExecutionButton
+            action="get_publish_result"
+            actionName="刷新平台结果"
+            className="ghost-button"
+            resourceType="publish_task"
+            resourceId={task.id}
+            payload={{ publish_task_id: task.id }}
+            onCompleted={onRefresh}
+          >
+            刷新结果
+          </ExecutionButton>
+        )}
       </div>
     </article>
   );
 }
 
+function PublishCalendar({ tasks, contentPackages }) {
+  const scheduled = tasks
+    .filter((task) => task.scheduled_at || task.scheduled_time)
+    .sort((left, right) => new Date(left.scheduled_at || left.scheduled_time) - new Date(right.scheduled_at || right.scheduled_time));
+  return (
+    <section className="publish-calendar-panel">
+      <div className="section-head compact-head">
+        <div><p className="eyebrow">发布日历</p><h3>未来排期</h3></div>
+        <span>{scheduled.length} 条</span>
+      </div>
+      {scheduled.length ? scheduled.map((task) => {
+        const content = findById(contentPackages, task.content_package_id);
+        const state = getPublishTaskState(task);
+        return (
+          <article key={task.id}>
+            <time>{formatDate(task.scheduled_at || task.scheduled_time)}</time>
+            <div><strong>{content?.title || '未命名内容'}</strong><small>{task.platform} · {PUBLISH_TASK_STATE[state].label}</small></div>
+            <StatusBadge status={state} />
+          </article>
+        );
+      }) : <EmptyState title="未来 7 天暂无排期" description="批准发布任务并设置时间后，会出现在这里。" />}
+    </section>
+  );
+}
+
+function filterTasks(tasks, view, detailId) {
+  if (detailId) {
+    const selected = tasks.find((task) => String(task.id) === String(detailId));
+    if (selected) return [selected];
+  }
+  return tasks.filter((task) => PUBLISH_TASK_STATE[getPublishTaskState(task)].group === view);
+}
+
+function countViews(tasks) {
+  return tasks.reduce((counts, task) => {
+    const group = PUBLISH_TASK_STATE[getPublishTaskState(task)].group;
+    counts[group] = (counts[group] || 0) + 1;
+    return counts;
+  }, {});
+}
+
 function findConnection(task, connections, content) {
-  const direct = findById(connections, task.platform_connection_id);
+  const direct = findById(connections, task.platform_connection_id || task.publish_content?.connection_id);
   if (direct) return direct;
   const platform = String(task.platform || content?.platform || '').toLowerCase();
-  const accountId = String(task.account_id || content?.accountId || '');
-  return (connections || []).find((row) => (
+  const accountId = String(task.platform_account_id || task.account_id || content?.accountId || '');
+  return connections.find((row) => (
     (!platform || String(row.platform || '').toLowerCase() === platform)
     && (!accountId || String(row.account_id || '') === accountId)
-  ));
+    && (row.status === 'connected' || row.is_connected === true)
+  )) || {};
 }
 
-function buildPreflightChecks(task, content, connection, account) {
-  const connectionActive = connection?.status === 'connected' || connection?.is_connected === true;
-  const permissions = normalizeList(connection?.permissions || connection?.scopes || connection?.scope || connection?.metadata?.permissions || connection?.metadata?.scopes);
-  const permissionText = permissions.join(' ').toLowerCase();
-  const publishPermission = connectionActive && (permissions.length === 0
-    ? connection?.can_publish === true || connection?.metadata?.can_publish === true
-    : /(write|publish|tweet\.write|posts\.write|messages)/.test(permissionText));
-  const contentApproved = Boolean(content?.approvedForPublishing || content?.reviewStatus === 'approved' || task.content_approved === true);
-  const body = String(task.final_text || task.content_text || content?.body || '').trim();
-  const platform = String(task.platform || connection?.platform || content?.platform || '').toLowerCase();
-  const maxLength = platform === 'x' || platform.includes('twitter') ? 280 : 10000;
-  const formatValid = body.length > 0 && body.length <= maxLength;
-
-  return [
-    { label: '内容已审核', ok: contentApproved, detail: contentApproved ? '内容终审已通过' : '请先在内容工作台完成终审' },
-    { label: '账号已连接', ok: connectionActive && Boolean(account || connection?.account_id), detail: connectionActive ? '有效连接记录已找到' : '请先连接发布账号' },
-    { label: '具备发布权限', ok: publishPermission, detail: publishPermission ? '授权范围包含发布能力' : '当前账号缺少发布权限' },
-    { label: '内容格式有效', ok: formatValid, detail: formatValid ? `${body.length}/${maxLength} 字符` : body ? `正文超过 ${maxLength} 字符限制` : '正文为空' },
-  ];
+function findPrimaryAsset(task, assets, content) {
+  const selectedId = task.publish_content?.selected_asset_id || task.asset_id || task.final_asset_id || content?.finalAssetId;
+  return findById(assets, selectedId)
+    || assets.find((asset) => (
+      String(asset.contentId || '') === String(task.content_package_id || content?.id || '')
+      && asset.approvedForPublishing
+    ))
+    || {};
 }
 
-function Info({ label, value }) {
-  return <section><span>{label}</span><strong>{displayText(value)}</strong></section>;
+function Fact({ label, value }) {
+  return <div><span>{label}</span><strong>{value || '—'}</strong></div>;
+}
+
+function truncate(value, length) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > length ? `${text.slice(0, length)}…` : text;
+}
+
+function toLocalDateTime(value, fallbackMinutes = 0) {
+  const date = value ? new Date(value) : new Date(Date.now() + fallbackMinutes * 60_000);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function fromLocalDateTime(value) {
+  return value ? new Date(value).toISOString() : null;
 }

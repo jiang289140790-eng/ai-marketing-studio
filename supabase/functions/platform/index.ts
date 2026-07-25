@@ -602,7 +602,10 @@ async function publishTelegram(client: ReturnType<typeof createClient>, userId: 
 
 async function getTelegramMetrics(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
   const task = await loadPublishTask(client, userId, body);
-  const storedMessage = task.result?.telegram_message || {};
+  const storedMessage = task.publish_result?.platform_result?.telegram_message
+    || task.publish_result?.telegram_message
+    || task.result?.telegram_message
+    || {};
   const metrics = normalizeTelegramMetrics(storedMessage);
   await writeMetricsSnapshot(client, userId, task, metrics, storedMessage);
 
@@ -624,7 +627,7 @@ async function loadPublishTask(client: ReturnType<typeof createClient>, userId: 
 
   const { data, error } = await client
     .from('publish_tasks')
-    .select('*, content_library(title, content_text, media_url, content_type, platform), content_packages(title, body, platform, image_requirements, video_requirements)')
+    .select('*, content_packages(title, body, platform, image_requirements, video_requirements)')
     .eq('id', taskId)
     .eq('user_id', userId)
     .single();
@@ -1533,7 +1536,7 @@ async function writeMetricsSnapshot(
   client: ReturnType<typeof createClient>,
   userId: string,
   task: Record<string, any>,
-  metrics: Record<string, number>,
+  metrics: Record<string, unknown>,
   telegramMessage: Record<string, unknown>,
 ) {
   await client.from('publish_metrics').upsert({
@@ -1544,41 +1547,87 @@ async function writeMetricsSnapshot(
       external_id: task.external_id || telegramMessage.message_id || null,
       message: sanitizeTelegramMessage(telegramMessage),
       metrics,
+      availability: metrics.availability || {},
+      source: 'telegram_api',
     },
     last_sync: new Date().toISOString(),
   });
 
-  if (task.content_id) {
+  if (task.content_package_id) {
     await client.from('content_metrics').insert({
       user_id: userId,
-      content_id: task.content_id,
+      content_ref: task.content_package_id,
       platform: 'Telegram',
-      views: metrics.views,
-      likes: metrics.likes,
-      comments: metrics.comments,
-      shares: metrics.shares,
-      clicks: metrics.clicks,
-      registrations: metrics.registrations,
-      revenue: metrics.revenue,
+      publish_task_id: task.id,
+      content_package_id: task.content_package_id || null,
+      platform_post_id: task.external_id || telegramMessage.message_id || null,
+      views: Number(metrics.views ?? 0),
+      likes: Number(metrics.likes ?? 0),
+      comments: Number(metrics.comments ?? 0),
+      shares: Number(metrics.shares ?? 0),
+      clicks: Number(metrics.clicks ?? 0),
+      signups: Number(metrics.registrations ?? 0),
+      conversions: Number(metrics.conversions ?? 0),
+      metrics: {
+        values: {
+          impressions: metrics.views ?? null,
+          likes: metrics.likes ?? null,
+          comments: metrics.comments ?? null,
+          shares: metrics.shares ?? null,
+          saves: null,
+          profile_visits: null,
+          link_clicks: metrics.clicks ?? null,
+          follows: null,
+          registrations: metrics.registrations ?? null,
+          conversions: null,
+        },
+        availability: metrics.availability || {},
+        source: 'telegram_api',
+        collected_at: new Date().toISOString(),
+      },
       collected_at: new Date().toISOString(),
+      fetched_at: new Date().toISOString(),
     });
   }
 }
 
 function normalizeTelegramMetrics(message: Record<string, any>) {
-  const reactionCount = Array.isArray(message.reactions)
-    ? message.reactions.reduce((sum: number, reaction: Record<string, number>) => sum + Number(reaction.total_count || reaction.count || 0), 0)
-    : 0;
+  const hasReactions = Array.isArray(message.reactions) || Array.isArray(message.reaction);
+  const reactions = Array.isArray(message.reactions) ? message.reactions : Array.isArray(message.reaction) ? message.reaction : [];
+  const reactionCount = hasReactions
+    ? reactions.reduce((sum: number, reaction: Record<string, number>) => sum + Number(reaction.total_count || reaction.count || 0), 0)
+    : null;
+  const lastSync = new Date().toISOString();
+  const available = (condition: boolean) => ({
+    status: condition ? 'available' : 'unavailable',
+    source: 'telegram_api',
+    last_sync: lastSync,
+  });
+  const views = message.views === undefined ? null : Number(message.views);
+  const comments = message.reply_count === undefined ? null : Number(message.reply_count);
+  const shares = message.forwards === undefined ? null : Number(message.forwards);
 
   return {
-    views: Number(message.views || 0),
+    views,
     likes: reactionCount,
-    comments: Number(message.reply_count || 0),
-    shares: Number(message.forwards || 0),
-    clicks: 0,
-    registrations: 0,
-    revenue: 0,
-    engagement: reactionCount + Number(message.reply_count || 0) + Number(message.forwards || 0),
+    comments,
+    shares,
+    clicks: null,
+    registrations: null,
+    revenue: null,
+    engagement: [reactionCount, comments, shares].filter((value) => value !== null).reduce((sum, value) => sum + Number(value), 0),
+    availability: {
+      impressions: available(views !== null),
+      likes: available(reactionCount !== null),
+      comments: available(comments !== null),
+      shares: available(shares !== null),
+      saves: available(false),
+      profile_visits: available(false),
+      link_clicks: available(false),
+      follows: available(false),
+      registrations: available(false),
+      conversions: available(false),
+    },
   };
 }
 

@@ -42,6 +42,12 @@ export const ACTION_REGISTRY = {
   approve_publish_task: { tool: 'approve_publish_task', async: false },
   schedule_publish_task: { tool: 'schedule_publish_task', async: false },
   get_publish_result: { tool: 'get_publish_result', async: false },
+  collect_content_metrics: { tool: 'collect_content_metrics', async: true },
+  review_content_performance: { tool: 'review_content_performance', async: true },
+  create_strategy_adjustment_suggestion: { tool: 'create_strategy_adjustment_suggestion', async: false },
+  save_campaign_insight: { tool: 'save_campaign_insight', async: false },
+  update_account_memory: { tool: 'update_account_memory', async: false },
+  get_day_review: { tool: 'get_day_review', async: false },
   execute_publish_task: {
     tool: 'execute_publish_task',
     async: true,

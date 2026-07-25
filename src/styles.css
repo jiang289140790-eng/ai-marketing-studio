@@ -2577,6 +2577,110 @@ textarea {
   color: #64748b;
 }
 
+.day1-review-panel {
+  display: grid;
+  gap: 18px;
+  border-color: rgba(34, 211, 238, 0.24);
+  background:
+    linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(10, 21, 39, 0.9)),
+    radial-gradient(circle at right top, rgba(14, 165, 233, 0.12), transparent 28rem);
+}
+
+.day1-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.day1-metric-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.34);
+}
+
+.day1-metric-card span,
+.day1-metric-card small {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.day1-metric-card strong {
+  color: #f8fafc;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.day1-review-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.day1-review-body {
+  display: grid;
+  gap: 16px;
+}
+
+.day1-review-body section {
+  display: grid;
+  gap: 9px;
+  padding: 15px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.24);
+}
+
+.day1-review-body h4,
+.day1-review-body p,
+.day1-review-body ol {
+  margin: 0;
+}
+
+.day1-review-body p,
+.day1-review-body li {
+  color: #cbd5e1;
+  line-height: 1.7;
+}
+
+.review-findings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.review-findings article {
+  display: grid;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.review-findings small {
+  color: #94a3b8;
+  line-height: 1.55;
+}
+
+.evidence-label {
+  justify-self: start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.18);
+  color: #ddd6fe;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.evidence-label.verified_conclusion { background: rgba(16, 185, 129, 0.18); color: #a7f3d0; }
+.evidence-label.initial_signal { background: rgba(34, 211, 238, 0.16); color: #a5f3fc; }
+.evidence-label.insufficient_data { background: rgba(245, 158, 11, 0.18); color: #fde68a; }
+
 .final-review-editor {
   margin-bottom: 16px;
 }
@@ -2590,6 +2694,7 @@ textarea {
 @media (max-width: 1180px) {
   .daily-ops-pipeline { grid-template-columns: repeat(6, minmax(135px, 1fr)); }
   .attention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day1-metric-grid { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
 }
 
 @media (max-width: 780px) {
@@ -2600,6 +2705,7 @@ textarea {
   .recommendation-grid { grid-template-columns: 1fr; }
   .analytics-memory-grid { grid-template-columns: 1fr; }
   .analytics-hero { grid-template-columns: 1fr; }
+  .day1-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .final-review-editor label:first-child { grid-column: auto; }
   .compact-head { align-items: flex-start; }
 }

@@ -119,3 +119,29 @@ export function workflowRunsFromAssets(assets = []) {
       cost: Number(asset.cost_estimate?.estimated_usd || 0),
     }));
 }
+
+export function mergeProductionWorkflows(rows = []) {
+  const merged = new Map();
+  [...productionWorkflowCapabilities, ...rows].forEach((workflow) => {
+    const key = workflow.id || workflow.workflow_id || workflow.slug || workflow.name;
+    if (!key) return;
+    merged.set(key, {
+      ...(merged.get(key) || {}),
+      ...workflow,
+    });
+  });
+  return [...merged.values()];
+}
+
+export function mergeWorkflowRuns(rows = [], assets = []) {
+  const merged = new Map();
+  [...workflowRunsFromAssets(assets), ...rows].forEach((run) => {
+    const key = run.id;
+    if (!key) return;
+    merged.set(key, {
+      ...(merged.get(key) || {}),
+      ...run,
+    });
+  });
+  return [...merged.values()];
+}

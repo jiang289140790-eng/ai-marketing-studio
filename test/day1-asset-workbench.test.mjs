@@ -46,3 +46,16 @@ test('content without a selected character has no LoRA options instead of crashi
   assert.deepEqual(getCharacterLoras(null, null), []);
   assert.deepEqual(getRecommendedWorkflows(null, [], 'image'), []);
 });
+
+test('validated gateway workflows are available in the Day 1 selector', () => {
+  const workflows = [
+    { id: 'emma-s1-sdxl-t2i', status: 'validated', mode: 'image', priority: 1 },
+    { id: 'wan-remix-i2v', status: 'validated', mode: 'video', priority: 1 },
+    { id: 'disabled-image', status: 'inactive', mode: 'image', priority: 0 },
+  ];
+
+  assert.deepEqual(
+    getRecommendedWorkflows({}, workflows, 'image').map((workflow) => workflow.id),
+    ['emma-s1-sdxl-t2i'],
+  );
+});

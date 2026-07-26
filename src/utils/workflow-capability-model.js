@@ -63,7 +63,7 @@ export function buildWorkflowCapability(workflow, {
     || Boolean(workflow.input_schema?.properties?.lora_name)
     || asArray(workflow.input_schema?.required).some((key) => String(key).includes('lora'));
   const active = ['active', 'validated', 'enabled'].includes(normalizedText(workflow.status));
-  const validated = successfulRuns.length > 0;
+  const validated = successfulRuns.length > 0 || normalizedText(workflow.status) === 'validated';
 
   return {
     ...workflow,
@@ -77,10 +77,14 @@ export function buildWorkflowCapability(workflow, {
     productionEnabled: active,
     availabilityStatus: validated ? 'validated' : active ? 'active' : workflow.status || 'inactive',
     latestRun,
-    latestTestAt: latestRun?.completed_at || latestRun?.created_at || null,
+    latestTestAt: latestRun?.completed_at || latestRun?.created_at || workflow.last_synced_at || null,
     latestTestAsset: latestAsset,
-    averageDurationMs: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
-    estimatedCost: costs.length ? costs.reduce((sum, value) => sum + value, 0) / costs.length : null,
+    averageDurationMs: durations.length
+      ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length)
+      : Number(workflow.default_params?.estimated_seconds || 0) * 1000 || null,
+    estimatedCost: costs.length
+      ? costs.reduce((sum, value) => sum + value, 0) / costs.length
+      : workflow.default_params?.estimated_cost_usd ?? null,
     runCount: relatedRuns.length,
     successCount: successfulRuns.length,
   };
@@ -118,4 +122,3 @@ export function deriveModelAssets(workflows = []) {
 
   return entries;
 }
-

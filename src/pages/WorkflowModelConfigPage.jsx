@@ -117,6 +117,10 @@ export function WorkflowModelConfigPage({
   }, [selectedId, workflows]);
 
   async function toggleWorkflow(workflow) {
+    if (workflow.source === 'gateway_registry') {
+      setMessage('该工作流由 AutoDL 生产网关管理；如需停用，请先停止网关配置，网站不会直接修改底层工作流。');
+      return;
+    }
     try {
       await setWorkflowProductionEnabled(userId, workflow, !workflow.productionEnabled);
       setMessage(workflow.productionEnabled ? '工作流已停用，不会继续进入生产选择。' : '工作流已启用。');

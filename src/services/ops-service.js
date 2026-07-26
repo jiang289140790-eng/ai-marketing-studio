@@ -1,5 +1,6 @@
 import { requireSupabase } from './supabase-client';
 import { dayTitle } from '../utils/content-package-sequence';
+import { productionWorkflowCapabilities, workflowRunsFromAssets } from '../data/production-workflows';
 
 const TABLES = {
   accounts: 'social_accounts',
@@ -251,6 +252,12 @@ export async function loadSystemStatusData() {
 export async function loadWorkflowConfigData() {
   const data = await loadKeys(['comfyWorkflows', 'characters', 'accounts', 'assets', 'legacyAssets', 'workflowRuns', 'contentPackages', 'campaigns']);
   data.legacyAssets = await hydrateWorkspaceAssetUrls(data.legacyAssets || []);
+  if (!data.comfyWorkflows.length) {
+    data.comfyWorkflows = productionWorkflowCapabilities;
+  }
+  if (!data.workflowRuns.length) {
+    data.workflowRuns = workflowRunsFromAssets(data.legacyAssets);
+  }
   return data;
 }
 
@@ -263,6 +270,12 @@ export async function loadAssetLibraryData() {
 export async function loadGenerationTaskData() {
   const data = await loadKeys(['workflowRuns', 'characters', 'comfyWorkflows', 'assets', 'legacyAssets', 'contentPackages', 'campaigns']);
   data.legacyAssets = await hydrateWorkspaceAssetUrls(data.legacyAssets || []);
+  if (!data.comfyWorkflows.length) {
+    data.comfyWorkflows = productionWorkflowCapabilities;
+  }
+  if (!data.workflowRuns.length) {
+    data.workflowRuns = workflowRunsFromAssets(data.legacyAssets);
+  }
   return data;
 }
 

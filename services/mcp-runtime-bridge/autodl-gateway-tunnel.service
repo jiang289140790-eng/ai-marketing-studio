@@ -1,0 +1,23 @@
+[Unit]
+Description=AI Marketing Studio AutoDL ComfyUI Gateway Tunnel
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/start-autodl-gateway-remote
+ExecStart=/usr/bin/ssh -NT \
+  -i /root/.ssh/autodl_bridge_ed25519 \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=accept-new \
+  -p 46294 \
+  -L 172.17.0.1:18000:127.0.0.1:8000 \
+  root@connect.westd.seetacloud.com
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

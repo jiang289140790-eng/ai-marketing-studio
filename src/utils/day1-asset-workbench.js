@@ -109,7 +109,10 @@ export function getRecommendedWorkflows(character = {}, workflows = [], assetTyp
     return [item?.id, item?.name, item?.workflow_id].filter(Boolean).map((value) => String(value).toLowerCase());
   }));
   return workflows
-    .filter((workflow) => workflow.status === 'active' && (!workflow.mode || workflow.mode === assetType))
+    .filter((workflow) => (
+      ['active', 'validated', 'enabled'].includes(String(workflow.status || '').toLowerCase())
+      && (!workflow.mode || workflow.mode === assetType)
+    ))
     .sort((a, b) => {
       const aRecommended = recommendationKeys.has(String(a.id).toLowerCase()) || recommendationKeys.has(String(a.name).toLowerCase());
       const bRecommended = recommendationKeys.has(String(b.id).toLowerCase()) || recommendationKeys.has(String(b.name).toLowerCase());

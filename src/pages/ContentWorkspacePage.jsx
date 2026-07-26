@@ -511,12 +511,16 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
   const selectedReferenceAsset = characterReferences.find((asset) => item.referenceAssetIds?.map(String).includes(String(asset.id)))
     || characterReferences[0]
     || null;
+  const workflowRequiredInputs = normalizeList(selectedWorkflow?.input_schema?.required);
+  const workflowNeedsReference = workflowRequiredInputs.some((field) => ['image_url', 'input_image', 'last_frame'].includes(field));
   const generationReason = !selectedCharacter
     ? '请先选择角色'
     : !hasLora(lora)
       ? '所选角色还没有可用的 LoRA'
       : !metadata.copy_approved
         ? '文案批准后才能进入正式素材生成'
+        : workflowNeedsReference && !selectedReferenceAsset
+          ? '所选工作流需要一张已授权的角色参考图'
         : undefined;
   const journey = buildDayOneJourney({
     plan,
@@ -924,11 +928,21 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
               lora_weight: loraWeight,
               workflow_id: selectedWorkflow?.id,
               reference_asset_id: selectedReferenceAsset?.id,
-              prompt: assetType === 'image'
-                ? imageRequirements.positive_prompt || `${draft.hook}。${draft.body}`
-                : videoRequirements.script || `${draft.hook}。${draft.body}`,
+              prompt: [
+                assetType === 'image'
+                  ? imageRequirements.positive_prompt
+                  : videoRequirements.script || videoRequirements.positive_prompt,
+                draft.title ? `内容标题：${draft.title}` : '',
+                draft.hook ? `开头钩子：${draft.hook}` : '',
+                draft.body ? `正文语义：${draft.body}` : '',
+                draft.cta ? `行动引导：${draft.cta}` : '',
+                plan.topic ? `Day 1 计划主题：${plan.topic}` : '',
+                plan.objective ? `内容目标：${plan.objective}` : '',
+                '生成结果必须与文案和计划表达同一主题，不添加未经文案支持的事实或承诺。',
+              ].filter(Boolean).join('\n'),
               negative_prompt: imageRequirements.negative_prompt || videoRequirements.negative_prompt || lora.negative_prompt,
               provider: 'autodl',
+              force_remote: true,
             }}
             onCompleted={onRefresh}
           >
@@ -1470,7 +1484,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
   const publishTask = (data.publishTasks || []).find((task) => String(task.content_package_id || task.content_id) === String(item.id));
   const imageReq = normalizeRequirement(item.imageRequirements || item.assetRequirement);
   const videoReq = normalizeRequirement(item.videoRequirements || item.assetRequirement);
-  const visualPrompt = displayText(
+  const baseVisualPrompt = displayText(
     activeMediaPanel === 'video'
       ? videoReq.script || videoReq.positive_prompt || videoReq.text
       : imageReq.positive_prompt || imageReq.prompt || imageReq.text,
@@ -1478,6 +1492,16 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
       ? `${draft.hook || draft.title}。围绕当前文案主题，以 ${selectedCharacter?.display_name || selectedCharacter?.name || '当前角色'} 为主角，生成竖版短视频脚本与镜头提示。`
       : `${draft.hook || draft.title}。${selectedCharacter?.display_name || selectedCharacter?.name || '原创 AI 角色'}，${imageReq.scene || '具有氛围感的真实场景'}，${imageReq.lighting || '电影感光线'}，${imageReq.aspect_ratio || '9:16'}。`,
   );
+  const visualPrompt = [
+    baseVisualPrompt,
+    draft.title ? `内容标题：${draft.title}` : '',
+    draft.hook ? `开头钩子：${draft.hook}` : '',
+    draft.body ? `正文语义：${draft.body}` : '',
+    draft.cta ? `行动引导：${draft.cta}` : '',
+    selectedStrategy?.name ? `关联策略：${selectedStrategy.name}` : '',
+    `目标平台：${item.platform || campaign?.platform || '当前平台'}`,
+    '视觉结果必须与上述文案表达同一主题，不添加文案中不存在的事实或承诺。',
+  ].filter(Boolean).join('\n');
   const parsedX = parseXUrl(xUrl);
   const needsReference = activeMediaPanel === 'video'
     && ['image_to_video', 'first_frame', 'first_last_frame', 'reference_video', 'multi_shot'].includes(videoMode);
@@ -1561,11 +1585,15 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
     content_package_id: item.id,
     campaign_id: item.campaignId,
     strategy_id: selectedStrategyId || item.strategyId,
+    strategy_plan_id: selectedStrategyId || item.strategyId,
     character_id: selectedCharacter?.id,
     lora_id: lora.id || selectedLoraKey,
     lora_weight: lora.weight || lora.strength || 0.8,
     reference_asset_ids: selectedAssetIds,
+    reference_asset_id: selectedAssetIds[0] || null,
     generation_mode: videoMode,
+    mode: videoMode,
+    prompt: visualPrompt,
     image_requirements: item.imageRequirements,
     video_requirements: item.videoRequirements,
     target_platform: item.platform,

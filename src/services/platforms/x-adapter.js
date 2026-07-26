@@ -35,6 +35,8 @@ export const xAdapter = {
     const result = await invokeXPlatform('publish', {
       publish_task_id: task.id,
       connection_id: task.platform_connection_id || connection?.id,
+      execution_mode: 'live',
+      human_confirmed: true,
     });
     return adapterResult({
       success: true,

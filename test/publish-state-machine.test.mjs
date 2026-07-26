@@ -68,6 +68,100 @@ test('Telegram preflight covers all required safety checks', () => {
   ]);
 });
 
+test('X preflight accepts four approved images and rejects mixed image plus video', () => {
+  const baseTask = {
+    platform: 'X',
+    status: 'draft',
+    approval_status: 'pending',
+    publish_result: { execution_mode: 'dry_run' },
+  };
+  const connection = {
+    id: 'connection-x',
+    platform: 'X',
+    status: 'connected',
+    is_connected: true,
+    account_id: 'account-x',
+    permissions: ['tweet.read', 'tweet.write', 'media.write'],
+  };
+  const images = Array.from({ length: 4 }, (_, index) => ({
+    id: `image-${index}`,
+    type: 'image',
+    output_url: `https://example.com/image-${index}.jpg`,
+    status: 'completed',
+    approved_for_publishing: true,
+  }));
+  const imageTask = {
+    ...baseTask,
+    publish_content: {
+      body: 'Four-image X post',
+      selected_asset_ids: images.map((item) => item.id),
+      assets: images,
+    },
+  };
+  const imageChecks = buildPublishPreflightChecks({
+    task: imageTask,
+    content: { ...approvedContent, platform: 'X' },
+    connection,
+    account: { id: 'account-x' },
+  });
+  assert.equal(imageChecks.find((item) => item.code === 'platform_format').passed, true);
+  assert.equal(imageChecks.find((item) => item.code === 'asset_url').passed, true);
+
+  const mixed = [...images.slice(0, 1), {
+    id: 'video-1',
+    type: 'video',
+    output_url: 'https://example.com/video.mp4',
+    status: 'completed',
+    approved_for_publishing: true,
+  }];
+  const mixedChecks = buildPublishPreflightChecks({
+    task: {
+      ...baseTask,
+      publish_content: {
+        body: 'Mixed media is invalid',
+        selected_asset_ids: mixed.map((item) => item.id),
+        assets: mixed,
+      },
+    },
+    content: { ...approvedContent, platform: 'X' },
+    connection,
+    account: { id: 'account-x' },
+  });
+  assert.equal(mixedChecks.find((item) => item.code === 'platform_format').passed, false);
+});
+
+test('X preflight accepts one approved video', () => {
+  const video = {
+    id: 'video-1',
+    type: 'video',
+    output_url: 'https://example.com/day1.mp4',
+    status: 'completed',
+    approved_for_publishing: true,
+  };
+  const checks = buildPublishPreflightChecks({
+    task: {
+      platform: 'X',
+      publish_content: {
+        body: 'Video post',
+        selected_asset_id: video.id,
+        selected_asset_ids: [video.id],
+        assets: [video],
+      },
+      publish_result: { execution_mode: 'dry_run' },
+    },
+    content: { ...approvedContent, platform: 'X' },
+    connection: {
+      platform: 'X',
+      status: 'connected',
+      is_connected: true,
+      account_id: 'account-x',
+      permissions: ['tweet.write', 'media.write'],
+    },
+    account: { id: 'account-x' },
+  });
+  assert.ok(checks.every((item) => item.passed));
+});
+
 test('dry-run success is presented as completed test, never publish failure', () => {
   const presentation = getDryRunPresentation({
     status: 'draft',

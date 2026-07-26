@@ -79,7 +79,7 @@ export function getPublishReadiness({ checks = [], task = {}, humanAuthorized = 
   };
 }
 
-export function buildPublishPreflightChecks({ task = {}, content = {}, connection = {}, account = {}, asset = {}, now = new Date() }) {
+export function buildPublishPreflightChecksLegacy({ task = {}, content = {}, connection = {}, account = {}, asset = {}, now = new Date() }) {
   const platform = String(task.platform || content.platform || connection.platform || '').toLowerCase();
   const body = String(task.publish_content?.body || task.final_text || task.content_text || content.body || '').trim();
   const contentApproved = getContentApprovalState(task, content) === 'approved';
@@ -116,6 +116,62 @@ export function buildPublishPreflightChecks({ task = {}, content = {}, connectio
     check('asset_url', '素材 URL 有效', assetUrlValid, '主素材链接不可用'),
     check('schedule_valid', '排期有效', scheduleValid, '发布时间已过期或格式无效'),
     check('execution_mode', '执行模式明确', ['dry_run', 'live'].includes(executionMode), '请选择测试执行或正式发布'),
+  ];
+}
+
+export function buildPublishPreflightChecks({ task = {}, content = {}, connection = {}, account = {}, asset = {}, now = new Date() }) {
+  const platform = String(task.platform || content.platform || connection.platform || '').toLowerCase();
+  const body = String(task.publish_content?.body || task.final_text || task.content_text || content.body || '').trim();
+  const contentApproved = getContentApprovalState(task, content) === 'approved';
+  const embeddedAssets = Array.isArray(task.publish_content?.assets) ? task.publish_content.assets : [];
+  const selectedIds = new Set([
+    ...(Array.isArray(task.publish_content?.selected_asset_ids) ? task.publish_content.selected_asset_ids : []),
+    task.publish_content?.selected_asset_id,
+  ].filter(Boolean).map(String));
+  const selectedEmbeddedAssets = selectedIds.size
+    ? embeddedAssets.filter((item) => selectedIds.has(String(item.id)))
+    : embeddedAssets;
+  const mediaAssets = selectedEmbeddedAssets.length
+    ? selectedEmbeddedAssets.map((item) => ({
+      url: item.output_url || item.url || '',
+      type: String(item.type || item.asset_type || '').toLowerCase(),
+      approved: item.approved_for_publishing !== false && item.status !== 'failed',
+    }))
+    : [{
+      url: asset.url || asset.raw?.output_url || '',
+      type: String(asset.type || asset.raw?.asset_type || '').toLowerCase(),
+      approved: Boolean(asset.approvedForPublishing || asset.raw?.approved_for_publishing || task.publish_content?.asset_approved),
+    }].filter((item) => item.url);
+  const mediaOptional = mediaAssets.length === 0 && body.length > 0 && (platform === 'x' || platform === 'telegram');
+  const assetApproved = mediaOptional || (mediaAssets.length > 0 && mediaAssets.every((item) => item.approved));
+  const accountConnected = Boolean(connectionIsActive(connection) && (account.id || connection.account_id));
+  const scopes = normalizeList(connection.permissions || connection.scopes || connection.metadata?.scopes);
+  const permissionValid = accountConnected && (
+    platform === 'telegram'
+    || connection.can_publish === true
+    || connection.metadata?.can_publish === true
+    || scopes.some((item) => /(write|publish|tweet\.write|messages)/i.test(item))
+  );
+  const formatLimit = platform === 'telegram' ? 4096 : platform === 'x' || platform.includes('twitter') ? 280 : 10000;
+  const imageCount = mediaAssets.filter((item) => item.type !== 'video').length;
+  const videoCount = mediaAssets.filter((item) => item.type === 'video').length;
+  const mediaFormatValid = platform !== 'x' || (imageCount <= 4 && videoCount <= 1 && !(imageCount && videoCount));
+  const formatValid = (body.length > 0 || mediaAssets.length > 0) && body.length <= formatLimit && mediaFormatValid;
+  const assetUrlValid = mediaOptional || (mediaAssets.length > 0 && mediaAssets.every((item) => isValidHttpsUrl(item.url)));
+  const schedule = task.scheduled_at || task.scheduled_time || task.publish_time;
+  const scheduleValid = !schedule || (!Number.isNaN(new Date(schedule).getTime()) && new Date(schedule).getTime() >= now.getTime() - 60_000);
+  const executionMode = getExecutionMode(task);
+  const mediaSummary = videoCount ? '1 个视频' : `${imageCount} 张图片`;
+
+  return [
+    check('content_approved', '内容已批准', contentApproved, '请先回到内容工作台批准文案'),
+    check('asset_approved', '素材已批准', assetApproved, '请先确认所有待发布素材'),
+    check('account_connected', '账号已连接', accountConnected, '请检查平台连接'),
+    check('publish_permission', '发布权限有效', permissionValid, '当前连接没有可验证的发布权限'),
+    check('platform_format', '平台格式有效', formatValid, mediaFormatValid ? `正文 ${body.length}/${formatLimit} 字符 · ${mediaSummary}` : 'X 仅支持最多 4 张图，或单独 1 个视频'),
+    check('asset_url', '素材链接有效', assetUrlValid, '一个或多个素材链接不可用'),
+    check('schedule_valid', '排期有效', scheduleValid, '发布时间已过期或格式无效'),
+    check('execution_mode', '执行模式明确', ['dry_run', 'live'].includes(executionMode), '请选择安全预演或正式发布'),
   ];
 }
 

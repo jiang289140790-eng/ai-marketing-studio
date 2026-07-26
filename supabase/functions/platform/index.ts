@@ -850,6 +850,18 @@ async function getXConnectionStatus(client: ReturnType<typeof createClient>, use
 
 async function publishX(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
   const task = await loadXPublishTask(client, userId, body);
+  if (body.execution_mode !== 'live' || body.human_confirmed !== true) {
+    throw new Error('X live publish requires execution_mode=live and explicit human confirmation.');
+  }
+  if (task.approval_status !== 'approved' || !task.approved_at) {
+    throw new Error('X publish task must be approved before live execution.');
+  }
+  if (task.publish_result?.preflight?.passed !== true) {
+    throw new Error('X publish task requires a successful safety preflight.');
+  }
+  if (task.content_packages?.review_status && task.content_packages.review_status !== 'approved') {
+    throw new Error('X content must be approved before live execution.');
+  }
   const connectionId = task.platform_connection_id || body.connection_id;
   if (!connectionId) throw new Error('X publish requires platform_connection_id.');
 
@@ -857,13 +869,25 @@ async function publishX(client: ReturnType<typeof createClient>, userId: string,
   const credential = await loadXCredential(client, String(connectionId));
   const accessToken = await ensureFreshXAccessToken(client, String(connectionId), connection, credential);
   const content = task.content_library || body.content || {};
-  const text = String(content.content_text || content.title || body.text || '').trim();
-  if (!text) throw new Error('X posts require text content in this phase.');
-  if (text.length > 280) throw new Error('X text-only posts are limited to 280 characters in this MVP.');
+  const text = String(task.publish_content?.body || content.content_text || content.title || body.text || '').trim();
+  const media = await resolveXPublishMedia(client, task, body);
+  validateXPublishMedia(media);
+  if (!text && media.length === 0) throw new Error('X post requires text or at least one approved media asset.');
+  if (text.length > 280) throw new Error(`X post text is ${text.length} characters; the current limit is 280.`);
 
+  const uploadedMedia = [];
+  for (const item of media) {
+    uploadedMedia.push(await uploadXMedia(accessToken, item));
+  }
+
+  const tweetPayload: Record<string, unknown> = {};
+  if (text) tweetPayload.text = text;
+  if (uploadedMedia.length) {
+    tweetPayload.media = { media_ids: uploadedMedia.map((item) => item.media_id) };
+  }
   const result = await callXApi(accessToken, '/tweets', {
     method: 'POST',
-    body: { text },
+    body: tweetPayload,
   });
 
   const tweetId = result.data?.id || result.id || null;
@@ -890,9 +914,241 @@ async function publishX(client: ReturnType<typeof createClient>, userId: string,
     external_id: String(tweetId),
     url: tweetUrl,
     published_at: new Date().toISOString(),
+    media: uploadedMedia.map((item) => ({
+      asset_id: item.asset_id,
+      media_id: item.media_id,
+      type: item.type,
+      size_bytes: item.size_bytes,
+    })),
     metrics,
     token_exposed: false,
   };
+}
+
+type XPublishMedia = {
+  id: string | null;
+  url: string;
+  type: 'image' | 'video';
+  mimeType: string | null;
+};
+
+async function resolveXPublishMedia(
+  client: ReturnType<typeof createClient>,
+  task: Record<string, any>,
+  body: Record<string, unknown>,
+): Promise<XPublishMedia[]> {
+  const publishContent = task.publish_content || {};
+  const selectedIds = uniqueStrings([
+    ...(Array.isArray(publishContent.selected_asset_ids) ? publishContent.selected_asset_ids : []),
+    publishContent.selected_asset_id,
+    ...(Array.isArray(body.selected_asset_ids) ? body.selected_asset_ids : []),
+  ]);
+  const embeddedAssets = Array.isArray(publishContent.assets) ? publishContent.assets : [];
+  const byId = new Map<string, Record<string, any>>();
+  for (const asset of embeddedAssets) {
+    if (asset?.id) byId.set(String(asset.id), asset);
+  }
+
+  if (selectedIds.length) {
+    for (const id of selectedIds) byId.delete(id);
+    const { data, error } = await client
+      .from('asset_library')
+      .select('id, asset_type, output_url, status, approved_for_publishing, metadata')
+      .in('id', selectedIds)
+      .eq('user_id', task.user_id);
+    if (error) throw error;
+    for (const asset of data || []) byId.set(String(asset.id), asset);
+    return selectedIds.map((id) => {
+      const asset = byId.get(id);
+      if (!asset) throw new Error(`Selected X media asset was not found: ${id}`);
+      if (asset.status && asset.status !== 'completed') throw new Error(`Selected X media asset is not completed: ${id}`);
+      if (asset.approved_for_publishing !== true) throw new Error(`Selected X media asset is not approved: ${id}`);
+      return normalizeXPublishMedia(asset, id);
+    });
+  }
+
+  const fallbackAssets = embeddedAssets.filter((asset: Record<string, any>) => asset?.output_url);
+  if (fallbackAssets.length) {
+    throw new Error('Legacy X media task must select approved asset IDs before live publish.');
+  }
+
+  const urls = uniqueStrings([
+    ...(Array.isArray(publishContent.media_urls) ? publishContent.media_urls : []),
+    task.content_library?.media_url,
+  ]);
+  if (urls.length) throw new Error('X media URLs must be linked to approved asset records before live publish.');
+  return [];
+}
+
+function normalizeXPublishMedia(asset: Record<string, any>, id: string | null): XPublishMedia {
+  const url = String(asset.output_url || asset.url || '').trim();
+  if (!isHttpsUrl(url)) throw new Error(`X media asset has an invalid HTTPS URL${id ? `: ${id}` : ''}.`);
+  const mimeType = String(asset.mime_type || asset.metadata?.mime_type || '').trim() || null;
+  const rawType = String(asset.asset_type || asset.type || '').toLowerCase();
+  const type = rawType === 'video' || mimeType?.startsWith('video/') || /\.(mp4|mov|webm)(?:$|[?#])/i.test(url)
+    ? 'video'
+    : 'image';
+  return { id, url, type, mimeType };
+}
+
+function validateXPublishMedia(media: XPublishMedia[]) {
+  const images = media.filter((item) => item.type === 'image');
+  const videos = media.filter((item) => item.type === 'video');
+  if (images.length > 4) throw new Error('X supports at most 4 images in one post.');
+  if (videos.length > 1) throw new Error('X supports only one video in one post.');
+  if (images.length && videos.length) throw new Error('X does not support mixing images and video in the same post.');
+}
+
+async function uploadXMedia(accessToken: string, media: XPublishMedia) {
+  if (media.type === 'video') return uploadXVideo(accessToken, media);
+  const response = await fetch(media.url);
+  if (!response.ok) throw new Error(`Unable to download X image asset (${response.status}).`);
+  const blob = await response.blob();
+  if (blob.size > 5 * 1024 * 1024) throw new Error('X image exceeds the 5 MB upload limit.');
+  const mimeType = normalizeXImageMime(media.mimeType || blob.type, media.url);
+  const form = new FormData();
+  form.append('media', new Blob([blob], { type: mimeType }), `x-image.${extensionForMime(mimeType)}`);
+  form.append('media_category', 'tweet_image');
+  const json = await callXMediaApi(accessToken, { method: 'POST', form });
+  const mediaId = extractXMediaId(json);
+  return { asset_id: media.id, media_id: mediaId, type: media.type, size_bytes: blob.size };
+}
+
+async function uploadXVideo(accessToken: string, media: XPublishMedia) {
+  const response = await fetch(media.url);
+  if (!response.ok || !response.body) throw new Error(`Unable to download X video asset (${response.status}).`);
+  const totalBytes = Number(response.headers.get('content-length') || 0);
+  if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
+    throw new Error('X video source must provide Content-Length for safe chunked upload.');
+  }
+  if (totalBytes > 512 * 1024 * 1024) throw new Error('X video exceeds the 512 MB upload limit.');
+  const mimeType = normalizeXVideoMime(media.mimeType || response.headers.get('content-type'), media.url);
+  const init = new FormData();
+  init.append('command', 'INIT');
+  init.append('media_type', mimeType);
+  init.append('total_bytes', String(totalBytes));
+  init.append('media_category', 'tweet_video');
+  const initialized = await callXMediaApi(accessToken, { method: 'POST', form: init });
+  const mediaId = extractXMediaId(initialized);
+
+  const reader = response.body.getReader();
+  const chunkSize = 4 * 1024 * 1024;
+  let pending = new Uint8Array(0);
+  let segmentIndex = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value?.length) pending = concatBytes(pending, value);
+    while (pending.length >= chunkSize) {
+      await appendXMediaChunk(accessToken, mediaId, segmentIndex, pending.slice(0, chunkSize), mimeType);
+      pending = pending.slice(chunkSize);
+      segmentIndex += 1;
+    }
+    if (done) break;
+  }
+  if (pending.length) await appendXMediaChunk(accessToken, mediaId, segmentIndex, pending, mimeType);
+
+  const finalize = new FormData();
+  finalize.append('command', 'FINALIZE');
+  finalize.append('media_id', mediaId);
+  const finalized = await callXMediaApi(accessToken, { method: 'POST', form: finalize });
+  await waitForXMediaProcessing(accessToken, mediaId, finalized);
+  return { asset_id: media.id, media_id: mediaId, type: media.type, size_bytes: totalBytes };
+}
+
+async function appendXMediaChunk(accessToken: string, mediaId: string, segmentIndex: number, bytes: Uint8Array, mimeType: string) {
+  const form = new FormData();
+  form.append('command', 'APPEND');
+  form.append('media_id', mediaId);
+  form.append('segment_index', String(segmentIndex));
+  form.append('media', new Blob([bytes], { type: mimeType }), `segment-${segmentIndex}.mp4`);
+  await callXMediaApi(accessToken, { method: 'POST', form, allowEmpty: true });
+}
+
+async function waitForXMediaProcessing(accessToken: string, mediaId: string, initial: Record<string, any>) {
+  let processing = initial.data?.processing_info || initial.processing_info || null;
+  for (let attempt = 0; processing && !['succeeded', 'failed'].includes(processing.state) && attempt < 30; attempt += 1) {
+    const seconds = Math.max(1, Math.min(Number(processing.check_after_secs || 1), 10));
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+    const status = await callXMediaApi(accessToken, {
+      method: 'GET',
+      query: { command: 'STATUS', media_id: mediaId },
+    });
+    processing = status.data?.processing_info || status.processing_info || null;
+  }
+  if (processing?.state === 'failed') {
+    throw new Error(processing.error?.message || 'X video processing failed.');
+  }
+  if (processing && processing.state !== 'succeeded') throw new Error('X video processing timed out.');
+}
+
+async function callXMediaApi(
+  accessToken: string,
+  options: { method: 'GET' | 'POST'; form?: FormData; query?: Record<string, string>; allowEmpty?: boolean },
+) {
+  const config = getXConfig();
+  const url = new URL(`${config.apiBaseUrl}/media/upload`);
+  for (const [key, value] of Object.entries(options.query || {})) url.searchParams.set(key, value);
+  const response = await fetch(url, {
+    method: options.method,
+    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    body: options.form,
+  });
+  const text = await response.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!response.ok || json.errors || json.error) {
+    const message = json.detail || json.title || json.error_description || json.error || json.errors?.[0]?.message || `X media API failed with ${response.status}.`;
+    throw new Error(message);
+  }
+  if (!text && !options.allowEmpty) throw new Error('X media API returned an empty response.');
+  return json;
+}
+
+function extractXMediaId(value: Record<string, any>) {
+  const mediaId = value.data?.id || value.data?.media_id || value.media_id_string || value.media_id;
+  if (!mediaId) throw new Error('X media upload returned no media id.');
+  return String(mediaId);
+}
+
+function normalizeXImageMime(value: string | null, url: string) {
+  const mime = String(value || '').split(';')[0].toLowerCase();
+  if (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(mime)) return mime;
+  if (/\.png(?:$|[?#])/i.test(url)) return 'image/png';
+  if (/\.webp(?:$|[?#])/i.test(url)) return 'image/webp';
+  if (/\.gif(?:$|[?#])/i.test(url)) return 'image/gif';
+  return 'image/jpeg';
+}
+
+function normalizeXVideoMime(value: string | null, url: string) {
+  const mime = String(value || '').split(';')[0].toLowerCase();
+  if (mime === 'video/mp4' || mime === 'video/quicktime') return mime;
+  if (/\.mov(?:$|[?#])/i.test(url)) return 'video/quicktime';
+  return 'video/mp4';
+}
+
+function extensionForMime(mime: string) {
+  if (mime === 'image/png') return 'png';
+  if (mime === 'image/webp') return 'webp';
+  if (mime === 'image/gif') return 'gif';
+  return 'jpg';
+}
+
+function concatBytes(left: Uint8Array, right: Uint8Array) {
+  const result = new Uint8Array(left.length + right.length);
+  result.set(left);
+  result.set(right, left.length);
+  return result;
+}
+
+function uniqueStrings(values: unknown[]) {
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function isHttpsUrl(value: string) {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 async function getXMetrics(client: ReturnType<typeof createClient>, userId: string, body: Record<string, unknown>) {
@@ -1150,7 +1406,7 @@ async function loadXPublishTask(client: ReturnType<typeof createClient>, userId:
 
   const { data, error } = await client
     .from('publish_tasks')
-    .select('*, content_library(title, content_text, media_url, content_type, platform), content_packages(title, body, platform, image_requirements, video_requirements)')
+    .select('*, content_library(title, content_text, media_url, content_type, platform), content_packages(title, body, platform, review_status, image_requirements, video_requirements)')
     .eq('id', taskId)
     .eq('user_id', userId)
     .single();

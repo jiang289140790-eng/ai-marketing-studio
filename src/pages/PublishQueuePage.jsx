@@ -98,7 +98,7 @@ export function PublishQueuePage({ userId, onNavigate, activeCampaignId, campaig
     <section className="page-stack publish-center-v2">
       <header className="publish-center-header">
         <div>
-          <p className="eyebrow">发布中心 · Telegram 第一阶段</p>
+          <p className="eyebrow">发布中心 · X / Telegram 安全发布</p>
           <h2>一个入口完成预检、批准、排期与发布</h2>
           <p>内容审核、发布任务和执行模式分别展示。测试执行通过不会被标记为发布失败，真实发布仍默认要求人工确认。</p>
         </div>
@@ -277,7 +277,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
       {publishState === 'scheduled' && (
         <label className="human-confirmation-row">
           <input type="checkbox" checked={humanConfirmed} onChange={(event) => setHumanConfirmed(event.target.checked)} />
-          我已检查最终文案、素材、账号和发布时间，并明确批准本次 Telegram 正式发布
+          我已检查最终文案、全部素材、账号和发布时间，并明确批准本次 {task.platform || '平台'} 正式发布
         </label>
       )}
 

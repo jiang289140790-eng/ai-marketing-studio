@@ -3,7 +3,9 @@ import { getAccountRole, upsertAccountProfile } from './account-service';
 import { requireSupabase } from './supabase-client';
 
 const viralContentSelect = '*, social_accounts:social_account_id(id,account_name,username,platform,account_role,target_audience,content_strategy,posting_frequency)';
-const analysisSelect = '*, viral_contents(title,platform,url,views,likes,comments,content_text,published_at,viral_reason,ai_recommendation,social_accounts:social_account_id(account_name,username,platform,account_role))';
+// content_analysis has two historical foreign keys to viral_contents. Always
+// name the canonical relationship so PostgREST never has to guess.
+const analysisSelect = '*, viral_contents:viral_contents!content_analysis_viral_content_id_fkey(title,platform,url,views,likes,comments,content_text,published_at,viral_reason,ai_recommendation,social_accounts:social_account_id(account_name,username,platform,account_role))';
 const defaultAnalysisModel = 'qwen-plus';
 const defaultContentGenerationModel = 'qwen-plus';
 

@@ -1,3 +1,5 @@
+import { connectionIsActive, getUnifiedConnectionState } from './platform-connection-summary.js';
+
 const REFERENCE_ROLES = new Set(['competitor', 'inspiration']);
 const OWNED_ROLES = new Set(['owned', 'brand', 'personal']);
 const DAMAGED_TEXT = /\uFFFD|\0|(?:Ã.|Â.|ä¸|æ—|çš„|é—|å­|鎴|璐﹀彿)|\?{2,}/;
@@ -117,8 +119,8 @@ function campaignIncludesAccount(campaign, account) {
 }
 
 function capabilityFromConnections(connections, kind) {
-  const active = connections.filter((row) => row.status === 'connected' || row.is_connected === true);
-  if (!active.length) return { state: 'not_connected', label: '未连接' };
+  const active = connections.filter(connectionIsActive);
+  if (!active.length) return { state: 'not_connected', label: kind === 'publish' ? '不可发布' : '不可用' };
   const permissions = active.flatMap((row) => listValue(row.permissions));
   const tests = {
     read: /read|collect|content/i,
@@ -154,6 +156,7 @@ export function buildAccountMatrixRows({
   return accounts.map((account) => {
     const role = getAccountRole(account);
     const accountConnections = connections.filter((row) => String(row.account_id || '') === String(account.id));
+    const connectionState = getUnifiedConnectionState(accountConnections);
     const reports = accountReports.filter((row) => String(row.account_id || '') === String(account.id));
     const samples = viralContents.filter((row) => (
       String(row.social_account_id || '') === String(account.id)
@@ -193,6 +196,7 @@ export function buildAccountMatrixRows({
       ...account,
       role,
       connections: accountConnections,
+      connectionState,
       reports,
       latestReport: report,
       samples,
@@ -212,7 +216,7 @@ export function buildAccountMatrixRows({
       sourceLabel: samples.some((row) => row.source_platform) ? '平台采集' : samples.length ? '历史导入' : '尚无数据',
       dataWarnings: warnings,
       nextAction: role === 'owned'
-        ? (!accountConnections.some((row) => row.status === 'connected' || row.is_connected) ? '连接平台' : !account.brain_data && !profile && !report ? '生成账号大脑' : '查看运营状态')
+        ? (!connectionState.oauthValid ? '连接平台' : !account.brain_data && !profile && !report ? '生成账号大脑' : '查看运营状态')
         : (!samples.length ? '抓取内容样本' : !report ? '分析账号' : '查看可复制模式'),
     };
   });
@@ -221,4 +225,3 @@ export function buildAccountMatrixRows({
 export function isReferenceAccount(account) {
   return REFERENCE_ROLES.has(getAccountRole(account));
 }
-

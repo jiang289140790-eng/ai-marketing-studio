@@ -47,6 +47,7 @@ export function ContentIntelligence({ userId, detailId, onNavigate, campaignCont
   const [viralForm, setViralForm] = useState(defaultViral);
   const [filters, setFilters] = useState({ search: '', platform: '', category: '', accountId: '' });
   const [message, setMessage] = useState('');
+  const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [analyzingId, setAnalyzingId] = useState('');
   const [generatingAnalysisId, setGeneratingAnalysisId] = useState('');
@@ -56,29 +57,33 @@ export function ContentIntelligence({ userId, detailId, onNavigate, campaignCont
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
-    const [nextAccounts, nextViralContents, nextAnalyses] = await Promise.all([
-      listCompetitorAccounts(userId, filters),
-      listViralContents(userId, filters),
-      listContentAnalysis(userId),
-    ]);
-    const allowedIds = new Set((campaignContext?.competitorAccounts || []).map((account) => account.id));
-    const scopedAccounts = nextAccounts.filter((account) => allowedIds.has(account.id));
-    const scopedContent = nextViralContents.filter((item) => allowedIds.has(item.social_account_id || item.account_id));
-    const scopedContentIds = new Set(scopedContent.map((item) => item.id));
-    setAccounts(scopedAccounts);
-    setViralContents(scopedContent);
-    setAnalyses(nextAnalyses.filter((item) => (
-      allowedIds.has(item.social_account_id)
-      || scopedContentIds.has(item.viral_content_id || item.content_id)
-    )));
-    setLoading(false);
-  }, [campaignContext?.competitorAccounts, userId, filters]);
+    setLoadError(false);
+    try {
+      const [nextAccounts, nextViralContents, nextAnalyses] = await Promise.all([
+        listCompetitorAccounts(userId, filters),
+        listViralContents(userId, filters),
+        listContentAnalysis(userId),
+      ]);
+      const allowedIds = new Set((campaignContext?.competitorAccounts || []).map((account) => account.id));
+      const scopedAccounts = nextAccounts.filter((account) => allowedIds.has(account.id));
+      const scopedContent = nextViralContents.filter((item) => allowedIds.has(item.social_account_id || item.account_id));
+      const scopedContentIds = new Set(scopedContent.map((item) => item.id));
+      setAccounts(scopedAccounts);
+      setViralContents(scopedContent);
+      setAnalyses(nextAnalyses.filter((item) => (
+        allowedIds.has(item.social_account_id)
+        || scopedContentIds.has(item.viral_content_id || item.content_id)
+      )));
+    } catch {
+      setLoadError(true);
+      setMessage('内容情报加载失败，请稍后重试或前往系统状态查看服务异常。');
+    } finally {
+      setLoading(false);
+    }
+  }, [campaignContext, userId, filters]);
 
   useEffect(() => {
-    refresh().catch((error) => {
-      setMessage(error.message);
-      setLoading(false);
-    });
+    refresh();
   }, [refresh]);
 
   useEffect(() => {
@@ -198,12 +203,28 @@ export function ContentIntelligence({ userId, detailId, onNavigate, campaignCont
       </section>
 
       <div className="stat-grid">
-        <StatCard label="情报账号" value={loading ? '—' : stats.accounts} hint="竞品账号与灵感账号" />
-        <StatCard label="内容机会" value={loading ? '—' : stats.viral} hint="值得分析的内容" />
-        <StatCard label="AI 分析" value={loading ? '—' : stats.analyses} hint="已完成的智能分析" />
-        <StatCard label="热门平台" value={loading ? '—' : stats.topPlatform} hint="机会来源" />
-        <StatCard label="最高分内容" value={loading ? '—' : stats.topItem} hint={`评分 ${compactNumber(stats.topScore)}`} />
+        <StatCard label="情报账号" value={loading || loadError ? '—' : stats.accounts} hint={loadError ? '加载失败，并非 0' : '竞品账号与灵感账号'} />
+        <StatCard label="内容机会" value={loading || loadError ? '—' : stats.viral} hint={loadError ? '加载失败' : '值得分析的内容'} />
+        <StatCard label="AI 分析" value={loading || loadError ? '—' : stats.analyses} hint={loadError ? '加载失败' : '已完成的智能分析'} />
+        <StatCard label="热门平台" value={loading || loadError ? '—' : stats.topPlatform} hint="机会来源" />
+        <StatCard label="最高分内容" value={loading || loadError ? '—' : stats.topItem} hint={loadError ? '加载失败' : `评分 ${compactNumber(stats.topScore)}`} />
       </div>
+
+      {loadError && (
+        <EmptyState
+          title="内容情报加载失败"
+          description="系统没有把查询失败显示成 0。请重试；若仍失败，可前往系统状态查看服务异常。"
+          action={<button className="primary-button" type="button" onClick={refresh}>重新加载</button>}
+        />
+      )}
+
+      {!loading && !loadError && accounts.length === 0 && (
+        <EmptyState
+          title="当前运营活动尚未添加情报账号"
+          description="请先在账号矩阵中添加竞争账号或灵感账号，并将其关联到当前运营活动。"
+          action={<button className="primary-button" type="button" onClick={() => onNavigate('accounts')}>管理情报账号</button>}
+        />
+      )}
 
       <div className="filter-bar">
         <select value={aiModel} onChange={(event) => setAIModel(event.target.value)} aria-label="AI 模型">

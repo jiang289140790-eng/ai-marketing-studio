@@ -43,10 +43,6 @@ function isErrorMessage(message) {
   return /失败|错误|缺少|error|failed/i.test(String(message || ''));
 }
 
-function isConnected(row) {
-  return row?.status === 'connected' || row?.is_connected === true;
-}
-
 function TextValue({ value, fallback = '—' }) {
   const safe = safeBusinessText(value, fallback);
   return <span className={safe.damaged ? 'damaged-text' : ''}>{safe.text}</span>;
@@ -274,7 +270,12 @@ function OwnedAccountTable({ rows, includeReference, onDetail, onNext }) {
               <td><AccountIdentity row={row} /></td>
               <td>{row.platform || '—'}</td>
               {includeReference && <td>{row.role === 'competitor' ? '竞争' : row.role === 'inspiration' ? '灵感' : '自有'}</td>}
-              <td><Capability state={row.connections.some(isConnected) ? 'available' : 'not_connected'} label={row.connections.some(isConnected) ? '已连接' : '未连接'} /></td>
+              <td>
+                <div className="row-action-stack">
+                  <Capability {...row.connectionState.registration} />
+                  <Capability {...row.connectionState.oauth} />
+                </div>
+              </td>
               <td><Capability {...row.publishCapability} /></td>
               <td><Capability {...row.metricsCapability} /></td>
               <td>{row.character?.name || row.character?.character_name || '未绑定'}</td>
@@ -358,7 +359,7 @@ function AccountCard({ row, onDetail, onNext }) {
       <div className="account-card-facts">
         <span>平台<strong>{row.platform || '—'}</strong></span>
         <span>用途<strong>{row.role === 'owned' ? '自有' : row.role === 'competitor' ? '竞争' : '灵感'}</strong></span>
-        <span>{row.role === 'owned' ? '连接' : '样本'}<strong>{row.role === 'owned' ? (row.connections.some(isConnected) ? '已连接' : '未连接') : row.samples.length}</strong></span>
+        <span>{row.role === 'owned' ? '连接' : '样本'}<strong>{row.role === 'owned' ? row.connectionState.oauth.label : row.samples.length}</strong></span>
       </div>
       {row.dataWarnings.length > 0 && <p className="quality-warning">{row.dataWarnings[0]}</p>}
       <div className="account-card-footer">

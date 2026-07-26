@@ -50,3 +50,20 @@ test('自有账号与对标账号生成不同业务数据', () => {
   assert.equal(rows[1].samples.length, 1);
 });
 
+test('账号已登记但 OAuth 过期时不再显示已连接或可发布', () => {
+  const [row] = buildAccountMatrixRows({
+    accounts: [{ id: 'owned', platform: 'X', username: 'brand', account_role: 'owned' }],
+    connections: [{
+      account_id: 'owned',
+      platform: 'X',
+      status: 'connected',
+      is_connected: false,
+      expires_at: '2026-07-20T14:31:02.804Z',
+      permissions: ['tweet.read', 'tweet.write'],
+    }],
+  });
+  assert.equal(row.connectionState.registration.label, '账号已登记');
+  assert.equal(row.connectionState.oauth.label, 'OAuth 已过期');
+  assert.equal(row.publishCapability.label, '不可发布');
+  assert.equal(row.nextAction, '连接平台');
+});

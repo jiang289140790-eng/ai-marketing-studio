@@ -5,6 +5,7 @@ import {
   getContentApprovalState,
   getDryRunPresentation,
   getPublishErrorPresentation,
+  getPublishReadiness,
   getPublishTaskState,
 } from '../src/services/publish-state-machine.js';
 
@@ -79,6 +80,41 @@ test('dry-run success is presented as completed test, never publish failure', ()
   assert.equal(presentation.title, '预检通过');
   assert.match(presentation.summary, /未执行真实发布/);
   assert.equal(getPublishTaskState({ status: 'draft', approval_status: 'pending' }), 'pending_approval');
+});
+
+test('业务检查全通过但执行授权未满足时显示暂不可发布', () => {
+  const checks = Array.from({ length: 8 }, (_, index) => ({ code: `check-${index}`, passed: true }));
+  const readiness = getPublishReadiness({
+    checks,
+    task: { publish_result: { preflight: { passed: false } } },
+    humanAuthorized: false,
+  });
+  assert.equal(readiness.businessPassed, 8);
+  assert.equal(readiness.businessReady, true);
+  assert.equal(readiness.executionConditionsMet, false);
+  assert.equal(readiness.finalLabel, '暂不可发布');
+});
+
+test('旧 connected 文本不能绕过后端明确的 OAuth 失效状态', () => {
+  const checks = buildPublishPreflightChecks({
+    task: {
+      platform: 'X',
+      publish_content: { body: 'approved text', asset_approved: true },
+      publish_result: { execution_mode: 'dry_run' },
+    },
+    content: approvedContent,
+    connection: {
+      platform: 'X',
+      status: 'connected',
+      is_connected: false,
+      account_id: 'account-1',
+      permissions: ['tweet.write'],
+    },
+    account: { id: 'account-1' },
+    asset: approvedAsset,
+  });
+  assert.equal(checks.find((item) => item.code === 'account_connected').passed, false);
+  assert.equal(checks.find((item) => item.code === 'publish_permission').passed, false);
 });
 
 test('failed task exposes safe retry guidance instead of technical details', () => {

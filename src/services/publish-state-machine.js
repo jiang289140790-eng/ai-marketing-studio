@@ -63,6 +63,22 @@ export function getDryRunPresentation(task = {}) {
   };
 }
 
+export function getPublishReadiness({ checks = [], task = {}, humanAuthorized = false } = {}) {
+  const businessPassed = checks.filter((item) => item.passed).length;
+  const businessTotal = checks.length;
+  const storedPreflightPassed = task.publish_result?.preflight?.passed === true;
+  const executionConditionsMet = storedPreflightPassed && humanAuthorized;
+  return {
+    businessPassed,
+    businessTotal,
+    businessReady: businessTotal > 0 && businessPassed === businessTotal,
+    storedPreflightPassed,
+    executionConditionsMet,
+    finalState: executionConditionsMet ? 'ready' : 'blocked',
+    finalLabel: executionConditionsMet ? '可以发布' : '暂不可发布',
+  };
+}
+
 export function buildPublishPreflightChecks({ task = {}, content = {}, connection = {}, account = {}, asset = {}, now = new Date() }) {
   const platform = String(task.platform || content.platform || connection.platform || '').toLowerCase();
   const body = String(task.publish_content?.body || task.final_text || task.content_text || content.body || '').trim();
@@ -74,7 +90,7 @@ export function buildPublishPreflightChecks({ task = {}, content = {}, connectio
     || task.publish_content?.asset_approved,
   );
   const accountConnected = Boolean(
-    (connection.status === 'connected' || connection.is_connected === true)
+    connectionIsActive(connection)
     && (account.id || connection.account_id),
   );
   const scopes = normalizeList(connection.permissions || connection.scopes || connection.metadata?.scopes);
@@ -145,3 +161,4 @@ function normalizeList(value) {
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
+import { connectionIsActive } from '../utils/platform-connection-summary.js';

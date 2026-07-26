@@ -60,8 +60,9 @@ test('后端明确标记未连接时不得被旧 connected 文本误判为可用
       permissions: ['tweet.read', 'tweet.write'],
     }],
   });
-  assert.equal(summary.connectionState.state, 'not_connected');
+  assert.equal(summary.connectionState.state, 'failed');
+  assert.equal(summary.connectionState.label, 'OAuth 已过期');
   assert.equal(summary.read.state, 'not_connected');
   assert.equal(summary.publish.state, 'not_connected');
-  assert.equal(summary.token.label, '已过期');
+  assert.equal(summary.token.label, 'OAuth 已过期');
 });

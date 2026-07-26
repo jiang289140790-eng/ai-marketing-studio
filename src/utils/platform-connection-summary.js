@@ -24,9 +24,33 @@ function objectValue(value) {
   }
 }
 
-export function connectionIsActive(connection) {
+export function connectionIsActive(connection, now = new Date()) {
   if (connection?.is_connected === false) return false;
+  if (connection?.expires_at && new Date(connection.expires_at).getTime() <= now.getTime()) return false;
   return connection?.status === 'connected' || connection?.is_connected === true;
+}
+
+export function getUnifiedConnectionState(rows = [], now = new Date()) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const activeRows = safeRows.filter((row) => connectionIsActive(row, now));
+  const expiryValues = safeRows
+    .map((row) => row.expires_at)
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+  const expired = expiryValues.some((value) => value <= now.getTime())
+    || safeRows.some((row) => row.status === 'connected' && row.is_connected === false);
+  return {
+    registered: true,
+    oauthValid: activeRows.length > 0,
+    activeRows,
+    registration: { state: 'registered', label: '账号已登记' },
+    oauth: activeRows.length
+      ? { state: 'available', label: 'OAuth 有效' }
+      : expired
+        ? { state: 'failed', label: 'OAuth 已过期' }
+        : { state: 'not_connected', label: 'OAuth 未连接' },
+  };
 }
 
 export function collectConnectionPermissions(rows = []) {
@@ -50,8 +74,9 @@ function latestDate(rows) {
 }
 
 function tokenStatus(rows, now = new Date()) {
-  const credentialRows = rows.filter((row) => row.status === 'connected' || row.is_connected === true);
-  if (!credentialRows.length) return { state: 'not_connected', label: '未连接' };
+  const unified = getUnifiedConnectionState(rows, now);
+  const credentialRows = unified.activeRows;
+  if (!credentialRows.length) return unified.oauth;
   const expiries = credentialRows.map((row) => row.expires_at).filter(Boolean).map((value) => new Date(value));
   if (!expiries.length) return { state: 'unknown', label: '有效期未上报' };
   const latestExpiry = expiries.sort((left, right) => right.getTime() - left.getTime())[0];
@@ -107,7 +132,8 @@ export function buildPlatformSummaries({
     delete safeCard.callbackUrl;
     const key = String(card.platform || '').toLowerCase();
     const rows = connections.filter((row) => String(row.platform || '').toLowerCase() === key);
-    const activeRows = rows.filter(connectionIsActive);
+    const unified = getUnifiedConnectionState(rows, now);
+    const activeRows = unified.activeRows;
     const accountIds = new Set(rows.map((row) => row.account_id).filter(Boolean).map(String));
     const relatedAccounts = accounts.filter((account) => (
       String(account.platform || '').toLowerCase() === key
@@ -140,7 +166,8 @@ export function buildPlatformSummaries({
       relatedAccounts,
       permissions,
       adapter,
-      connectionState: activeRows.length ? { state: 'connected', label: '已连接' } : { state: card.implemented ? 'not_connected' : 'preparing', label: card.implemented ? '未连接' : '准备中' },
+      connectionState: activeRows.length ? { state: 'connected', label: 'OAuth 有效' } : { state: card.implemented ? unified.oauth.state : 'preparing', label: card.implemented ? unified.oauth.label : '准备中' },
+      registrationState: { state: relatedAccounts.length ? 'registered' : 'not_started', label: relatedAccounts.length ? '账号已登记' : '尚未登记账号' },
       connectedCount: activeRows.length,
       accountCount: relatedAccounts.length,
       publishableCount: publish.state === 'available' ? relatedAccounts.length : 0,

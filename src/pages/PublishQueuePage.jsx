@@ -11,12 +11,14 @@ import {
   getDryRunPresentation,
   getExecutionMode,
   getPublishErrorPresentation,
+  getPublishReadiness,
   getPublishTaskState,
   PUBLISH_TASK_STATE,
 } from '../services/publish-state-machine';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { getContentPackageDay } from '../utils/campaign-daily-plan';
 import { formatDate } from '../utils/formatters';
+import { connectionIsActive } from '../utils/platform-connection-summary';
 
 const EMPTY = {
   publishTasks: [],
@@ -165,6 +167,11 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
   const day = getContentPackageDay(content?.raw || content);
   const preflightPassed = task.publish_result?.preflight?.passed === true;
   const canApprove = preflightChecks.every((item) => item.passed);
+  const readiness = getPublishReadiness({
+    checks: preflightChecks,
+    task,
+    humanAuthorized: publishState !== 'pending_approval' || humanConfirmed,
+  });
 
   const returnToWorkspace = () => onNavigate('workspace', content?.id || task.content_package_id, {
     campaign_id: content?.campaignId || task.campaign_id || '',
@@ -195,7 +202,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
         <Fact label="平台返回 ID" value={task.external_id || task.publish_result?.platform_result?.platform_post_id || '尚未发布'} />
       </div>
 
-      {dryRun && (
+      {dryRun && !(readiness.businessReady && !dryRun.passed) && (
         <div className={`dry-run-result ${dryRun.passed ? 'passed' : 'blocked'}`}>
           <span>{dryRun.passed ? '✓' : '!'}</span>
           <div>
@@ -206,7 +213,15 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
         </div>
       )}
 
-      <details className="publish-preflight-compact" open={!preflightPassed && publishState === 'pending_approval'}>
+      <div className={`dry-run-result ${readiness.executionConditionsMet ? 'passed' : 'blocked'}`}>
+        <span>{readiness.executionConditionsMet ? '✓' : '!'}</span>
+        <div>
+          <strong>业务预检：{readiness.businessPassed}/{readiness.businessTotal} 通过</strong>
+          <p>执行条件：{readiness.executionConditionsMet ? '已满足' : '未满足'} · 最终状态：{readiness.finalLabel}</p>
+        </div>
+      </div>
+
+      <details className="publish-preflight-compact" open={!readiness.businessReady && publishState === 'pending_approval'}>
         <summary>
           <span>发布前检查</span>
           <strong>{preflightChecks.filter((item) => item.passed).length}/{preflightChecks.length} 通过</strong>
@@ -427,7 +442,7 @@ function findConnection(task, connections, content) {
   return connections.find((row) => (
     (!platform || String(row.platform || '').toLowerCase() === platform)
     && (!accountId || String(row.account_id || '') === accountId)
-    && (row.status === 'connected' || row.is_connected === true)
+    && connectionIsActive(row)
   )) || {};
 }
 

@@ -13,6 +13,7 @@ import { getPublishHistory } from './publish-service';
 import { listWorkflowRuns } from './workflow-service';
 import { listAgentRuns } from './agent-service';
 import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
+import { dateKey, getRelativeDate } from '../utils/report-time';
 
 export async function buildDataExport(userId, scopeOptions = {}) {
   const [contents, assets, workflows, campaigns, metrics, strategies, toolUsage] = await Promise.all([
@@ -39,32 +40,47 @@ export async function buildDataExport(userId, scopeOptions = {}) {
 }
 
 export async function buildDailyReport(userId, scopeOptions = {}) {
-  const rawRows = await Promise.all([
-    listContent(userId),
-    listWorkflowRuns(userId),
-    listAgentRuns(userId),
-    listViralContents(userId),
-    getPublishHistory(userId),
-    listCampaignLinks(userId),
-    listContentMetrics(userId),
-    listCostRecords(userId),
-    listToolUsage(userId),
-    listNotifications(userId),
-    listContentStrategies(userId),
-  ]);
-  const [contents, workflows, agentRuns, viralContents, publishTasks, campaigns, metrics, costs, toolUsage, notifications, strategies] = rawRows
-    .map((rows) => filterRecordsForAuxiliaryScope(rows, scopeOptions));
+  const sources = [
+    ['contents', listContent(userId)],
+    ['workflows', listWorkflowRuns(userId)],
+    ['agentRuns', listAgentRuns(userId)],
+    ['viralContents', listViralContents(userId)],
+    ['publishTasks', getPublishHistory(userId)],
+    ['campaigns', listCampaignLinks(userId)],
+    ['metrics', listContentMetrics(userId)],
+    ['costs', listCostRecords(userId)],
+    ['toolUsage', listToolUsage(userId)],
+    ['notifications', listNotifications(userId)],
+    ['strategies', listContentStrategies(userId)],
+  ];
+  const settled = await Promise.allSettled(sources.map(([, request]) => request));
+  const failedSources = settled
+    .map((result, index) => (result.status === 'rejected' ? sources[index][0] : null))
+    .filter(Boolean);
+  if (failedSources.length === sources.length) {
+    throw settled.find((result) => result.status === 'rejected')?.reason || new Error('Daily report data is unavailable.');
+  }
+  const scopedRows = settled.map((result) => (
+    result.status === 'fulfilled'
+      ? filterRecordsForAuxiliaryScope(result.value || [], scopeOptions)
+      : []
+  ));
+  const [contents, workflows, agentRuns, viralContents, publishTasks, campaigns, metrics, costs, toolUsage, notifications, strategies] = scopedRows;
 
-  const yesterday = getRelativeDate(-1);
-  const today = getRelativeDate(0);
-  const yesterdayWorkflows = byDate(workflows, 'created_at', yesterday);
-  const yesterdayAgentRuns = byDate(agentRuns, 'created_at', yesterday);
-  const yesterdayContents = byDate(contents, 'created_at', yesterday);
-  const yesterdayDiscovered = byDate(viralContents, 'created_at', yesterday);
-  const yesterdayPublished = publishTasks.filter((item) => String(item.published_at || item.created_at || '').slice(0, 10) === yesterday && item.status === 'published');
-  const yesterdayMetrics = byDate(metrics, 'collected_at', yesterday);
+  const timeZone = scopeOptions.timeZone || 'Asia/Shanghai';
+  const yesterday = getRelativeDate(-1, timeZone);
+  const today = getRelativeDate(0, timeZone);
+  const yesterdayWorkflows = byDate(workflows, 'created_at', yesterday, timeZone);
+  const yesterdayAgentRuns = byDate(agentRuns, 'created_at', yesterday, timeZone);
+  const yesterdayContents = byDate(contents, 'created_at', yesterday, timeZone);
+  const yesterdayDiscovered = byDate(viralContents, 'created_at', yesterday, timeZone);
+  const yesterdayPublished = publishTasks.filter((item) => (
+    dateKey(item.published_at || item.created_at, timeZone) === yesterday
+    && item.status === 'published'
+  ));
+  const yesterdayMetrics = byDate(metrics, 'collected_at', yesterday, timeZone);
   const yesterdayFailures = notifications.filter((item) => {
-    const isYesterday = String(item.created_at || '').slice(0, 10) === yesterday;
+    const isYesterday = dateKey(item.created_at, timeZone) === yesterday;
     return isYesterday && ['unread', 'failed'].includes(item.status);
   });
 
@@ -74,7 +90,7 @@ export async function buildDailyReport(userId, scopeOptions = {}) {
   const toolSummary = summarizeToolUsage(toolUsage, contents);
   const latestStrategy = strategies[0]?.optimization_strategy;
   const yesterdayToolCost = toolUsage
-    .filter((item) => String(item.created_at || '').slice(0, 10) === yesterday)
+    .filter((item) => dateKey(item.created_at, timeZone) === yesterday)
     .reduce((sum, item) => sum + Number(item.total_cost || 0), 0);
   const campaignContext = scopeOptions.campaignContext || {};
   const blockers = [
@@ -106,6 +122,9 @@ export async function buildDailyReport(userId, scopeOptions = {}) {
     published_content: yesterdayPublished.length,
     metrics_collected: yesterdayMetrics.length,
     has_activity: hasActivity,
+    is_execution_summary: !hasActivity,
+    partial_data: failedSources.length > 0,
+    unavailable_sources: failedSources,
     yesterday_completed: yesterdayCompleted,
     today_actions: todayActions,
     publish_performance: {
@@ -157,14 +176,8 @@ export function downloadJson(filename, payload) {
   globalThis.URL.revokeObjectURL(url);
 }
 
-function byDate(items, field, date) {
-  return items.filter((item) => String(item[field] || '').slice(0, 10) === date);
-}
-
-function getRelativeDate(offset) {
-  const date = new Date();
-  date.setDate(date.getDate() + offset);
-  return date.toISOString().slice(0, 10);
+function byDate(items, field, date, timeZone) {
+  return items.filter((item) => dateKey(item[field], timeZone) === date);
 }
 
 function buildTodayActions(context, blockers) {

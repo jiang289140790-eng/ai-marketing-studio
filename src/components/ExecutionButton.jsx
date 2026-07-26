@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useExecutionAction } from '../hooks/useExecutionAction';
 import { classifyDisabledReason, getUnavailableReason } from '../services/execution-gateway';
+import { statusLabel } from '../utils/formatters';
 
 export function ExecutionButton({
   children,
@@ -44,7 +45,7 @@ export function ExecutionButton({
       {clickHint && <small className="inline-hint">{clickHint}</small>}
       {!disabled && execution.state.run?.id && <small>run_id：{execution.state.run.id}</small>}
       {execution.state.status !== 'ready' && execution.state.status !== 'unavailable' && (
-        <small>{execution.state.status} · {execution.state.run?.progress ?? 0}%</small>
+        <small>{statusLabel(execution.state.status)} · {execution.state.run?.progress ?? 0}%</small>
       )}
       {execution.state.error && <small className="inline-error">{execution.state.error}</small>}
     </span>

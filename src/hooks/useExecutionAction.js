@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { asyncActions, executeAction, getExecutionStatus, getRunStatus, isTerminalStatus } from '../services/execution-gateway';
+import { safeErrorMessage } from '../utils/business-error';
 
 export function useExecutionAction({ action, resourceType, resourceId, payload, ready = true, onCompleted } = {}) {
   const [gateway, setGateway] = useState({ loading: true, connected: false, reason: '正在检查执行网关...' });
@@ -48,7 +49,7 @@ export function useExecutionAction({ action, resourceType, resourceId, payload, 
               if (nextRun.status === 'completed') onCompleted?.(nextRun);
             }
           } catch (error) {
-            setState((previous) => ({ ...previous, status: 'failed', error: error.message || '状态查询失败。' }));
+            setState((previous) => ({ ...previous, status: 'failed', error: safeErrorMessage(error, { message: '任务状态暂时无法查询。' }) }));
             window.clearInterval(pollingRef.current);
             pollingRef.current = null;
           }
@@ -58,7 +59,7 @@ export function useExecutionAction({ action, resourceType, resourceId, payload, 
       }
       return result;
     } catch (error) {
-      setState({ status: 'failed', run: error.runId ? { id: error.runId } : null, error: error.message || '执行失败。', message: '' });
+      setState({ status: 'failed', run: error.runId ? { id: error.runId } : null, error: safeErrorMessage(error), message: '' });
       return null;
     }
   }, [action, gateway.connected, onCompleted, payload, ready, resourceId, resourceType]);

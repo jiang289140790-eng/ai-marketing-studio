@@ -11,9 +11,10 @@ const publishTaskSelect = `
     connected_at,
     last_sync,
     social_accounts(account_name, account_url, avatar)
-  ),
-  campaign_links(id, url, utm_source, utm_campaign, clicks, registrations, revenue)
+  )
 `;
+
+const publishCampaignLinkSelect = 'id, content_id, url, utm_source, utm_campaign, clicks, registrations, revenue';
 
 export async function listPublishTasks(userId, filters = {}) {
   const client = requireSupabase();
@@ -28,14 +29,14 @@ export async function listPublishTasks(userId, filters = {}) {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data || [];
+  return enrichPublishTasksWithCampaignLinks(client, data || [], userId);
 }
 
 export async function getPublishTask(taskId) {
   const client = requireSupabase();
   const { data, error } = await client.from('publish_tasks').select(publishTaskSelect).eq('id', taskId).single();
   if (error) throw error;
-  return data;
+  return (await enrichPublishTasksWithCampaignLinks(client, [data], data.user_id))[0];
 }
 
 export async function createPublishTask(userId, payload) {
@@ -59,7 +60,7 @@ export async function createPublishTask(userId, payload) {
     .single();
 
   if (error) throw error;
-  return data;
+  return (await enrichPublishTasksWithCampaignLinks(client, [data], userId))[0];
 }
 
 export async function updatePublishTask(taskId, payload) {
@@ -87,7 +88,7 @@ export async function updatePublishTask(taskId, payload) {
     .single();
 
   if (error) throw error;
-  return data;
+  return (await enrichPublishTasksWithCampaignLinks(client, [data], data.user_id))[0];
 }
 
 export async function updatePublishStatus(taskId, status, payload = {}) {
@@ -110,7 +111,7 @@ export async function updatePublishStatus(taskId, status, payload = {}) {
     .single();
 
   if (error) throw error;
-  return data;
+  return (await enrichPublishTasksWithCampaignLinks(client, [data], data.user_id))[0];
 }
 
 export async function executePublishTask(userId, taskOrId) {
@@ -188,4 +189,22 @@ export function summarizePublishTasks(tasks) {
 
 function cleanPayload(payload) {
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+}
+
+async function enrichPublishTasksWithCampaignLinks(client, tasks, userId) {
+  const contentIds = [...new Set(tasks.map((task) => task.content_id).filter(Boolean))];
+  if (!contentIds.length) return tasks.map((task) => ({ ...task, campaign_links: null }));
+
+  const { data, error } = await client
+    .from('campaign_links')
+    .select(publishCampaignLinkSelect)
+    .eq('user_id', userId)
+    .in('content_id', contentIds);
+
+  if (error) throw error;
+  const linksByContent = new Map((data || []).map((link) => [String(link.content_id), link]));
+  return tasks.map((task) => ({
+    ...task,
+    campaign_links: linksByContent.get(String(task.content_id)) || null,
+  }));
 }

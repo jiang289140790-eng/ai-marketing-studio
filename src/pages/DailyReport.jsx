@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
+import { BusinessErrorNotice } from '../components/BusinessErrorNotice';
 import { MoreActionsMenu } from '../components/MoreActionsMenu';
 import { buildDailyReport, buildDataExport, downloadJson } from '../services/report-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { normalizeBusinessError } from '../utils/business-error';
 
 export function DailyReport({
   activeCampaignId,
@@ -14,6 +16,7 @@ export function DailyReport({
 }) {
   const [report, setReport] = useState(null);
   const [message, setMessage] = useState('');
+  const [businessError, setBusinessError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -22,6 +25,8 @@ export function DailyReport({
     if (!userId || !isSupabaseConfigured) return;
     setLoading(true);
     try {
+      setBusinessError(null);
+      setMessage('');
       const nextReport = await buildDailyReport(userId, {
         scope: dataScope,
         campaignContext,
@@ -29,13 +34,19 @@ export function DailyReport({
       });
       setReport(nextReport);
       if (reveal) setShowSummary(true);
+    } catch (error) {
+      setBusinessError(normalizeBusinessError(error, {
+        title: '运营日报暂时无法生成',
+        impact: '本次日报没有生成，现有运营数据不会被修改。',
+        recommendation: '可以重试；如仍失败，请到系统状态查看错误编号。',
+      }));
     } finally {
       setLoading(false);
     }
   }, [activeCampaignId, campaignContext, dataScope, userId]);
 
   useEffect(() => {
-    refresh().catch((error) => setMessage(error.message));
+    refresh();
   }, [refresh]);
 
   async function handleExport() {
@@ -48,7 +59,11 @@ export function DailyReport({
       downloadJson(`ai-marketing-studio-backup-${new Date().toISOString().slice(0, 10)}.json`, payload);
       setMessage('数据备份已导出。');
     } catch (error) {
-      setMessage(error.message);
+      setBusinessError(normalizeBusinessError(error, {
+        title: '数据备份暂时无法导出',
+        impact: '没有下载新备份，线上数据不会被修改。',
+        recommendation: '检查网络和当前登录状态后重试。',
+      }));
     }
   }
 
@@ -79,6 +94,7 @@ export function DailyReport({
       </div>
 
       {message && <div className="notice">{message}</div>}
+      <BusinessErrorNotice error={businessError} advanced={auxiliaryMode === 'advanced'} />
 
       {!isSupabaseConfigured ? (
         <EmptyState title="等待数据服务配置" description="配置后才能读取执行记录并生成日报。" />
@@ -117,6 +133,14 @@ function DailyReportBody({ auxiliaryMode, report }) {
   return (
     <>
       {!report.has_activity && <div className="notice warning">这是当前状态执行摘要，不是完整日报；昨日没有真实执行记录。</div>}
+      {report.partial_data && (
+        <div className="notice warning">
+          部分数据源暂时不可用，本次日报已使用可读取的数据生成；缺失部分不会显示为 0。
+          {auxiliaryMode === 'advanced' && report.unavailable_sources?.length > 0
+            ? ` 脱敏来源：${report.unavailable_sources.join('、')}`
+            : ''}
+        </div>
+      )}
       <div className="daily-report-grid">
         <ReportSection title="昨日完成" rows={report.yesterday_completed} empty="昨日没有完成记录。" />
         <ReportSection title="今日待办" rows={report.today_actions} empty="当前没有待办。" />

@@ -10,7 +10,7 @@ import {
   setWorkflowProductionEnabled,
 } from '../services/workflow-capability-service';
 import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
-import { formatDate } from '../utils/formatters';
+import { formatDate, statusLabel } from '../utils/formatters';
 import {
   buildWorkflowCapability,
   deriveModelAssets,
@@ -215,7 +215,7 @@ export function WorkflowModelConfigPage({
                   <div><dt>最近测试</dt><dd>{workflow.latestTestAt ? formatDate(workflow.latestTestAt) : '尚未测试'}</dd></div>
                   <div><dt>平均耗时</dt><dd>{durationLabel(workflow.averageDurationMs)}</dd></div>
                   <div><dt>预估成本</dt><dd>{workflow.estimatedCost == null ? '待统计' : workflow.estimatedCost.toFixed(4)}</dd></div>
-                  <div><dt>最近任务</dt><dd>{workflow.latestRun?.status || '暂无任务'}</dd></div>
+                  <div><dt>最近任务</dt><dd>{workflow.latestRun?.status ? statusLabel(workflow.latestRun.status) : '暂无任务'}</dd></div>
                 </dl>
                 {workflow.latestTestAsset?.url && (
                   <img className="workflow-test-thumbnail" src={workflow.latestTestAsset.url} alt={`${workflow.name} 最近测试`} />

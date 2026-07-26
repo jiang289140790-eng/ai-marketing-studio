@@ -16,7 +16,7 @@ import {
   summarizeConnections,
 } from '../services/platform-connection-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
-import { formatDate } from '../utils/formatters';
+import { formatDate, statusLabel } from '../utils/formatters';
 
 const initialTelegramForm = {
   account_name: '',
@@ -112,7 +112,7 @@ export function SettingsPage({ userId }) {
       if (action === 'status') {
         const result = await getTelegramPlatformStatus(connection.id);
         const status = result.connections?.[0]?.status || connection.status;
-        setMessage(`Telegram 当前状态：${status}`);
+        setMessage(`Telegram 当前状态：${statusLabel(status)}`);
       }
       await refresh();
     } catch (error) {
@@ -159,7 +159,7 @@ export function SettingsPage({ userId }) {
       if (action === 'status') {
         const result = await getXPlatformStatus(connection.id);
         const status = result.connections?.[0]?.status || connection.status;
-        setMessage(`X 当前状态：${status}`);
+        setMessage(`X 当前状态：${statusLabel(status)}`);
       }
       await refresh();
     } catch (error) {

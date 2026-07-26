@@ -39,6 +39,7 @@ export const STATUS_LABELS = {
     pending_generation: '待生成',
     not_started: '未开始',
     planned: '已计划',
+    validated: '已验证',
     queued: '排队中',
     running: '运行中',
     success: '成功',
@@ -69,6 +70,11 @@ export const STATUS_LABELS = {
     workflow: '工作流',
     lora: 'LoRA',
     preparing: '准备中',
+    enabled: '已启用',
+    disabled: '已停用',
+    paused: '已暂停',
+    unread: '未读',
+    read: '已读',
   };
 
 export function statusLabel(status) {

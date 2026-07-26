@@ -20,7 +20,7 @@ import {
   safeBusinessText,
 } from '../utils/account-matrix';
 import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
-import { formatDate } from '../utils/formatters';
+import { formatDate, statusLabel } from '../utils/formatters';
 
 const ACCOUNT_TABS = [
   { id: 'owned', label: '自有账号' },
@@ -393,7 +393,7 @@ function AccountDetailDrawer({ account, activeTab, mode, onTab, onClose, onEdit,
           : <OwnedOverview account={account} onNavigate={onNavigate} />)}
         {activeTab === 'brain' && <BrainTab account={account} mode={mode} />}
         {activeTab === 'samples' && <SamplesTab account={account} />}
-        {activeTab === 'campaigns' && <SimpleList rows={account.campaigns} empty="尚未关联运营活动" getTitle={(row) => row.name || row.title} getMeta={(row) => row.status} />}
+        {activeTab === 'campaigns' && <SimpleList rows={account.campaigns} empty="尚未关联运营活动" getTitle={(row) => row.name || row.title} getMeta={(row) => statusLabel(row.status)} />}
         {activeTab === 'character' && <CharacterTab account={account} onNavigate={onNavigate} />}
         {activeTab === 'capabilities' && <CapabilitiesTab account={account} onNavigate={onNavigate} />}
         {activeTab === 'history' && <SimpleList rows={[...account.reports, ...account.analyses]} empty="暂无分析历史" getTitle={(row) => row.title || row.depth || row.analysis_type || '账号分析'} getMeta={(row) => formatDate(row.created_at)} />}

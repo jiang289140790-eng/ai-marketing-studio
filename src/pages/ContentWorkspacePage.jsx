@@ -33,7 +33,7 @@ import {
   inspectAssetAvailability,
   listJobsForContent,
 } from '../utils/day1-asset-workbench';
-import { formatDate } from '../utils/formatters';
+import { formatDate, statusLabel } from '../utils/formatters';
 
 const EMPTY = {
   contentPackages: [],
@@ -1870,7 +1870,7 @@ function ContentPackageStudio({ item, data, assets, gateway, userId, onNavigate,
             <Info label="目标账号" value={account?.account_name || account?.username} />
             <Info label="来源账号" value={referenceAccount?.account_name || item.sourceAccount} />
             <Info label="创建时间" value={formatDate(item.createdAt)} />
-            <Info label="当前状态" value={item.status} />
+            <Info label="当前状态" value={statusLabel(item.status)} />
             <Info label="发布队列" value={publishTask ? `${publishTask.status || 'pending'} · ${publishTask.id}` : '尚未进入发布队列'} />
           </div>
         </section>
@@ -2379,7 +2379,7 @@ function GenerationResults({ item, assets, runs, selectedId, onSelect }) {
                   <option value="">请选择生成结果</option>
                   {generatedAssets.map((asset) => (
                     <option key={asset.id} value={asset.id}>
-                      {asset.type} · {asset.status}{asset.raw?.approved_for_publishing ? ' · 已确认可用' : ''}
+                      {statusLabel(asset.type)} · {statusLabel(asset.status)}{asset.raw?.approved_for_publishing ? ' · 已确认可用' : ''}
                     </option>
                   ))}
                 </select>
@@ -2395,7 +2395,7 @@ function GenerationResults({ item, assets, runs, selectedId, onSelect }) {
               <article key={asset.id} className="asset-result-card">
                 <AssetPreview asset={asset} />
                 <strong>{asset.name}</strong>
-                <small>{asset.type} · {asset.status} · {formatDate(asset.createdAt)}</small>
+                <small>{statusLabel(asset.type)} · {statusLabel(asset.status)} · {formatDate(asset.createdAt)}</small>
                 <div className="button-row">
                   <ExecutionButton action="review_generated_asset" actionName="确认可用" className="ghost-button" resourceType="asset" resourceId={asset.id} payload={{ asset_id: asset.id, content_package_id: item.id, approved: true }}>确认可用</ExecutionButton>
                   <ExecutionButton action="review_generated_asset" actionName="驳回" className="ghost-button" resourceType="asset" resourceId={asset.id} payload={{ asset_id: asset.id, content_package_id: item.id, approved: false }}>驳回</ExecutionButton>

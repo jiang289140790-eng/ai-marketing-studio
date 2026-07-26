@@ -66,3 +66,22 @@ test('后端明确标记未连接时不得被旧 connected 文本误判为可用
   assert.equal(summary.publish.state, 'not_connected');
   assert.equal(summary.token.label, 'OAuth 已过期');
 });
+
+test('有效且带过期时间的连接可正常生成平台摘要', () => {
+  const now = new Date('2026-07-26T07:00:00.000Z');
+  const [summary] = buildPlatformSummaries({
+    cards: [{ platform: 'X', title: 'X', implemented: true }],
+    connections: [{
+      platform: 'X',
+      status: 'connected',
+      is_connected: true,
+      expires_at: '2026-07-26T09:00:00.000Z',
+      permissions: ['tweet.read', 'tweet.write'],
+    }],
+    now,
+  });
+  assert.equal(summary.connectionState.state, 'connected');
+  assert.equal(summary.connectedCount, 1);
+  assert.equal(summary.read.state, 'available');
+  assert.equal(summary.publish.state, 'available');
+});

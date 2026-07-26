@@ -111,7 +111,7 @@ function quotaStatus(rows) {
 
 function webhookCapability(rows, permissions, adapter) {
   const adapterCapabilities = objectValue(adapter?.capabilities);
-  if (!rows.some(connectionIsActive)) return { state: 'not_connected', label: '未连接' };
+  if (!rows.some((row) => connectionIsActive(row))) return { state: 'not_connected', label: '未连接' };
   if (permissions.some((value) => /webhook|event/i.test(value)) || adapterCapabilities.webhook === true) {
     return { state: 'available', label: '已配置' };
   }
@@ -162,7 +162,7 @@ export function buildPlatformSummaries({
     return {
       ...safeCard,
       rows: safeRows,
-      activeRows: safeRows.filter(connectionIsActive),
+      activeRows: safeRows.filter((row) => connectionIsActive(row, now)),
       relatedAccounts,
       permissions,
       adapter,

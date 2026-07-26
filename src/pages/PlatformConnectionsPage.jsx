@@ -7,6 +7,7 @@ import { loadPlatformConnectionData } from '../services/ops-service';
 import {
   getTelegramPlatformStatus,
   getXPlatformStatus,
+  reconnectXPlatform,
 } from '../services/platform-connection-service';
 import { isSupabaseConfigured } from '../services/supabase-client';
 import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
@@ -107,6 +108,24 @@ export function PlatformConnectionsPage({
     }
   }
 
+  async function reconnectPlatform(summary) {
+    const connection = summary.activeRows[0] || summary.rows[0];
+    if (!connection || String(summary.platform).toLowerCase() !== 'x') {
+      setMessage(`${summary.title} 尚无可重新授权的连接记录。`);
+      return;
+    }
+    setTesting(summary.platform);
+    setMessage('');
+    try {
+      const result = await reconnectXPlatform(connection.id);
+      if (!result?.auth_url) throw new Error('X OAuth 未返回授权地址。');
+      window.location.assign(result.auth_url);
+    } catch (error) {
+      setMessage(`X 重新授权未能启动：${error.message}`);
+      setTesting('');
+    }
+  }
+
   function openDrawer(summary, tab = 'auth') {
     setSelectedPlatform(summary.platform);
     setDrawerTab(tab);
@@ -161,6 +180,7 @@ export function PlatformConnectionsPage({
           onClose={() => setSelectedPlatform('')}
           onNavigate={onNavigate}
           onTest={() => testCapability(selected)}
+          onReconnect={() => reconnectPlatform(selected)}
           testing={testing === selected.platform}
         />
       )}
@@ -233,6 +253,7 @@ function PlatformDetailDrawer({
   onClose,
   onNavigate,
   onTest,
+  onReconnect,
   testing,
 }) {
   const tasks = publishTasks.filter((task) => String(task.platform || '').toLowerCase() === String(summary.platform).toLowerCase());
@@ -301,6 +322,11 @@ function PlatformDetailDrawer({
         )}
       </div>
       <div className="detail-drawer-footer">
+        {String(summary.platform).toLowerCase() === 'x' && (
+          <button className="primary-button" type="button" onClick={onReconnect} disabled={testing}>
+            {testing ? '正在打开授权…' : '重新连接 X'}
+          </button>
+        )}
         <button className="primary-button" type="button" onClick={onTest} disabled={testing}>{testing ? '检测中…' : '测试当前连接'}</button>
         <button className="ghost-button" type="button" onClick={() => onNavigate?.('accounts')}>打开账号矩阵</button>
       </div>

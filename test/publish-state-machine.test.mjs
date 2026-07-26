@@ -162,6 +162,26 @@ test('X preflight accepts one approved video', () => {
   assert.ok(checks.every((item) => item.passed));
 });
 
+test('X preflight accepts an approved text-only post without a media asset', () => {
+  const checks = buildPublishPreflightChecks({
+    task: {
+      platform: 'X',
+      publish_content: { body: 'Text-only X post' },
+      publish_result: { execution_mode: 'dry_run' },
+    },
+    content: { ...approvedContent, platform: 'X' },
+    connection: {
+      platform: 'X',
+      status: 'connected',
+      is_connected: true,
+      account_id: 'account-x',
+      permissions: ['tweet.write'],
+    },
+    account: { id: 'account-x' },
+  });
+  assert.ok(checks.every((item) => item.passed));
+});
+
 test('dry-run success is presented as completed test, never publish failure', () => {
   const presentation = getDryRunPresentation({
     status: 'draft',

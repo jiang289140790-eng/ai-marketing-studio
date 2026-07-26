@@ -173,6 +173,8 @@ function PlatformSummaryCard({ summary, testing, onManage, onAccounts, onTest })
   const currentError = summary.errors[0];
   const businessImpact = isX && summary.quota.state === 'failed'
     ? 'API 额度已用尽：读取、发布或指标回收会受到影响。'
+    : isX && summary.connectionState.state === 'failed'
+      ? 'OAuth 已过期：账号仍保留登记，但当前不可发布或回收指标。'
     : currentError || '当前没有影响业务的异常';
   return (
     <article className={`platform-summary-card ${summary.connectionState.state}`}>
@@ -186,7 +188,8 @@ function PlatformSummaryCard({ summary, testing, onManage, onAccounts, onTest })
 
       <div className="platform-summary-facts">
         <Fact label="连接状态" value={summary.connectionState.label} />
-        <Fact label="已连接账号" value={`${summary.accountCount} 个`} />
+        <Fact label="已登记账号" value={`${summary.accountCount} 个`} />
+        <Fact label="OAuth 有效账号" value={`${summary.connectedCount} 个`} />
         <Fact label="可发布账号" value={`${summary.publishableCount} 个`} />
         <Fact label="读取能力" value={<Capability {...summary.read} />} />
         <Fact label="发布能力" value={<Capability {...summary.publish} />} />

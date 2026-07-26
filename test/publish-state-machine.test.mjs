@@ -77,9 +77,20 @@ test('dry-run success is presented as completed test, never publish failure', ()
       last_execution: { mode: 'dry_run', status: 'preflight_passed', publish_triggered: false },
     },
   });
-  assert.equal(presentation.title, '预检通过');
+  assert.equal(presentation.title, '上次安全预演通过');
   assert.match(presentation.summary, /未执行真实发布/);
   assert.equal(getPublishTaskState({ status: 'draft', approval_status: 'pending' }), 'pending_approval');
+});
+
+test('历史安全预演失败不会覆盖当前业务检查结论', () => {
+  const presentation = getDryRunPresentation({
+    publish_result: {
+      execution_mode: 'dry_run',
+      preflight: { passed: false, checked_at: '2026-07-25T05:00:00Z' },
+    },
+  });
+  assert.equal(presentation.title, '上次安全预演未通过');
+  assert.match(presentation.summary, /以当前业务检查和执行条件为准/);
 });
 
 test('业务检查全通过但执行授权未满足时显示暂不可发布', () => {

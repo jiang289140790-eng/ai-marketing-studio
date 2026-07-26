@@ -55,10 +55,10 @@ export function getDryRunPresentation(task = {}) {
   if (lastExecution.mode !== 'dry_run' && !preflight.checked_at) return null;
   return {
     passed: preflight.passed === true,
-    title: preflight.passed ? '预检通过' : '预检未通过',
+    title: preflight.passed ? '上次安全预演通过' : '上次安全预演未通过',
     summary: preflight.passed
       ? '测试执行完成，未执行真实发布。'
-      : '测试执行完成，未执行真实发布；请处理未通过项目。',
+      : '未执行真实发布；具体结果以当前业务检查和执行条件为准。',
     checkedAt: preflight.checked_at || lastExecution.completed_at,
   };
 }

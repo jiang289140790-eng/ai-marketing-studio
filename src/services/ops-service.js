@@ -18,6 +18,7 @@ const TABLES = {
   legacyAssets: 'asset_library',
   characters: 'characters',
   publishTasks: 'publish_tasks',
+  campaignLinks: 'campaign_links',
   publishMetrics: 'publish_metrics',
   contentMetrics: 'content_metrics',
   knowledge: 'knowledge_entries',
@@ -45,6 +46,7 @@ export const ORDER_FIELDS = {
   legacyAssets: 'created_at',
   characters: 'created_at',
   publishTasks: 'created_at',
+  campaignLinks: 'created_at',
   publishMetrics: 'last_sync',
   contentMetrics: 'fetched_at',
   knowledge: 'created_at',
@@ -221,7 +223,18 @@ export async function ensureStrategyContentPackageDayMetadata(strategyId, campai
 }
 
 export async function loadPublishQueueData() {
-  return loadKeys(['publishTasks', 'publishMetrics', 'platformConnections', 'accounts', 'legacyContent', 'contentPackages', 'assets', 'legacyAssets']);
+  return loadKeys([
+    'publishTasks',
+    'publishMetrics',
+    'platformConnections',
+    'accounts',
+    'campaigns',
+    'campaignLinks',
+    'legacyContent',
+    'contentPackages',
+    'assets',
+    'legacyAssets',
+  ]);
 }
 
 export async function loadPlatformConnectionData() {

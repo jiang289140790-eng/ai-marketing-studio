@@ -42,19 +42,33 @@ export async function getPublishTask(taskId) {
 export async function createPublishTask(userId, payload) {
   const client = requireSupabase();
   const scheduledTime = payload.scheduled_time || payload.publish_time || null;
+  const publishContent = {
+    ...(payload.publish_content || {}),
+    ...(payload.campaign_link_id ? { campaign_link_id: payload.campaign_link_id } : {}),
+  };
   const { data, error } = await client
     .from('publish_tasks')
     .insert({
       user_id: userId,
-      content_id: payload.content_id,
+      content_id: payload.content_id || null,
+      content_package_id: payload.content_package_id || null,
       platform_connection_id: payload.platform_connection_id || null,
       campaign_id: payload.campaign_id || null,
+      platform_account_id: payload.platform_account_id || payload.account_id || null,
       platform: payload.platform,
       scheduled_time: scheduledTime,
       publish_time: scheduledTime,
-      status: payload.status || (scheduledTime ? 'scheduled' : 'draft'),
+      scheduled_at: scheduledTime,
+      status: 'draft',
+      approval_status: 'pending',
+      publish_content: publishContent,
+      publish_result: {
+        execution_mode: payload.execution_mode === 'live' ? 'live' : 'dry_run',
+        source: payload.source || 'manual_publish_center',
+        created_for_approval: true,
+      },
       result: payload.result || null,
-      error_message: payload.error_message || null,
+      error_message: null,
     })
     .select(publishTaskSelect)
     .single();

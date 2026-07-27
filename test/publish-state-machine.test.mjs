@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildPublishPreflightGroups,
   buildPublishPreflightChecks,
   getContentApprovalState,
   getDryRunPresentation,
@@ -220,6 +221,73 @@ test('业务检查全通过但执行授权未满足时显示暂不可发布', ()
   assert.equal(readiness.finalLabel, '暂不可发布');
 });
 
+test('产品预检将内容、平台和执行授权分开展示', () => {
+  const summary = buildPublishPreflightGroups({
+    task: {
+      campaign_id: 'campaign-1',
+      platform: 'X',
+      approval_status: 'pending',
+      scheduled_at: '2026-07-28T05:00:00Z',
+      publish_content: {
+        body: 'Approved X copy',
+        asset_approved: true,
+      },
+      publish_result: { execution_mode: 'live' },
+    },
+    content: {
+      ...approvedContent,
+      campaignId: 'campaign-1',
+      platform: 'X',
+    },
+    campaign: { id: 'campaign-1' },
+    connection: {
+      id: 'connection-x',
+      platform: 'X',
+      account_id: 'account-x',
+      status: 'connected',
+      is_connected: true,
+      permissions: ['tweet.read', 'tweet.write'],
+    },
+    account: { id: 'account-x' },
+    now: new Date('2026-07-27T05:00:00Z'),
+  });
+  assert.equal(summary.contentChecks.length, 5);
+  assert.equal(summary.platformChecks.length, 3);
+  assert.equal(summary.contentPassed, 5);
+  assert.equal(summary.platformPassed, 3);
+  assert.equal(summary.executionAuthorization.humanApproved, false);
+  assert.equal(summary.finalLabel, '暂不可发布');
+});
+
+test('未绑定账号和 OAuth 过期会产生不同平台阻塞', () => {
+  const unbound = buildPublishPreflightGroups({
+    task: { platform: 'X', publish_content: { body: 'copy' }, publish_result: { execution_mode: 'dry_run' } },
+    content: approvedContent,
+    campaign: { id: 'campaign-1' },
+  });
+  assert.equal(unbound.platformChecks.find((item) => item.code === 'account_registered').passed, false);
+
+  const expired = buildPublishPreflightGroups({
+    task: { platform: 'X', publish_content: { body: 'copy' }, publish_result: { execution_mode: 'dry_run' } },
+    content: approvedContent,
+    campaign: { id: 'campaign-1' },
+    account: { id: 'account-x' },
+    connection: {
+      id: 'connection-x',
+      platform: 'X',
+      account_id: 'account-x',
+      status: 'connected',
+      is_connected: false,
+      expires_at: '2026-07-20T00:00:00Z',
+      permissions: ['tweet.write'],
+    },
+    now: new Date('2026-07-27T00:00:00Z'),
+  });
+  assert.equal(expired.platformChecks.find((item) => item.code === 'account_registered').passed, true);
+  assert.equal(expired.platformChecks.find((item) => item.code === 'oauth_valid').passed, false);
+  assert.match(expired.platformChecks.find((item) => item.code === 'oauth_valid').message, /过期/);
+});
+
 test('旧 connected 文本不能绕过后端明确的 OAuth 失效状态', () => {
   const checks = buildPublishPreflightChecks({
     task: {
@@ -257,10 +325,10 @@ test('failed task exposes safe retry guidance instead of technical details', () 
       },
     },
   });
-  assert.deepEqual(error, {
-    code: 'PLATFORM_PUBLISH_FAILED',
-    summary: '平台未能完成发布。',
-    retryable: true,
-    recommendedAction: '检查连接后重试',
-  });
+  assert.equal(error.code, 'PLATFORM_PUBLISH_FAILED');
+  assert.equal(error.summary, '平台未能完成本次发布。');
+  assert.equal(error.retryable, true);
+  assert.equal(error.recommendedAction, '检查连接后重试');
+  assert.match(error.impact, /没有完成发布/);
+  assert.ok(error.technicalDetail);
 });

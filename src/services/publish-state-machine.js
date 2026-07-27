@@ -1,3 +1,9 @@
+import {
+  collectConnectionPermissions,
+  connectionIsActive,
+  getUnifiedConnectionState,
+} from '../utils/platform-connection-summary.js';
+
 export const CONTENT_APPROVAL = {
   pending: { label: '待审核', tone: 'pending' },
   approved: { label: '已批准', tone: 'approved' },
@@ -8,11 +14,11 @@ export const CONTENT_APPROVAL = {
 export const PUBLISH_TASK_STATE = {
   draft: { label: '草稿', group: 'pending' },
   pending_approval: { label: '待批准', group: 'pending' },
-  scheduled: { label: '已排期', group: 'scheduled' },
+  scheduled: { label: '已排期', group: 'calendar' },
   publishing: { label: '发布中', group: 'publishing' },
-  published: { label: '已发布', group: 'published' },
-  failed: { label: '发布失败', group: 'failed' },
-  cancelled: { label: '已取消', group: 'cancelled' },
+  published: { label: '已发布', group: 'history' },
+  failed: { label: '发布失败', group: 'pending' },
+  cancelled: { label: '已取消', group: 'history' },
 };
 
 export const EXECUTION_MODE = {
@@ -175,15 +181,138 @@ export function buildPublishPreflightChecks({ task = {}, content = {}, connectio
   ];
 }
 
+export function buildPublishPreflightGroups({
+  task = {},
+  content = {},
+  connection = {},
+  account = {},
+  asset = {},
+  campaign = {},
+  now = new Date(),
+} = {}) {
+  const platform = normalizePlatform(task.platform || content.platform || connection.platform);
+  const body = String(task.publish_content?.body || task.final_text || task.content_text || content.body || '').trim();
+  const media = resolvePublishMedia(task, asset);
+  const contentApproved = getContentApprovalState(task, content) === 'approved';
+  const mediaOptional = media.length === 0 && body.length > 0 && ['x', 'telegram'].includes(platform);
+  const assetApproved = mediaOptional || (media.length > 0 && media.every((item) => item.approved));
+  const formatLimit = platform === 'telegram' ? 4096 : platform === 'x' ? 280 : 10000;
+  const images = media.filter((item) => item.type !== 'video').length;
+  const videos = media.filter((item) => item.type === 'video').length;
+  const mediaFormatValid = platform !== 'x' || (images <= 4 && videos <= 1 && !(images && videos));
+  const formatValid = (body.length > 0 || media.length > 0) && body.length <= formatLimit && mediaFormatValid;
+  const campaignValid = Boolean(
+    campaign.id
+    || task.campaign_id
+    || content.campaignId
+    || content.campaign_id,
+  );
+  const schedule = task.scheduled_at || task.scheduled_time || task.publish_time;
+  const scheduleValid = !schedule || (
+    !Number.isNaN(new Date(schedule).getTime())
+    && new Date(schedule).getTime() >= now.getTime() - 60_000
+  );
+
+  const registered = Boolean(account.id || connection.account_id || task.platform_account_id || task.account_id);
+  const unifiedConnection = getUnifiedConnectionState(connection.id ? [connection] : [], now);
+  const oauthValid = connectionIsActive(connection, now) && unifiedConnection.oauthValid;
+  const permissions = collectConnectionPermissions(connection.id ? [connection] : []);
+  const metadata = asObject(connection.metadata);
+  const quotaDepleted = String(metadata.credits_status || metadata.quota_status || '').toLowerCase() === 'depleted'
+    || Number(metadata.credits_remaining ?? metadata.quota_remaining) === 0;
+  const tokenExpired = Boolean(
+    connection.expires_at
+    && new Date(connection.expires_at).getTime() <= now.getTime()
+    && !oauthValid,
+  );
+  const permissionDeclared = (
+    connection.can_publish === true
+    || metadata.can_publish === true
+    || permissions.some((item) => /(write|publish|tweet\.write|messages|media\.write)/i.test(item))
+    || platform === 'telegram'
+  );
+  const publishCapability = oauthValid && permissionDeclared && !quotaDepleted && !tokenExpired;
+  const executionMode = getExecutionMode(task);
+  const humanApproved = String(task.approval_status || '').toLowerCase() === 'approved'
+    || Boolean(task.approved_at || task.publish_result?.human_authorized);
+
+  const contentChecks = [
+    check('content_approved', '文案已批准', contentApproved, '返回内容工作台完成文案审核'),
+    check('asset_approved', '素材已批准', assetApproved, mediaOptional ? '当前为纯文字内容' : '确认全部待发布素材'),
+    check(
+      'platform_format',
+      '格式有效',
+      formatValid,
+      mediaFormatValid ? `正文 ${body.length}/${formatLimit} 字符` : 'X 只能发布最多 4 张图片，或单独 1 个视频',
+    ),
+    check('campaign_valid', '运营活动有效', campaignValid, '关联当前运营活动'),
+    check('schedule_valid', '时间有效', scheduleValid, '修改已过期或无效的发布时间'),
+  ];
+  const platformChecks = [
+    check('account_registered', '账号已登记', registered, '先在账号矩阵登记发布账号'),
+    check(
+      'oauth_valid',
+      'OAuth 有效',
+      oauthValid,
+      registered ? (tokenExpired ? 'OAuth 已过期，请重新连接账号' : '到平台连接完成 OAuth') : '尚未绑定平台账号',
+    ),
+    check(
+      'publish_capability',
+      '发布能力可用',
+      publishCapability,
+      quotaDepleted ? '平台额度已用尽' : !permissionDeclared ? '当前授权缺少发布权限' : '当前账号不可发布',
+    ),
+  ];
+  const executionAuthorization = {
+    mode: executionMode,
+    modeLabel: EXECUTION_MODE[executionMode]?.label || '未设置',
+    modeValid: ['dry_run', 'live'].includes(executionMode),
+    humanApproved,
+    label: executionMode === 'dry_run'
+      ? '安全预演，无需真实发布授权'
+      : humanApproved ? '人工授权已确认' : '等待人工确认正式发布',
+  };
+  const contentPassed = contentChecks.filter((item) => item.passed).length;
+  const platformPassed = platformChecks.filter((item) => item.passed).length;
+  const businessReady = contentPassed === contentChecks.length && platformPassed === platformChecks.length;
+  const executionReady = executionAuthorization.modeValid
+    && (executionMode === 'dry_run' || humanApproved);
+
+  return {
+    contentChecks,
+    platformChecks,
+    executionAuthorization,
+    contentPassed,
+    contentTotal: contentChecks.length,
+    platformPassed,
+    platformTotal: platformChecks.length,
+    businessReady,
+    executionReady,
+    finalState: businessReady && executionReady ? 'ready' : 'blocked',
+    finalLabel: businessReady && executionReady ? '可以执行' : '暂不可发布',
+    blockers: [...contentChecks, ...platformChecks].filter((item) => !item.passed),
+    connection: {
+      registered,
+      oauthValid,
+      publishCapability,
+      quotaDepleted,
+      tokenExpired,
+    },
+  };
+}
+
 export function getPublishErrorPresentation(task = {}) {
   const result = asObject(task.publish_result || task.result);
   const error = asObject(result.error);
   if (getPublishTaskState(task) !== 'failed' && !task.error_message && !task.last_error) return null;
+  const raw = String(error.summary || task.error_message || task.last_error || '');
   return {
     code: error.code || 'PUBLISH_FAILED',
-    summary: error.summary || task.error_message || task.last_error || '平台未能完成发布。',
+    summary: safePublishErrorSummary(raw),
+    impact: error.impact || '当前任务没有完成发布，已保存的内容和素材不会丢失。',
     retryable: error.retryable !== false && Number(task.retry_count || 0) < Number(task.max_retries || task.max_retry || 3),
     recommendedAction: error.recommended_action || '检查平台连接后重试',
+    technicalDetail: sanitizePublishTechnicalDetail(raw),
   };
 }
 
@@ -217,4 +346,47 @@ function normalizeList(value) {
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
-import { connectionIsActive } from '../utils/platform-connection-summary.js';
+
+function resolvePublishMedia(task, asset) {
+  const embeddedAssets = Array.isArray(task.publish_content?.assets) ? task.publish_content.assets : [];
+  const selectedIds = new Set([
+    ...(Array.isArray(task.publish_content?.selected_asset_ids) ? task.publish_content.selected_asset_ids : []),
+    task.publish_content?.selected_asset_id,
+  ].filter(Boolean).map(String));
+  const selected = selectedIds.size
+    ? embeddedAssets.filter((item) => selectedIds.has(String(item.id)))
+    : embeddedAssets;
+  const rows = selected.length ? selected : asset?.url || asset?.raw?.output_url ? [asset] : [];
+  return rows.map((item) => ({
+    url: item.output_url || item.url || item.raw?.output_url || '',
+    type: String(item.type || item.asset_type || item.raw?.asset_type || '').toLowerCase(),
+    approved: Boolean(
+      item.approved_for_publishing !== false
+      && item.status !== 'failed'
+      && (item.approved_for_publishing || item.approvedForPublishing || item.raw?.approved_for_publishing),
+    ),
+  }));
+}
+
+function normalizePlatform(value) {
+  const platform = String(value || '').trim().toLowerCase();
+  return platform === 'twitter' ? 'x' : platform;
+}
+
+function safePublishErrorSummary(value) {
+  const text = String(value || '');
+  if (!text) return '平台未能完成发布。';
+  if (/oauth|token|unauthorized|401|403/i.test(text)) return '平台授权已失效或缺少发布权限。';
+  if (/rate.?limit|quota|credit|429/i.test(text)) return '平台额度或调用频率暂时受限。';
+  if (/timeout|network|fetch|connection/i.test(text)) return '发布服务暂时无法连接平台。';
+  if (/media|image|video|upload|format/i.test(text)) return '素材上传或平台格式检查未通过。';
+  return '平台未能完成本次发布。';
+}
+
+function sanitizePublishTechnicalDetail(value) {
+  return String(value || '未提供技术详情')
+    .replace(/(token|secret|password|authorization|apikey|api_key)\s*[:=]\s*[^\s,;]+/gi, '$1=[已隐藏]')
+    .replace(/https?:\/\/(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)(?::\d+)?[^\s]*/gi, '[内部地址已隐藏]')
+    .replace(/\b[a-f0-9]{32,}\b/gi, '[敏感标识已隐藏]')
+    .slice(0, 500);
+}

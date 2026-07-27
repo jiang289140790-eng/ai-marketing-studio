@@ -206,7 +206,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
 
       <PublishMediaPreview task={task} assets={selectedAssets} />
 
-      {dryRun && !(readiness.businessReady && !dryRun.passed) && (
+      {publishState !== 'published' && dryRun && !(readiness.businessReady && !dryRun.passed) && (
         <div className={`dry-run-result ${dryRun.passed ? 'passed' : 'blocked'}`}>
           <span>{dryRun.passed ? '✓' : '!'}</span>
           <div>
@@ -217,15 +217,17 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
         </div>
       )}
 
-      <div className={`dry-run-result ${readiness.executionConditionsMet ? 'passed' : 'blocked'}`}>
-        <span>{readiness.executionConditionsMet ? '✓' : '!'}</span>
-        <div>
-          <strong>业务预检：{readiness.businessPassed}/{readiness.businessTotal} 通过</strong>
-          <p>执行条件：{readiness.executionConditionsMet ? '已满足' : '未满足'} · 最终状态：{readiness.finalLabel}</p>
+      {publishState !== 'published' && (
+        <div className={`dry-run-result ${readiness.executionConditionsMet ? 'passed' : 'blocked'}`}>
+          <span>{readiness.executionConditionsMet ? '✓' : '!'}</span>
+          <div>
+            <strong>业务预检：{readiness.businessPassed}/{readiness.businessTotal} 通过</strong>
+            <p>执行条件：{readiness.executionConditionsMet ? '已满足' : '未满足'} · 最终状态：{readiness.finalLabel}</p>
+          </div>
         </div>
-      </div>
+      )}
 
-      <details className="publish-preflight-compact" open={!readiness.businessReady && publishState === 'pending_approval'}>
+      {publishState !== 'published' && <details className="publish-preflight-compact" open={!readiness.businessReady && publishState === 'pending_approval'}>
         <summary>
           <span>发布前检查</span>
           <strong>{preflightChecks.filter((item) => item.passed).length}/{preflightChecks.length} 通过</strong>
@@ -238,7 +240,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
             </div>
           ))}
         </div>
-      </details>
+      </details>}
 
       {error && (
         <div className="publish-error-summary">

@@ -155,6 +155,7 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
   const connection = findConnection(task, connections, content);
   const account = findById(accounts, task.account_id || connection?.account_id || content?.accountId);
   const asset = findPrimaryAsset(task, assets, content);
+  const selectedAssets = findPublishAssets(task, assets, content);
   const contentApproval = getContentApprovalState(task, content);
   const publishState = getPublishTaskState(task);
   const executionMode = getExecutionMode(task);
@@ -200,7 +201,10 @@ function PublishTaskCard({ task, contentPackages, connections, accounts, assets,
         <Fact label="执行模式" value={`${EXECUTION_MODE[executionMode]?.label || executionMode} · ${EXECUTION_MODE[executionMode]?.description || ''}`} />
         <Fact label="排期" value={formatDate(task.scheduled_at || task.scheduled_time)} />
         <Fact label="平台返回 ID" value={task.external_id || task.publish_result?.platform_result?.platform_post_id || '尚未发布'} />
+        <Fact label="发布素材" value={formatPublishMediaSummary(selectedAssets)} />
       </div>
+
+      <PublishMediaPreview task={task} assets={selectedAssets} />
 
       {dryRun && !(readiness.businessReady && !dryRun.passed) && (
         <div className={`dry-run-result ${dryRun.passed ? 'passed' : 'blocked'}`}>
@@ -454,6 +458,64 @@ function findPrimaryAsset(task, assets, content) {
       && asset.approvedForPublishing
     ))
     || {};
+}
+
+function findPublishAssets(task, assets, content) {
+  const embedded = Array.isArray(task.publish_content?.assets) ? task.publish_content.assets : [];
+  const selectedIds = [
+    ...(Array.isArray(task.publish_content?.selected_asset_ids) ? task.publish_content.selected_asset_ids : []),
+    task.publish_content?.selected_asset_id,
+    task.asset_id,
+    task.final_asset_id,
+    content?.finalAssetId,
+  ].filter(Boolean).map(String);
+  const embeddedById = new Map(embedded.filter((item) => item?.id).map((item) => [String(item.id), item]));
+  const storedById = new Map(assets.filter((item) => item?.id).map((item) => [String(item.id), item]));
+  const selected = selectedIds.length
+    ? selectedIds.map((id) => storedById.get(id) || embeddedById.get(id)).filter(Boolean)
+    : embedded;
+  const fallback = selected.length ? selected : assets.filter((item) => (
+    String(item.contentId || item.content_package_id || '') === String(task.content_package_id || content?.id || '')
+    && (item.approvedForPublishing || item.approved_for_publishing)
+  ));
+  return Array.from(new Map(fallback.map((item) => [String(item.id || item.url || item.output_url), item])).values());
+}
+
+function PublishMediaPreview({ task, assets }) {
+  if (!assets.length) return null;
+  const externalUrl = task.publish_result?.url
+    || task.publish_result?.platform_result?.url
+    || task.publish_result?.platform_result?.tweet_url
+    || null;
+  return (
+    <section className="publish-media-preview">
+      <div className="publish-media-heading">
+        <div>
+          <span>本次发布素材</span>
+          <strong>{formatPublishMediaSummary(assets)}</strong>
+        </div>
+        {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer">查看平台原帖</a>}
+      </div>
+      <div className={`publish-media-grid count-${Math.min(assets.length, 4)}`}>
+        {assets.map((item, index) => {
+          const url = item.url || item.output_url || item.raw?.output_url || '';
+          const type = String(item.type || item.asset_type || item.raw?.asset_type || '').toLowerCase();
+          if (!url) return null;
+          return type.includes('video')
+            ? <video key={item.id || url} src={url} controls preload="metadata" aria-label={`发布视频 ${index + 1}`} />
+            : <img key={item.id || url} src={url} alt={`发布图片 ${index + 1}`} loading="lazy" />;
+        })}
+      </div>
+    </section>
+  );
+}
+
+function formatPublishMediaSummary(assets) {
+  if (!assets.length) return '纯文字';
+  const videos = assets.filter((item) => String(item.type || item.asset_type || item.raw?.asset_type || '').toLowerCase().includes('video')).length;
+  const images = assets.length - videos;
+  if (videos) return `${videos} 个视频`;
+  return `${images} 张图片`;
 }
 
 function Fact({ label, value }) {

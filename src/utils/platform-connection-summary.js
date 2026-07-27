@@ -25,9 +25,17 @@ function objectValue(value) {
 }
 
 export function connectionIsActive(connection, now = new Date()) {
+  const currentTime = now instanceof Date ? now : new Date();
   if (connection?.is_connected === false) return false;
-  if (connection?.expires_at && new Date(connection.expires_at).getTime() <= now.getTime()) return false;
+  if (connection?.expires_at && new Date(connection.expires_at).getTime() <= currentTime.getTime() && !connectionCanRefresh(connection)) return false;
   return connection?.status === 'connected' || connection?.is_connected === true;
+}
+
+export function connectionCanRefresh(connection) {
+  const metadata = objectValue(connection?.metadata);
+  const permissions = listValue(connection?.permissions || metadata.permissions || metadata.scopes);
+  return (connection?.status === 'connected' || connection?.is_connected === true)
+    && permissions.some((permission) => String(permission).toLowerCase() === 'offline.access');
 }
 
 export function getUnifiedConnectionState(rows = [], now = new Date()) {
@@ -80,6 +88,9 @@ function tokenStatus(rows, now = new Date()) {
   const expiries = credentialRows.map((row) => row.expires_at).filter(Boolean).map((value) => new Date(value));
   if (!expiries.length) return { state: 'unknown', label: '有效期未上报' };
   const latestExpiry = expiries.sort((left, right) => right.getTime() - left.getTime())[0];
+  if (latestExpiry.getTime() <= now.getTime() && credentialRows.some(connectionCanRefresh)) {
+    return { state: 'available', label: '可自动续期' };
+  }
   if (latestExpiry.getTime() <= now.getTime()) return { state: 'failed', label: '已过期' };
   if (latestExpiry.getTime() - now.getTime() < 7 * 86400000) return { state: 'warning', label: '即将过期' };
   return { state: 'available', label: '有效' };

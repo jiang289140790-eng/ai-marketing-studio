@@ -67,3 +67,29 @@ test('账号已登记但 OAuth 过期时不再显示已连接或可发布', () =
   assert.equal(row.publishCapability.label, '不可发布');
   assert.equal(row.nextAction, '连接平台');
 });
+
+test('X OAuth 过期但具备 offline.access 时保持可续期状态', () => {
+  const account = {
+    id: 'account-refreshable',
+    account_name: '@refreshable',
+    platform: 'X',
+    account_role: 'owned',
+  };
+  const connection = {
+    id: 'connection-refreshable',
+    account_id: account.id,
+    platform: 'X',
+    status: 'connected',
+    is_connected: true,
+    expires_at: '2026-07-26T08:41:17.185Z',
+    permissions: ['offline.access', 'tweet.write', 'media.write'],
+  };
+
+  const [row] = buildAccountMatrixRows({
+    accounts: [account],
+    connections: [connection],
+  });
+
+  assert.equal(row.connectionState.oauth.label, 'OAuth 有效');
+  assert.equal(row.publishCapability.label, '可用');
+});

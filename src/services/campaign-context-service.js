@@ -310,16 +310,34 @@ export async function getCampaignContext(userId, campaignId) {
   return buildCampaignContextFromRows(campaign, baseRows);
 }
 
-function findDayOnePackage(context) {
-  return context?.contentPackages?.find((item) => {
+export function findDayOnePackage(context) {
+  const candidates = (context?.contentPackages || []).filter((item) => {
     const values = [
       item.day_index,
       asObject(item.metadata).day_index,
       asObject(item.source_insights).day_index,
+      asObject(item.source_insights).day,
       String(item.title || '').match(/day\s*1\b/i)?.[0],
     ];
     return values.some((value) => Number(value) === 1 || /day\s*1/i.test(String(value || '')));
-  }) || context?.contentPackages?.[0] || null;
+  });
+  if (!candidates.length) return context?.contentPackages?.[0] || null;
+  return [...candidates].sort((left, right) => {
+    const statusRank = (item) => {
+      const status = packageStatus(item);
+      if (status === 'published') return 600;
+      if (status === 'scheduled') return 500;
+      if (status === 'ready_for_publish') return 450;
+      if (status === 'approved' || status === 'completed') return 400;
+      if (status === 'review' || status === 'pending_review') return 300;
+      if (status === 'generating' || status === 'running') return 200;
+      return 100;
+    };
+    const rankDifference = statusRank(right) - statusRank(left);
+    if (rankDifference) return rankDifference;
+    return new Date(right.updated_at || right.created_at || 0).getTime()
+      - new Date(left.updated_at || left.created_at || 0).getTime();
+  })[0];
 }
 
 function hasCopy(item) {

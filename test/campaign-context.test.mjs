@@ -2,10 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildCampaignContextFromRows,
+  findDayOnePackage,
   filterCampaignRows,
   getCampaignBlockingItems,
   selectActiveCampaignFromList,
 } from '../src/services/campaign-context-service.js';
+
+test('duplicate Day 1 packages prefer the published business record', () => {
+  const selected = findDayOnePackage({
+    contentPackages: [
+      { id: 'old-day1', title: 'Day 1 old', status: 'ready_for_publish', created_at: '2026-07-20T00:00:00Z' },
+      { id: 'published-day1', title: 'Day 1 published', status: 'published', created_at: '2026-07-26T00:00:00Z' },
+    ],
+  });
+  assert.equal(selected.id, 'published-day1');
+});
 
 const campaign = {
   id: 'campaign-1',

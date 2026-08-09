@@ -59,6 +59,33 @@ const VIDEO_MODES = [
   ['multi_shot', '多镜头分段生成'],
 ];
 
+const LOCAL_EDIT_WORKFLOW_IDS = new Set([
+  'persephone_klein_outfit_edit_api_v1',
+  'persephone_klein_body_repair_api_v1',
+  'persephone_klein_background_edit_api_v1',
+]);
+
+const LOCAL_EDIT_PRESETS = {
+  persephone_klein_outfit_edit_api_v1: {
+    label: '局部换衣 / 改造型',
+    helper: '上传原图和遮罩，只重绘衣服、发型或造型区域，尽量保留人物姿势、脸和背景。',
+    placeholder: '例如：change only the masked outfit area, keep identity, pose and background unchanged',
+    maskHint: '遮罩建议只覆盖衣服或发型区域，避免盖住脸和手。',
+  },
+  persephone_klein_body_repair_api_v1: {
+    label: '局部修手 / 修脸 / 修身体细节',
+    helper: '上传原图和遮罩，只修复手、脸、肢体或局部畸变，不重新生成整张图。',
+    placeholder: '例如：repair the masked hand anatomy, natural fingers, keep lighting and composition',
+    maskHint: '遮罩尽量小，只盖住需要修复的手、脸或身体细节。',
+  },
+  persephone_klein_background_edit_api_v1: {
+    label: '局部改背景 / 改场景',
+    helper: '上传原图和遮罩，只替换背景或场景区域，尽量保留人物主体。',
+    placeholder: '例如：replace the masked background with a luxury bedroom, keep subject unchanged',
+    maskHint: '遮罩背景时不要大面积覆盖人物，否则人物也可能被重绘。',
+  },
+};
+
 const WORKFLOW_FILTERS = [
   ['all', '全部'],
   ['pending_review', '待审核'],
@@ -460,6 +487,13 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
   const workflowOptions = getRecommendedWorkflows(selectedCharacter, data.comfyWorkflows || [], assetType);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
   const selectedWorkflow = findById(workflowOptions, selectedWorkflowId) || workflowOptions[0] || null;
+  const selectedWorkflowKey = String(selectedWorkflow?.id || selectedWorkflow?.workflow_id || '').toLowerCase();
+  const localEditPreset = LOCAL_EDIT_WORKFLOW_IDS.has(selectedWorkflowKey)
+    ? LOCAL_EDIT_PRESETS[selectedWorkflowKey]
+    : null;
+  const [localEditInstruction, setLocalEditInstruction] = useState('');
+  const [localEditSourceFiles, setLocalEditSourceFiles] = useState([]);
+  const [localEditMaskFiles, setLocalEditMaskFiles] = useState([]);
   const [runtimeBrokenAssetIds, setRuntimeBrokenAssetIds] = useState([]);
   const linkedAssets = assetsForContent(item, assets);
   const usableAssets = filterUsableAssets(linkedAssets).filter((asset) => !runtimeBrokenAssetIds.includes(String(asset.id)));
@@ -513,12 +547,22 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
     || null;
   const workflowRequiredInputs = normalizeList(selectedWorkflow?.input_schema?.required);
   const workflowNeedsReference = workflowRequiredInputs.some((field) => ['image_url', 'input_image', 'last_frame'].includes(field));
-  const generationReason = !selectedCharacter
+  const localEditSourceFile = localEditSourceFiles[0] || null;
+  const localEditMaskFile = localEditMaskFiles[0] || null;
+  const hasLocalEditSource = Boolean(selectedReferenceAsset || localEditSourceFile);
+  const requiresCharacterLora = !localEditPreset;
+  const generationReason = requiresCharacterLora && !selectedCharacter
     ? '请先选择角色'
-    : !hasLora(lora)
+    : requiresCharacterLora && !hasLora(lora)
       ? '所选角色还没有可用的 LoRA'
       : !metadata.copy_approved
         ? '文案批准后才能进入正式素材生成'
+        : localEditPreset && !localEditInstruction.trim()
+          ? '请先填写局部编辑指令'
+        : localEditPreset && !hasLocalEditSource
+          ? '局部编辑需要选择参考图，或上传一张原图'
+        : localEditPreset && !localEditMaskFile
+          ? '局部编辑需要上传一张黑白遮罩图'
         : workflowNeedsReference && !selectedReferenceAsset
           ? '所选工作流需要一张已授权的角色参考图'
         : undefined;
@@ -548,6 +592,12 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
   useEffect(() => {
     setSelectedWorkflowId('');
   }, [assetType, selectedCharacterId]);
+
+  useEffect(() => {
+    setLocalEditInstruction('');
+    setLocalEditSourceFiles([]);
+    setLocalEditMaskFiles([]);
+  }, [selectedWorkflowKey]);
 
   useEffect(() => {
     setRuntimeBrokenAssetIds([]);
@@ -912,9 +962,51 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
             </select>
           </label>
           <Info label="角色参考素材" value={selectedReferenceAsset?.name || '不使用参考素材'} />
+          {localEditPreset && (
+            <div className="local-edit-api-panel">
+              <div>
+                <p className="eyebrow">局部编辑 API</p>
+                <h4>{localEditPreset.label}</h4>
+                <p>{localEditPreset.helper}</p>
+              </div>
+              <label>编辑指令
+                <textarea
+                  rows="3"
+                  value={localEditInstruction}
+                  onChange={(event) => setLocalEditInstruction(event.target.value)}
+                  placeholder={localEditPreset.placeholder}
+                />
+              </label>
+              <div className="local-edit-upload-grid">
+                <label className="upload-dropzone">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => setLocalEditSourceFiles(Array.from(event.target.files || []).slice(0, 1))}
+                  />
+                  <span>上传原图（可选）</span>
+                  <small>{localEditSourceFile ? localEditSourceFile.name : selectedReferenceAsset ? `将使用参考图：${selectedReferenceAsset.name}` : '也可以先在角色参考图中选择一张'}</small>
+                </label>
+                <label className="upload-dropzone">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => setLocalEditMaskFiles(Array.from(event.target.files || []).slice(0, 1))}
+                  />
+                  <span>上传黑白遮罩图（必填）</span>
+                  <small>{localEditMaskFile ? localEditMaskFile.name : localEditPreset.maskHint}</small>
+                </label>
+              </div>
+              <div className="local-edit-workflow-meta">
+                <Info label="工作流" value={selectedWorkflow?.name || selectedWorkflow?.id} />
+                <Info label="基础模型" value="Flux2-Klein-9B + PainterFluxImageEdit" />
+                <Info label="输出" value="图片回传素材库，并关联当前 Day 1 内容" />
+              </div>
+            </div>
+          )}
           <ExecutionButton
             action="create_asset_generation_job"
-            actionName={`创建${assetType === 'image' ? '图片' : '视频'}生成任务`}
+            actionName={localEditPreset ? `创建${localEditPreset.label}任务` : `创建${assetType === 'image' ? '图片' : '视频'}生成任务`}
             resourceType="content_package"
             resourceId={item.id}
             reason={generationReason || (!selectedWorkflow ? `没有可用的${assetType === 'image' ? '图片' : '视频'}工作流` : undefined)}
@@ -924,11 +1016,18 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
               content_item_id: metadata.selected_version_id,
               character_id: selectedCharacter?.id,
               asset_type: assetType,
+              generation_mode: localEditPreset ? 'local_edit' : assetType,
+              edit_type: localEditPreset?.label || null,
+              edit_instruction: localEditInstruction.trim() || null,
               lora,
               lora_weight: loraWeight,
               workflow_id: selectedWorkflow?.id,
+              workflow_name: selectedWorkflow?.name,
               reference_asset_id: selectedReferenceAsset?.id,
+              input_image_file: localEditSourceFile ? fileToPayload(localEditSourceFile) : null,
+              mask_file: localEditMaskFile ? fileToPayload(localEditMaskFile) : null,
               prompt: [
+                localEditInstruction.trim(),
                 assetType === 'image'
                   ? imageRequirements.positive_prompt
                   : videoRequirements.script || videoRequirements.positive_prompt,
@@ -942,11 +1041,13 @@ function DayOneContentWorkbench({ item, data, assets, onNavigate, onRefresh }) {
               ].filter(Boolean).join('\n'),
               negative_prompt: imageRequirements.negative_prompt || videoRequirements.negative_prompt || lora.negative_prompt,
               provider: 'autodl',
+              base_model: localEditPreset ? 'flux/flux-2-klein-9b-fp8.safetensors' : undefined,
+              edit_engine: localEditPreset ? 'Flux2-Klein + PainterFluxImageEdit' : undefined,
               force_remote: true,
             }}
             onCompleted={onRefresh}
           >
-            创建{assetType === 'image' ? '图片' : '视频'}生成任务
+            {localEditPreset ? `创建${localEditPreset.label}任务` : `创建${assetType === 'image' ? '图片' : '视频'}生成任务`}
           </ExecutionButton>
         </div>
 

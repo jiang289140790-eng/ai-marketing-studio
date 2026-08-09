@@ -2302,6 +2302,50 @@ textarea {
 .day1-generation-config label,
 .day1-generation-config label select { width: 100%; }
 
+.local-edit-api-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(34, 211, 238, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.14), rgba(124, 58, 237, 0.12));
+}
+
+.local-edit-api-panel h4 {
+  margin: 2px 0 4px;
+  font-size: 18px;
+}
+
+.local-edit-api-panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.local-edit-api-panel textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.local-edit-upload-grid,
+.local-edit-workflow-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.local-edit-workflow-meta {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.local-edit-workflow-meta > section {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.26);
+}
+
 .asset-type-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2400,7 +2444,8 @@ textarea {
   .day1-asset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .copy-editor-preview-grid { grid-template-columns: 1fr; }
   .character-context-summary,
-  .day1-generation-config { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day1-generation-config,
+  .local-edit-workflow-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .generation-job-row { grid-template-columns: minmax(0, 1fr) auto; }
 }
 
@@ -2415,6 +2460,8 @@ textarea {
   .production-binding-selectors { grid-template-columns: 1fr; }
   .character-context-summary,
   .day1-generation-config,
+  .local-edit-upload-grid,
+  .local-edit-workflow-meta,
   .generation-job-row { grid-template-columns: 1fr; }
   .version-history-row { grid-template-columns: 80px 1fr; }
   .version-history-row small,

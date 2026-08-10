@@ -56,12 +56,327 @@ const MODE_INFO = {
 
 const NOT_AVAILABLE_LABEL = '当前后端数据不可用';
 
+// V3 浏览：类别展示标签与“全部”筛选项（纯前端映射，不改变任何数据）。
+const ROLE_LABELS = { competitor: '竞品', inspiration: '灵感', owned: '自有账号' };
+const FILTER_ALL = 'all';
+
 function StatusPill({ label, tone }) {
   return <span className={`research-pill research-pill-${tone}`}>{label}</span>;
 }
 
 function formatCount(value) {
   return Number(value ?? 0).toLocaleString();
+}
+
+// 证据条目的统一类别：live 记录取 account.account_role，dev 示例取 category 字段。
+function categoryOf(item) {
+  const raw = item.category || (item.account && item.account.account_role) || '';
+  return String(raw).trim();
+}
+
+// 搜索与筛选谓词：名称/平台/类别/账号/摘要/受众任一命中即保留。
+function matchesFilter(item, query, platformFilter, categoryFilter) {
+  if (platformFilter !== FILTER_ALL && String(item.platform || '') !== platformFilter) return false;
+  if (categoryFilter !== FILTER_ALL && categoryOf(item) !== categoryFilter) return false;
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    item.name,
+    item.platform,
+    item.category,
+    item.account && item.account.username,
+    item.account && item.account.account_name,
+    item.snippet,
+    item.audience,
+    item.engagement,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+function countBy(items, keyOf) {
+  const counts = {};
+  for (const item of items) {
+    const key = keyOf(item);
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
+
+function EvidenceMeta({ item }) {
+  return (
+    <div className="research-card-meta">
+      <span>
+        {item.platform}
+        {item.account && item.account.username ? ` · ${item.account.username}` : ''}
+        {item.category ? ` · ${item.category}` : ''}
+      </span>
+      {item.capturedAt && <span>{item.capturedAt}</span>}
+      {item.publishedAt && <span>发布于 {item.publishedAt}</span>}
+    </div>
+  );
+}
+
+function EngagementLine({ item }) {
+  if (item.engagement) {
+    return <p className="research-engagement">{item.engagement}</p>;
+  }
+  if (item.views != null) {
+    return (
+      <p className="research-engagement">
+        Views {formatCount(item.views)} · Likes {formatCount(item.likes)} · Comments{' '}
+        {formatCount(item.comments)}
+      </p>
+    );
+  }
+  return null;
+}
+
+function AnalysisFields({ analysis, fields, isDev }) {
+  return (
+    <dl className="research-analysis-fields">
+      {fields.map((field) => {
+        const available = isDev || field.real;
+        const value = available ? analysis[field.key] : null;
+        return (
+          <div key={field.key}>
+            <dt>{field.label}</dt>
+            <dd>{value && value.length > 0 ? value : NOT_AVAILABLE_LABEL}</dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+function EvidenceCard({ item, isSelected, onSelect }) {
+  return (
+    <button
+      className={`research-evidence-card ${isSelected ? 'selected' : ''}`}
+      type="button"
+      onClick={onSelect}
+      aria-pressed={isSelected}
+    >
+      <div className="research-card-top">
+        <strong>{item.name}</strong>
+        {item.captureStatusLabel ? (
+          <StatusPill
+            label={item.captureStatusLabel}
+            tone={item.captureStatus === 'collected_local_preview' ? 'collected' : 'pending'}
+          />
+        ) : (
+          <StatusPill label="实时记录" tone="live" />
+        )}
+      </div>
+      <EvidenceMeta item={item} />
+      {item.snippet && <p className="research-snippet">{item.snippet}</p>}
+      <EngagementLine item={item} />
+      <p className="research-provenance">{item.provenance}</p>
+      {item.displayOnlyUrl && (
+        <p className="research-display-url">来源链接：{item.displayOnlyUrl}</p>
+      )}
+    </button>
+  );
+}
+
+// 来源摘要：由当前只读视图汇总，计数与下方浏览列表一致；平台/类别芯片可直接筛选。
+function SourceSummaryStrip({
+  summary,
+  isDev,
+  platformFilter,
+  categoryFilter,
+  onPlatformFilter,
+  onCategoryFilter,
+}) {
+  if (!summary) return null;
+  return (
+    <div className="research-source-summary" aria-label="来源摘要">
+      <span className="research-summary-item research-summary-total">
+        <b>{summary.sourceCount}</b> 个来源{isDev ? '（本地示例）' : '（实时后端）'}
+      </span>
+      {Object.entries(summary.platformCounts).map(([platform, count]) => (
+        <button
+          className={`research-summary-chip ${platformFilter === platform ? 'active' : ''}`}
+          key={platform}
+          type="button"
+          onClick={() => onPlatformFilter(platformFilter === platform ? FILTER_ALL : platform)}
+          aria-pressed={platformFilter === platform}
+        >
+          {platform} · {count}
+        </button>
+      ))}
+      {Object.entries(summary.categoryCounts).map(([category, count]) => (
+        <button
+          className={`research-summary-chip ${categoryFilter === category ? 'active' : ''}`}
+          key={category}
+          type="button"
+          onClick={() => onCategoryFilter(categoryFilter === category ? FILTER_ALL : category)}
+          aria-pressed={categoryFilter === category}
+        >
+          {ROLE_LABELS[category] || category} · {count}
+        </button>
+      ))}
+      {summary.followersTotal > 0 && (
+        <span className="research-summary-item">累计粉丝 {formatCount(summary.followersTotal)}</span>
+      )}
+    </div>
+  );
+}
+
+// 浏览工具栏：搜索 + 平台/类别筛选，计数始终与当前可见数据一致。
+function BrowseToolbar({
+  query,
+  onQueryChange,
+  platformOptions,
+  platformFilter,
+  onPlatformFilter,
+  categoryOptions,
+  categoryFilter,
+  onCategoryFilter,
+  visibleSources,
+  totalSources,
+  visibleCount,
+  totalCount,
+  hasFilters,
+  onClear,
+}) {
+  return (
+    <div className="research-browse-toolbar" role="search" aria-label="筛选来源与证据">
+      <label className="research-search-field">
+        <span>搜索</span>
+        <input
+          className="research-search-input"
+          type="search"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="按名称、平台、账号或摘要搜索…"
+          aria-label="搜索来源与证据"
+        />
+      </label>
+      {platformOptions.length > 1 && (
+        <div className="research-filter-row">
+          <span className="research-filter-label">平台</span>
+          <button
+            className={`research-filter-chip ${platformFilter === FILTER_ALL ? 'active' : ''}`}
+            type="button"
+            onClick={() => onPlatformFilter(FILTER_ALL)}
+            aria-pressed={platformFilter === FILTER_ALL}
+          >
+            全部
+          </button>
+          {platformOptions.map((platform) => (
+            <button
+              className={`research-filter-chip ${platformFilter === platform ? 'active' : ''}`}
+              key={platform}
+              type="button"
+              onClick={() => onPlatformFilter(platform)}
+              aria-pressed={platformFilter === platform}
+            >
+              {platform}
+            </button>
+          ))}
+        </div>
+      )}
+      {categoryOptions.length > 1 && (
+        <div className="research-filter-row">
+          <span className="research-filter-label">类别</span>
+          <button
+            className={`research-filter-chip ${categoryFilter === FILTER_ALL ? 'active' : ''}`}
+            type="button"
+            onClick={() => onCategoryFilter(FILTER_ALL)}
+            aria-pressed={categoryFilter === FILTER_ALL}
+          >
+            全部
+          </button>
+          {categoryOptions.map((category) => (
+            <button
+              className={`research-filter-chip ${categoryFilter === category ? 'active' : ''}`}
+              key={category}
+              type="button"
+              onClick={() => onCategoryFilter(category)}
+              aria-pressed={categoryFilter === category}
+            >
+              {ROLE_LABELS[category] || category}
+            </button>
+          ))}
+        </div>
+      )}
+      {hasFilters && (
+        <button className="research-filter-clear" type="button" onClick={onClear}>
+          清除筛选
+        </button>
+      )}
+      <p className="research-filter-count" aria-live="polite">
+        来源 {visibleSources} / {totalSources} · 内容 {visibleCount} / {totalCount}
+      </p>
+    </div>
+  );
+}
+
+// 选中记录详情：完整字段 + 关联分析，窄屏时位于列表上方。
+function EvidenceDetailPanel({ item, index, total, analyses, fields, isDev, selectionVisible }) {
+  if (!item) {
+    return (
+      <section className="research-detail-panel" aria-label="记录详情">
+        <p className="research-eyebrow">记录详情</p>
+        <p className="research-empty-note">暂无选中记录，无法显示详情。</p>
+      </section>
+    );
+  }
+  return (
+    <section className="research-detail-panel" aria-label="记录详情" role="region">
+      <div className="research-card-top">
+        <strong>{item.name}</strong>
+        {item.captureStatusLabel ? (
+          <StatusPill
+            label={item.captureStatusLabel}
+            tone={item.captureStatus === 'collected_local_preview' ? 'collected' : 'pending'}
+          />
+        ) : (
+          <StatusPill label="实时记录" tone="live" />
+        )}
+      </div>
+      <p className="research-detail-position">
+        记录 {index} / {total}
+        {isDev ? '（本地示例）' : '（实时后端）'}
+      </p>
+      {!selectionVisible && (
+        <p className="research-selection-hidden-note">
+          当前筛选条件未包含此记录，详情不受影响（仅内存交互）。
+        </p>
+      )}
+      <EvidenceMeta item={item} />
+      {item.snippet && <p className="research-detail-snippet">{item.snippet}</p>}
+      <EngagementLine item={item} />
+      <p className="research-provenance">{item.provenance}</p>
+      {item.displayOnlyUrl && (
+        <p className="research-display-url">来源链接：{item.displayOnlyUrl}</p>
+      )}
+      <div className="research-detail-analyses">
+        <p className="research-eyebrow">关联分析（{analyses.length}）</p>
+        {analyses.length === 0 ? (
+          <p className="research-empty-note">当前没有与该记录关联的分析记录。</p>
+        ) : (
+          <div className="research-detail-analysis-list">
+            {analyses.map((analysis) => (
+              <article className="research-analysis-mini" key={analysis.id}>
+                <div className="research-card-top">
+                  <strong>{analysis.title || (isDev ? '本地示例分析' : '实时后端分析记录')}</strong>
+                  <StatusPill label={analysis.statusLabel || '已分析'} tone="analysed" />
+                </div>
+                <AnalysisFields analysis={analysis} fields={fields} isDev={isDev} />
+                <p className="research-provenance">
+                  {analysis.analysisNote || '字段来自实时后端表 content_analysis（仅 SELECT）。'}
+                </p>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }
 
 export function ResearchWorkspacePage({ detailId, onNavigate }) {
@@ -76,6 +391,10 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
   const [fetching, setFetching] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState(detailId || null);
+  // V3 浏览：搜索词与平台/类别筛选（纯前端内存交互）。
+  const [searchQuery, setSearchQuery] = useState('');
+  const [platformFilter, setPlatformFilter] = useState(FILTER_ALL);
+  const [categoryFilter, setCategoryFilter] = useState(FILTER_ALL);
 
   const devFallbackView = useMemo(() => buildDevFallbackView(), []);
 
@@ -147,12 +466,93 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
               '基于真实后端记录查看 证据 → 分析 → 知识 → 可审核 Brief 的生产链；后端尚不存在的关联与字段会明确标注“当前后端数据不可用”。',
           };
 
+  // ---- V3 浏览：来源摘要、筛选与选中记录详情 ----
+  const summary = useMemo(() => {
+    if (!activeView) return null;
+    const evidenceItems = activeView.evidence || [];
+    const platformCounts = countBy(evidenceItems, (item) => String(item.platform || '未知平台'));
+    const categoryCounts = countBy(evidenceItems, (item) => categoryOf(item) || '未分类');
+    const sourceCount = isDev
+      ? new Set(evidenceItems.map((item) => `${item.name}|${item.platform}`)).size
+      : Number(activeView.counts && activeView.counts.sources) || 0;
+    const followersTotal = isDev
+      ? 0
+      : (activeView.sources || []).reduce(
+          (total, source) => total + Number(source.followers || 0),
+          0,
+        );
+    return { sourceCount, platformCounts, categoryCounts, followersTotal };
+  }, [activeView, isDev]);
+
+  const platformOptions = useMemo(
+    () => Object.keys((summary && summary.platformCounts) || {}),
+    [summary],
+  );
+  const categoryOptions = useMemo(
+    () => Object.keys((summary && summary.categoryCounts) || {}),
+    [summary],
+  );
+  // 视图刷新后旧筛选值可能失效：仅当选项仍然存在时才生效，避免误过滤。
+  const effectivePlatformFilter = platformOptions.includes(platformFilter)
+    ? platformFilter
+    : FILTER_ALL;
+  const effectiveCategoryFilter = categoryOptions.includes(categoryFilter)
+    ? categoryFilter
+    : FILTER_ALL;
+
+  const filteredEvidence = useMemo(
+    () =>
+      (activeView?.evidence || []).filter((item) =>
+        matchesFilter(item, searchQuery, effectivePlatformFilter, effectiveCategoryFilter),
+      ),
+    [activeView, searchQuery, effectivePlatformFilter, effectiveCategoryFilter],
+  );
+
+  const filteredSources = useMemo(() => {
+    const items = isDev ? activeView?.evidence || [] : activeView?.sources || [];
+    return items.filter((item) =>
+      matchesFilter(item, searchQuery, effectivePlatformFilter, effectiveCategoryFilter),
+    );
+  }, [activeView, isDev, searchQuery, effectivePlatformFilter, effectiveCategoryFilter]);
+
+  const hasFilters =
+    searchQuery.trim() !== '' ||
+    effectivePlatformFilter !== FILTER_ALL ||
+    effectiveCategoryFilter !== FILTER_ALL;
+
+  const clearFilters = useCallback(() => {
+    setSearchQuery('');
+    setPlatformFilter(FILTER_ALL);
+    setCategoryFilter(FILTER_ALL);
+  }, []);
+
+  const selectedIndex = useMemo(() => {
+    const items = activeView?.evidence || [];
+    const found = items.findIndex((item) => item.id === selectedEvidence?.id);
+    return found >= 0 ? found + 1 : 0;
+  }, [activeView, selectedEvidence]);
+
+  const selectionVisible = useMemo(
+    () => filteredEvidence.some((item) => item.id === selectedEvidence?.id),
+    [filteredEvidence, selectedEvidence],
+  );
+
+  const linkedAnalyses = useMemo(
+    () =>
+      selectedEvidence
+        ? (activeView?.analyses || []).filter(
+            (analysis) => analysis.evidenceId === selectedEvidence.id,
+          )
+        : [],
+    [activeView, selectedEvidence],
+  );
+
   return (
     <section className="research-workspace">
       <div className="research-status-bar">
         <div className="research-status-left">
           <StatusPill label={modeInfo.label} tone={modeInfo.tone} />
-          <span className="research-status-version">ams-research-workspace-v2-live</span>
+          <span className="research-status-version">ams-research-workspace-v3-live</span>
         </div>
         <div className="research-status-mid">
           <strong>执行状态：</strong>
@@ -271,67 +671,78 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
                 <h3>采集状态与溯源</h3>
               </div>
               <span>
-                {activeView.counts.evidence} 个来源{isDev ? '（本地示例）' : '（实时后端）'}
+                共 {activeView.counts.evidence} 条内容{isDev ? '（本地示例）' : '（实时后端）'}
               </span>
             </div>
-            {activeView.sources.length > 0 && (
-              <p className="research-lane-note">
-                来源账号：{activeView.sources.map((source) => `${source.name}（${source.platform}${source.followers != null ? ` · ${formatCount(source.followers)} 粉丝` : ''}）`).join('、')}
-              </p>
-            )}
+            <SourceSummaryStrip
+              summary={summary}
+              isDev={isDev}
+              platformFilter={effectivePlatformFilter}
+              categoryFilter={effectiveCategoryFilter}
+              onPlatformFilter={setPlatformFilter}
+              onCategoryFilter={setCategoryFilter}
+            />
             {activeView.evidence.length === 0 ? (
               <p className="research-empty-note">没有可展示的来源证据记录。</p>
             ) : (
-              <div className="research-evidence-grid">
-                {activeView.evidence.map((item) => {
-                  const isSelected = item.id === selectedEvidenceId;
-                  return (
-                    <button
-                      className={`research-evidence-card ${isSelected ? 'selected' : ''}`}
-                      key={item.id}
-                      type="button"
-                      onClick={() => setSelectedEvidenceId(item.id)}
-                      aria-pressed={isSelected}
-                    >
-                      <div className="research-card-top">
-                        <strong>{item.name}</strong>
-                        {item.captureStatusLabel ? (
-                          <StatusPill
-                            label={item.captureStatusLabel}
-                            tone={item.captureStatus === 'collected_local_preview' ? 'collected' : 'pending'}
-                          />
-                        ) : (
-                          <StatusPill label="实时记录" tone="live" />
-                        )}
-                      </div>
-                      <div className="research-card-meta">
-                        <span>
-                          {item.platform}
-                          {item.account && item.account.username ? ` · ${item.account.username}` : ''}
-                          {item.category ? ` · ${item.category}` : ''}
-                        </span>
-                        {item.capturedAt && <span>{item.capturedAt}</span>}
-                        {item.publishedAt && <span>发布于 {item.publishedAt}</span>}
-                      </div>
-                      {item.snippet && <p className="research-snippet">{item.snippet}</p>}
-                      {item.engagement ? (
-                        <p className="research-engagement">{item.engagement}</p>
-                      ) : item.views != null ? (
-                        <p className="research-engagement">
-                          Views {formatCount(item.views)} · Likes {formatCount(item.likes)} · Comments {formatCount(item.comments)}
-                        </p>
-                      ) : null}
-                      <p className="research-provenance">{item.provenance}</p>
-                      {item.displayOnlyUrl && (
-                        <p className="research-display-url">来源链接：{item.displayOnlyUrl}</p>
+              <div className="research-browse-area">
+                <div className="research-browse-column">
+                  <BrowseToolbar
+                    query={searchQuery}
+                    onQueryChange={setSearchQuery}
+                    platformOptions={platformOptions}
+                    platformFilter={effectivePlatformFilter}
+                    onPlatformFilter={setPlatformFilter}
+                    categoryOptions={categoryOptions}
+                    categoryFilter={effectiveCategoryFilter}
+                    onCategoryFilter={setCategoryFilter}
+                    visibleSources={filteredSources.length}
+                    totalSources={summary ? summary.sourceCount : 0}
+                    visibleCount={filteredEvidence.length}
+                    totalCount={activeView.evidence.length}
+                    hasFilters={hasFilters}
+                    onClear={clearFilters}
+                  />
+                  {filteredEvidence.length === 0 ? (
+                    <div className="research-filter-empty">
+                      <p className="research-empty-note">
+                        没有符合当前筛选条件的内容（真实数据不会被修改或删除）。
+                      </p>
+                      {hasFilters && (
+                        <button className="research-button" type="button" onClick={clearFilters}>
+                          清除筛选
+                        </button>
                       )}
-                    </button>
-                  );
-                })}
+                    </div>
+                  ) : (
+                    <div className="research-evidence-grid">
+                      {filteredEvidence.map((item) => {
+                        const isSelected = item.id === selectedEvidenceId;
+                        return (
+                          <EvidenceCard
+                            key={item.id}
+                            item={item}
+                            isSelected={isSelected}
+                            onSelect={() => setSelectedEvidenceId(item.id)}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                <EvidenceDetailPanel
+                  item={selectedEvidence}
+                  index={selectedIndex}
+                  total={activeView.evidence.length}
+                  analyses={linkedAnalyses}
+                  fields={analysisFields}
+                  isDev={isDev}
+                  selectionVisible={selectionVisible}
+                />
               </div>
             )}
             <p className="research-lane-note">
-              点击任一来源可查看其关联的分析、知识卡与 Brief 引用（仅内存交互，不修改数据）。
+              点击任一来源可在右侧/上方详情面板查看其完整字段与关联分析（仅内存交互，不修改数据）。
             </p>
           </section>
 
@@ -342,7 +753,7 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
                 <h3>钩子、格式、结构与受众洞察</h3>
               </div>
               <span>
-                {activeView.counts.analyses} 条分析{isDev ? '（本地示例）' : '（实时后端）'}
+                共 {activeView.analyses.length} 条分析{isDev ? '（本地示例）' : '（实时后端）'}
               </span>
             </div>
             {activeView.analyses.length === 0 ? (
@@ -370,18 +781,7 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
                         关联来源：{analysis.evidenceId}
                         {analysis.modelLabel ? `（${analysis.modelLabel}）` : '（实时后端记录）'}
                       </p>
-                      <dl className="research-analysis-fields">
-                        {analysisFields.map((field) => {
-                          const available = isDev || field.real;
-                          const value = available ? analysis[field.key] : null;
-                          return (
-                            <div key={field.key}>
-                              <dt>{field.label}</dt>
-                              <dd>{value && value.length > 0 ? value : NOT_AVAILABLE_LABEL}</dd>
-                            </div>
-                          );
-                        })}
-                      </dl>
+                      <AnalysisFields analysis={analysis} fields={analysisFields} isDev={isDev} />
                       <p className="research-provenance">
                         {analysis.analysisNote || '字段来自实时后端表 content_analysis（仅 SELECT）。'}
                       </p>
@@ -399,13 +799,17 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
                 <h3>带引用的已验证知识条目</h3>
               </div>
               <span>
-                {activeView.counts.knowledge} 张知识卡{isDev ? '（本地示例）' : ''}
+                {activeView.knowledge.available
+                  ? `共 ${activeView.knowledge.items.length} 张知识卡（本地示例）`
+                  : '当前后端数据不可用'}
               </span>
             </div>
             {activeView.knowledge.available ? (
               <div className="research-knowledge-grid">
                 {activeView.knowledge.items.map((knowledge) => {
-                  const isLinked = knowledge.citations.some((citation) => citation.evidenceId === selectedEvidence?.id);
+                  const isLinked = knowledge.citations.some(
+                    (citation) => citation.evidenceId === selectedEvidence?.id,
+                  );
                   return (
                     <article
                       className={`research-knowledge-card ${isLinked ? 'linked' : ''}`}
@@ -527,6 +931,77 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
         </>
       )}
 
+      {(mode === 'live' || isDev) && (
+        <section className="research-what-next" aria-label="下一步操作指南">
+          <div className="research-lane-head">
+            <div>
+              <p className="research-eyebrow">下一步操作指南</p>
+              <h3>研究完成后可前往以下区域</h3>
+            </div>
+          </div>
+          <p className="research-what-next-boundary">
+            以下操作仅执行页面导航（内存路由），不采集、不分析、不生成、不路由、不发布。
+            各区域的数据状态取决于各自的后端只读视图，此处不承诺任何下游数据已就绪。
+          </p>
+          <div className="research-what-next-grid">
+            <div className="research-what-next-card">
+              <div className="research-what-next-card-head">
+                <span className="research-what-next-step">证据 → 分析</span>
+                <strong>内容情报</strong>
+              </div>
+              <p>
+                查看现有分析结果、趋势洞察与竞品对标数据。
+                本页仅导航至内容情报区域，不触发新的分析任务。
+              </p>
+              <button
+                className="research-button research-what-next-btn"
+                type="button"
+                onClick={() => onNavigate('intelligence')}
+                aria-label="前往内容情报（仅导航）"
+              >
+                前往内容情报
+              </button>
+            </div>
+            <div className="research-what-next-card">
+              <div className="research-what-next-card-head">
+                <span className="research-what-next-step">分析 → 知识</span>
+                <strong>知识库</strong>
+              </div>
+              <p>
+                浏览已验证的知识条目、引用溯源与置信度评估。
+                本页仅导航至知识库区域，不写入或修改任何知识卡。
+              </p>
+              <button
+                className="research-button research-what-next-btn"
+                type="button"
+                onClick={() => onNavigate('knowledge')}
+                aria-label="前往知识库（仅导航）"
+              >
+                前往知识库
+              </button>
+            </div>
+            <div className="research-what-next-card">
+              <div className="research-what-next-card-head">
+                <span className="research-what-next-step">知识 → 生产</span>
+                <strong>内容工作台</strong>
+              </div>
+              <p>
+                进入内容生产环境进行 Brief 审核、素材生成与发布准备。
+                本页仅导航至内容工作台区域，不启动任何生成或路由任务。
+              </p>
+              <button
+                className="research-button research-what-next-btn"
+                type="button"
+                onClick={() => onNavigate('workspace')}
+                aria-label="前往内容工作台（仅导航）"
+              >
+                前往内容工作台
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       <footer className="research-footer">
         {activeView ? (
           <>
@@ -541,15 +1016,6 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
         <p className="research-footer-fine">
           四项执行标志均为 false · 实时请求失败绝不回退示例数据
         </p>
-        <div className="research-actions">
-          <span>下一步人工操作（仅跳转，不修改任何数据）：</span>
-          <button className="research-button" type="button" onClick={() => onNavigate('intelligence')}>
-            前往内容情报查看现有分析
-          </button>
-          <button className="research-button" type="button" onClick={() => onNavigate('workspace')}>
-            前往内容工作台继续生产
-          </button>
-        </div>
       </footer>
     </section>
   );

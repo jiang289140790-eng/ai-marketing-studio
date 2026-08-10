@@ -8,6 +8,7 @@ export const navigationSections = [
     items: [
       { id: 'campaigns', label: '运营活动', icon: '◆' },
       { id: 'plan', label: '内容计划', icon: '▤' },
+      { id: 'research', label: '研究工作台', icon: '⌖' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
       { id: 'intelligence', label: '内容情报', icon: '⌕' },
       { id: 'publish', label: '发布中心', icon: '↗' },

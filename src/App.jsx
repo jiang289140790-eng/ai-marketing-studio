@@ -25,11 +25,13 @@ const PlatformConnectionsPage = lazy(() => import('./pages/PlatformConnectionsPa
 const SystemOverviewPage = lazy(() => import('./pages/SystemOverviewPage').then((module) => ({ default: module.SystemOverviewPage })));
 const WorkflowModelConfigPage = lazy(() => import('./pages/WorkflowModelConfigPage').then((module) => ({ default: module.WorkflowModelConfigPage })));
 const KnowledgeVaultPage = lazy(() => import('./pages/KnowledgeVaultPage').then((module) => ({ default: module.KnowledgeVaultPage })));
+const ResearchWorkspacePage = lazy(() => import('./pages/ResearchWorkspacePage').then((module) => ({ default: module.ResearchWorkspacePage })));
 
 const pageTitles = {
   dashboard: 'AI 运营指挥中心',
   campaigns: '运营活动',
   plan: '内容计划',
+  research: '研究工作台',
   workspace: '内容工作台',
   intelligence: '内容情报',
   publish: '发布队列',
@@ -95,6 +97,8 @@ export default function App() {
         return <CampaignStrategyPage {...props} />;
       case 'plan':
         return <CampaignStrategyPage {...props} />;
+      case 'research':
+        return <ResearchWorkspacePage {...props} />;
       case 'workspace':
         return <ContentWorkspacePage {...props} />;
       case 'intelligence':

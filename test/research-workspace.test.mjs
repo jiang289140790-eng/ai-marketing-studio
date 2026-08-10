@@ -249,7 +249,7 @@ test('hash 路由：#/research 直接解析为 research 页，构建与刷新可
   }
 });
 
-test('页面源码：仅经只读服务访问实时数据，无直接网络/Supabase/执行控件', () => {
+test('页面源码：V3 可用浏览布局（摘要/搜索/筛选/详情），只读边界与真相保留', () => {
   const source = readSource('src/pages/ResearchWorkspacePage.jsx');
   // V1 页面结构线保留：状态栏、四条产品链 lane、执行标志、来源选择、双导航。
   assert.ok(source.includes('research-status-bar'), '页面必须包含顶部安全/状态栏');
@@ -259,6 +259,7 @@ test('页面源码：仅经只读服务访问实时数据，无直接网络/Supa
   assert.ok(source.includes('可审核 Brief'), '页面必须包含 Brief 面板');
   assert.ok(source.includes('executionFlags'), '页面必须渲染执行标志');
   assert.ok(source.includes("onNavigate('intelligence')"), '必须提供前往内容情报的导航');
+  assert.ok(source.includes("onNavigate('knowledge')"), '必须提供前往知识库的导航');
   assert.ok(source.includes("onNavigate('workspace')"), '必须提供前往内容工作台的导航');
   assert.ok(source.includes('setSelectedEvidenceId'), '必须存在来源选择交互');
   // V2：页面只经专用只读适配器访问实时数据，提供可见刷新动作。
@@ -268,6 +269,26 @@ test('页面源码：仅经只读服务访问实时数据，无直接网络/Supa
   assert.ok(source.includes('当前后端数据不可用'), '后端缺失的字段/关联必须显式标注不可用');
   assert.ok(source.includes('useState(false)'), '开发用本地示例必须默认关闭');
   assert.ok(source.includes('devFallbackOn'), '开发用本地示例必须由显式开关控制');
+  assert.ok(source.includes('!configured && devFallbackOn'), '开发回退只能在未配置运行时被激活');
+  // V3：来源摘要、搜索、筛选、选中记录详情与可见计数。
+  assert.ok(source.includes('来源摘要'), '页面必须提供来源摘要');
+  assert.ok(source.includes('research-source-summary'), '来源摘要必须有专属样式类');
+  assert.ok(source.includes('research-browse-toolbar'), '页面必须提供浏览筛选工具栏');
+  assert.ok(source.includes('research-search-input'), '页面必须提供搜索输入框');
+  assert.ok(source.includes('type="search"'), '搜索输入框必须是 search 类型');
+  assert.ok(source.includes('research-filter-chip'), '页面必须提供筛选芯片');
+  assert.ok(source.includes('research-detail-panel'), '页面必须提供选中记录详情面板');
+  assert.ok(source.includes('记录详情'), '详情面板必须显式标注标题');
+  assert.ok(source.includes('内容 {visibleCount} / {totalCount}'), '筛选后计数必须显式标注可见数量');
+  assert.ok(source.includes('清除筛选'), '筛选激活时必须可一键清除');
+  assert.ok(source.includes('未包含此记录'), '选中记录被筛掉时必须如实标注');
+  assert.ok(source.includes('matchesFilter'), '必须存在搜索/筛选谓词');
+  assert.ok(source.includes('countBy'), '来源摘要必须由可见数据聚合');
+  assert.ok(source.includes('searchQuery'), '搜索词必须是受控状态');
+  assert.ok(source.includes('platformFilter'), '平台筛选必须是受控状态');
+  assert.ok(source.includes('categoryFilter'), '类别筛选必须是受控状态');
+  assert.ok(source.includes('filteredEvidence'), '证据浏览列表必须来自筛选结果');
+  assert.ok(source.includes('filteredSources'), '来源浏览列表必须来自筛选结果');
   assert.ok(!source.includes('research-workspace-demo'), '页面不得直接引入示例数据模块');
   assert.ok(!source.includes('fetch(') && !source.includes('axios'), '页面不得直接发起网络请求');
   assert.ok(!source.includes('XMLHttpRequest') && !source.includes('WebSocket'), '页面不得建立连接');
@@ -282,14 +303,64 @@ test('页面源码：仅经只读服务访问实时数据，无直接网络/Supa
   assert.ok(!source.includes('import.meta.env'), '页面不得读取环境变量');
 });
 
-test('页面样式隔离：样式仅定义在页面专属 CSS 文件中', () => {
+test('页面样式隔离：V3 浏览样式仅定义在页面专属 CSS 文件中', () => {
   const css = readSource('src/pages/ResearchWorkspacePage.css');
   assert.ok(css.length > 1000, '页面 CSS 应有实质内容');
   assert.ok(css.includes('.research-workspace'), 'CSS 必须作用域于研究工作台');
   assert.ok(css.includes('.research-status-bar'), 'CSS 必须包含状态栏样式');
   assert.ok(css.includes('.research-evidence-card'), 'CSS 必须包含证据卡样式');
   assert.ok(css.includes('.research-brief'), 'CSS 必须包含 Brief 样式');
+  assert.ok(css.includes('.research-source-summary'), 'CSS 必须包含来源摘要样式');
+  assert.ok(css.includes('.research-browse-toolbar'), 'CSS 必须包含浏览工具栏样式');
+  assert.ok(css.includes('.research-filter-chip'), 'CSS 必须包含筛选芯片样式');
+  assert.ok(css.includes('.research-detail-panel'), 'CSS 必须包含详情面板样式');
+  assert.ok(css.includes('@media (max-width: 980px)'), 'CSS 必须包含中窄屏单列布局');
   assert.ok(!css.includes('@import'), '页面 CSS 不得引入外部资源');
+});
+
+test('V4 下一步操作指南：三目的地、纯导航语言与真相边界', () => {
+  const source = readSource('src/pages/ResearchWorkspacePage.jsx');
+  const css = readSource('src/pages/ResearchWorkspacePage.css');
+  // 结构：必须有下一步操作指南 section
+  assert.ok(source.includes('下一步操作指南'), '页面必须包含下一步操作指南区段');
+  assert.ok(source.includes('research-what-next'), '操作指南必须有专属样式类');
+  assert.ok(source.includes('research-what-next-grid'), '操作指南必须有三卡网格布局');
+  assert.ok(source.includes('research-what-next-card'), '操作指南每张卡片必须有专属样式类');
+  // 三目的地全部存在
+  assert.ok(source.includes('内容情报'), '指南必须包含内容情报目的地');
+  assert.ok(source.includes('知识库'), '指南必须包含知识库目的地');
+  assert.ok(source.includes('内容工作台'), '指南必须包含内容工作台目的地');
+  // 三处导航都使用 onNavigate
+  const intelligenceNavs = source.split("onNavigate('intelligence')").length - 1;
+  const knowledgeNavs = source.split("onNavigate('knowledge')").length - 1;
+  const workspaceNavs = source.split("onNavigate('workspace')").length - 1;
+  assert.ok(intelligenceNavs >= 1, `intelligence 导航至少出现 1 次，实际 ${intelligenceNavs}`);
+  assert.ok(knowledgeNavs >= 1, `knowledge 导航至少出现 1 次，实际 ${knowledgeNavs}`);
+  assert.ok(workspaceNavs >= 1, `workspace 导航至少出现 1 次，实际 ${workspaceNavs}`);
+  // 纯导航语言：必须声明"仅导航"或"仅执行页面导航"
+  assert.ok(
+    source.includes('仅导航') || source.includes('仅执行页面导航'),
+    '指南必须声明操作仅为页面导航',
+  );
+  // 真相边界：必须声明不采集、不分析、不生成
+  assert.ok(source.includes('不采集'), '指南必须声明不采集');
+  assert.ok(source.includes('不生成'), '指南必须声明不生成');
+  // 不得暗示下游数据已就绪
+  assert.ok(
+    source.includes('不承诺任何下游数据已就绪') || source.includes('数据状态取决于'),
+    '指南必须如实声明不承诺下游数据已就绪',
+  );
+  // 按钮可键盘访问：所有操作指南按钮均为 semantic button
+  assert.ok(source.includes('aria-label="前往内容情报（仅导航）"'), '情报按钮必须有 aria-label');
+  assert.ok(source.includes('aria-label="前往知识库（仅导航）"'), '知识库按钮必须有 aria-label');
+  assert.ok(source.includes('aria-label="前往内容工作台（仅导航）"'), '工作台按钮必须有 aria-label');
+  // CSS 覆盖
+  assert.ok(css.includes('.research-what-next'), 'CSS 必须定义操作指南样式');
+  assert.ok(css.includes('.research-what-next-grid'), 'CSS 必须定义三卡网格');
+  assert.ok(css.includes('.research-what-next-card'), 'CSS 必须定义卡片样式');
+  assert.ok(css.includes('.research-what-next-boundary'), 'CSS 必须定义边界声明样式');
+  // 窄屏响应
+  assert.ok(css.includes('@media (max-width: 640px)'), 'CSS 必须包含窄屏响应规则');
 });
 
 test('所有权与删除防护：仅授权路径发生受跟踪修改，无删除', () => {

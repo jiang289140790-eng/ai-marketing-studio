@@ -7,6 +7,8 @@ import {
   fetchResearchWorkspaceData,
   getResearchRuntimeStatus,
 } from '../services/research-workspace-service';
+import { loadIntegratedWorkspace } from '../services/integrated-workspace-service.js';
+import { EvidenceCard as IWEvidenceCard, AnalysisCard as IWAnalysisCard, BriefPanel } from '../components/integrated-workspace';
 import './ResearchWorkspacePage.css';
 
 const CHAIN_STEPS = [
@@ -395,9 +397,12 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [platformFilter, setPlatformFilter] = useState(FILTER_ALL);
   const [categoryFilter, setCategoryFilter] = useState(FILTER_ALL);
+  // P18 集成工作区（仅在不配置或 staging 为空时作为 demo 后备）
+  const [integratedWorkspace, setIntegratedWorkspace] = useState(null);
 
   const devFallbackView = useMemo(() => buildDevFallbackView(), []);
 
+  // 主数据加载：优先实时 staging
   useEffect(() => {
     if (!configured || !signedIn) {
       setView(null);
@@ -420,6 +425,23 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
       cancelled = true;
     };
   }, [configured, signedIn, userId, refreshKey]);
+
+  // P18：当未配置或 staging 为空时，加载集成验收演示工作区作为后备
+  useEffect(() => {
+    if (configured && signedIn) {
+      // staging 已配置且已登录 → staging 优先，不自动加载 demo
+      return undefined;
+    }
+    let cancelled = false;
+    loadIntegratedWorkspace({ userId: null }) // 强制 demo 模式
+      .then((ws) => {
+        if (!cancelled && ws && ws.demoOnly) {
+          setIntegratedWorkspace(ws);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [configured, signedIn]);
 
   const activeView = !configured && devFallbackOn ? devFallbackView : view;
 
@@ -547,6 +569,120 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
     [activeView, selectedEvidence],
   );
 
+  // P18：集成演示工作区的渲染辅助函数
+  const iwEvidence = integratedWorkspace?.evidence || [];
+  const iwAnalyses = integratedWorkspace?.analyses || [];
+  const iwKnowledgeCards = integratedWorkspace?.knowledgeCards || [];
+  const iwBrief = integratedWorkspace?.brief || null;
+  const [iwSelectedId, setIwSelectedId] = useState(null);
+
+  const renderIntegratedEvidenceSection = () => (
+    <section className="research-lane" aria-label="来源证据（验收演示）">
+      <div className="research-lane-head">
+        <div>
+          <p className="research-eyebrow">来源证据（验收演示项目）</p>
+          <h3>采集状态与溯源</h3>
+        </div>
+        <span>共 {iwEvidence.length} 条证据（验收演示数据）</span>
+      </div>
+      {iwEvidence.length === 0 ? (
+        <p className="research-empty-note">没有可展示的演示证据记录。</p>
+      ) : (
+        <div className="research-evidence-grid">
+          {iwEvidence.map((item) => (
+            <IWEvidenceCard
+              key={item.id}
+              item={item}
+              isSelected={item.id === iwSelectedId}
+              onSelect={() => setIwSelectedId(item.id)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  const renderIntegratedAnalysisSection = () => (
+    <section className="research-lane" aria-label="多模态分析（验收演示）">
+      <div className="research-lane-head">
+        <div>
+          <p className="research-eyebrow">多模态分析（验收演示项目）</p>
+          <h3>钩子、格式、结构与受众洞察</h3>
+        </div>
+        <span>共 {iwAnalyses.length} 条分析（验收演示数据）</span>
+      </div>
+      {iwAnalyses.length === 0 ? (
+        <p className="research-empty-note">没有可展示的演示分析记录。</p>
+      ) : (
+        <div className="research-analysis-grid">
+          {iwAnalyses.map((item) => (
+            <IWAnalysisCard
+              key={item.id}
+              item={item}
+              isLinked={item.evidenceId === iwSelectedId}
+              evidenceId={item.evidenceId}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
+  const renderIntegratedKnowledgeSection = () => (
+    <section className="research-lane" aria-label="知识卡（验收演示）">
+      <div className="research-lane-head">
+        <div>
+          <p className="research-eyebrow">知识卡（验收演示项目）</p>
+          <h3>带引用的已验证知识条目</h3>
+        </div>
+        <span>共 {iwKnowledgeCards.length} 张知识卡（验收演示数据）</span>
+      </div>
+      {iwKnowledgeCards.length > 0 && (
+        <div className="research-knowledge-grid">
+          {iwKnowledgeCards.map((item) => {
+            const isLinked = (item.sourceEvidenceIds || []).includes(iwSelectedId);
+            return (
+              <article
+                className={`research-knowledge-card ${isLinked ? 'linked' : ''}`}
+                key={item.id}
+              >
+                <div className="research-card-top">
+                  <strong>{item.title}</strong>
+                  <span className="research-pill research-pill-preview">验收演示</span>
+                </div>
+                <p>{item.summary}</p>
+                <p className="research-confidence">置信度：{Math.round((item.confidence || 0) * 100)}%</p>
+                {(item.sourceEvidenceIds || []).length > 0 && (
+                  <div className="research-citations">
+                    <b>引用证据：</b>
+                    {(item.sourceEvidenceIds || []).map((evId) => (
+                      <span className="research-summary-chip" key={evId}>
+                        {evId}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="research-provenance">{item.provenance}</p>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+
+  const renderIntegratedBriefSection = () => (
+    <section className="research-lane" aria-label="可审核 Brief（验收演示）">
+      <div className="research-lane-head">
+        <div>
+          <p className="research-eyebrow">可审核 Brief（验收演示项目）</p>
+          <h3>等待人工审核与交接</h3>
+        </div>
+      </div>
+      <BriefPanel brief={iwBrief} executionFlags={integratedWorkspace?.executionFlags} />
+    </section>
+  );
+
   return (
     <section className="research-workspace">
       <div className="research-status-bar">
@@ -581,6 +717,35 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
       </div>
 
       {mode === 'not_configured' ? (
+        (integratedWorkspace && integratedWorkspace.demoOnly) ? (
+          /* P18：未配置实时后端时，自动展示验收演示项目 */
+          <>
+            <header className="research-hero">
+              <p className="research-eyebrow">研究工作台 · 验收演示项目</p>
+              <h2>研究证据 → 分析 → 知识卡 → 可审核 Brief（验收演示）</h2>
+              <p className="research-objective">
+                <strong>目标：</strong>展示完整的智能内容链研究阶段：证据浏览、来源溯源、多模态分析、知识卡与可审核 Brief。
+              </p>
+              <p className="research-boundary">
+                验收演示项目：以下全部内容为固定的本地演示数据，不代表任何真实读取或执行。实时后端未配置时自动展示。
+              </p>
+              <div className="research-chain" aria-label="研究产品链">
+                {CHAIN_STEPS.map(([num, label, hint], index) => (
+                  <span className="research-chain-step" key={label}>
+                    <i>{num}</i>
+                    <b>{label}</b>
+                    <small>{hint}</small>
+                    {index < CHAIN_STEPS.length - 1 && <em>→</em>}
+                  </span>
+                ))}
+              </div>
+            </header>
+            {renderIntegratedEvidenceSection()}
+            {renderIntegratedAnalysisSection()}
+            {renderIntegratedKnowledgeSection()}
+            {renderIntegratedBriefSection()}
+          </>
+        ) : (
         <div className="research-setup-panel">
           <p className="research-eyebrow">实时后端未配置</p>
           <p>
@@ -596,6 +761,7 @@ export function ResearchWorkspacePage({ detailId, onNavigate }) {
             开启开发用本地示例（默认关闭）
           </button>
         </div>
+        )
       ) : (
         <header className="research-hero">
           <p className="research-eyebrow">研究工作台</p>

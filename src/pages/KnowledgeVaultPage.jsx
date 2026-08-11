@@ -6,6 +6,8 @@ import {
   getStagingRuntimeStatus,
   fetchKnowledgeEngineData,
 } from '../services/staging-preview-service';
+import { loadIntegratedWorkspace } from '../services/integrated-workspace-service.js';
+import { KnowledgeCard, BriefPanel, HandoffPanel, LineagePanel, WorkspaceSourceBanner } from '../components/integrated-workspace';
 
 // ---- 知识引擎四个视图的标签与描述 ---------------------------------------------
 const KE_TABS = [
@@ -83,6 +85,9 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
   const [keData, setKeData] = useState(null);
   const [fetching, setFetching] = useState(false);
   const [activeTab, setActiveTab] = useState('knowledgeCards');
+  // P18：集成演示工作区后备
+  const [integratedWorkspace, setIntegratedWorkspace] = useState(null);
+  const [iwTab, setIwTab] = useState('knowledgeCards');
 
   useEffect(() => {
     if (!runtime.configured || !signedIn) {
@@ -105,8 +110,28 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
     return () => { cancelled = true; };
   }, [runtime.configured, signedIn, userId]);
 
+  // P18：当未配置或 staging 为空/不可用时，加载集成验收演示工作区
+  useEffect(() => {
+    if (runtime.configured && signedIn) {
+      return undefined; // staging 优先
+    }
+    let cancelled = false;
+    loadIntegratedWorkspace({ userId: null })
+      .then((ws) => {
+        if (!cancelled && ws && ws.demoOnly) {
+          setIntegratedWorkspace(ws);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [runtime.configured, signedIn, userId]);
+
   // ---- 状态渲染 --------------------------------------------------------------
   if (!runtime.configured) {
+    // P18：未配置时展示验收演示项目
+    if (integratedWorkspace && integratedWorkspace.demoOnly) {
+      return renderDemoKnowledgeWorkspace();
+    }
     return (
       <section className="page-stack">
         <EmptyState
@@ -126,6 +151,10 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
   }
 
   if (!signedIn) {
+    // P18：未登录时展示验收演示项目
+    if (integratedWorkspace && integratedWorkspace.demoOnly) {
+      return renderDemoKnowledgeWorkspace();
+    }
     return (
       <section className="page-stack knowledge-engine-page staging-preview">
         <div className="hero-panel command-hero command-hero-simple">
@@ -151,6 +180,139 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
           </button>
         </div>
         <div className="notice">当前未登录：请先登录后读取属于你的 staging 知识记录。</div>
+      </section>
+    );
+  }
+
+  // P18：渲染验收演示知识工作区
+  function renderDemoKnowledgeWorkspace() {
+    const iw = integratedWorkspace;
+    const iwKc = iw?.knowledgeCards || [];
+    const iwBrief = iw?.brief || null;
+    const iwHandoff = iw?.handoff || null;
+    const iwLineage = iw?.lineage || { entries: [], stateCounts: {} };
+    const iwDemoTabs = [
+      { id: 'knowledgeCards', label: '知识卡', count: iwKc.length },
+      { id: 'contentBriefs', label: '可审核 Brief', count: iwBrief ? 1 : 0 },
+      { id: 'handoffManifest', label: 'P5 交接包', count: iwHandoff ? 1 : 0 },
+      { id: 'handoffPackageDetail', label: 'P16 世系', count: iwLineage.entries.length },
+    ];
+
+    return (
+      <section className="page-stack knowledge-engine-page staging-preview">
+        <WorkspaceSourceBanner workspace={iw} />
+
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">知识引擎 · 验收演示项目</p>
+            <h2>知识卡、Brief、交接包与世系审计</h2>
+            <p>验收演示项目：以下全部内容为固定的本地演示数据，不代表任何真实读取或执行。</p>
+          </div>
+          <div className="button-row">
+            <button className="ghost-button" type="button" onClick={() => onNavigate('research')}>
+              研究工作台
+            </button>
+            <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>
+              指挥中心
+            </button>
+          </div>
+        </div>
+
+        {/* 视图标签 */}
+        <div className="capability-tabs" role="tablist" aria-label="知识引擎演示视图">
+          {iwDemoTabs.map((tab) => (
+            <button
+              className={iwTab === tab.id ? 'active' : ''}
+              key={tab.id}
+              role="tab"
+              type="button"
+              aria-selected={iwTab === tab.id}
+              onClick={() => setIwTab(tab.id)}
+            >
+              {tab.label} ({tab.count})
+            </button>
+          ))}
+        </div>
+
+        {/* 知识卡视图 */}
+        {iwTab === 'knowledgeCards' && (
+          <section className="ke-view-section" aria-label="知识卡" role="tabpanel">
+            <div className="ke-view-head">
+              <p className="eyebrow">知识卡</p>
+              <p className="ke-view-desc">带引用的已验证知识条目 — 验收演示项目</p>
+            </div>
+            {iwKc.length === 0 ? (
+              <div className="command-clear-state">
+                <span>—</span>
+                <div><strong>当前没有知识卡记录</strong></div>
+              </div>
+            ) : (
+              <div className="iw-knowledge-grid-demo">
+                {iwKc.map((item) => (
+                  <KnowledgeCard key={item.id} item={item} />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Brief 视图 */}
+        {iwTab === 'contentBriefs' && (
+          <section className="ke-view-section" aria-label="可审核 Brief" role="tabpanel">
+            <div className="ke-view-head">
+              <p className="eyebrow">可审核 Brief</p>
+              <p className="ke-view-desc">约束、执行标志与人工审核边界 — 验收演示项目</p>
+            </div>
+            <BriefPanel brief={iwBrief} executionFlags={iw?.executionFlags} />
+          </section>
+        )}
+
+        {/* 交接包视图 */}
+        {iwTab === 'handoffManifest' && (
+          <section className="ke-view-section" aria-label="P5 交接包" role="tabpanel">
+            <div className="ke-view-head">
+              <p className="eyebrow">P5 交接包</p>
+              <p className="ke-view-desc">交接清单、内容计划与执行边界 — 验收演示项目</p>
+            </div>
+            <HandoffPanel handoff={iwHandoff} executionFlags={iw?.executionFlags} />
+          </section>
+        )}
+
+        {/* 世系视图 */}
+        {iwTab === 'handoffPackageDetail' && (
+          <section className="ke-view-section" aria-label="P16 世系" role="tabpanel">
+            <div className="ke-view-head">
+              <p className="eyebrow">P16 世系审计</p>
+              <p className="ke-view-desc">数据来源完整性与链路追踪 — 验收演示项目</p>
+            </div>
+            <LineagePanel lineage={iwLineage} />
+          </section>
+        )}
+
+        {/* 安全边界 */}
+        <section className="command-section preview-boundary-section" aria-label="预览安全边界">
+          <div className="section-head compact-head">
+            <div>
+              <p className="eyebrow">安全边界</p>
+              <h3>验收演示项目 — 纯本地数据</h3>
+            </div>
+          </div>
+          <div className="preview-boundary-detail">
+            <div className="boundary-row">
+              <span>数据源</span>
+              <strong>验收演示项目（本地）</strong>
+            </div>
+            <div className="boundary-row">
+              <span>写操作 / 网络请求</span>
+              <strong>未执行</strong>
+            </div>
+          </div>
+        </section>
+
+        <footer className="preview-footer">
+          <p>P18 完整智能内容链 · 验收演示项目</p>
+          <p className="preview-footer-fine">四项执行标志均为 false · 不采集、不生成、不路由、不发布</p>
+        </footer>
       </section>
     );
   }

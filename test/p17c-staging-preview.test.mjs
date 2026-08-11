@@ -34,46 +34,6 @@ const OWNED_PATHS = new Set([
   'test/online-integrated-preview.test.mjs',
   'test/research-live-data.test.mjs',
   'test/p17c-staging-preview.test.mjs',
-  // P19 运营研究工作台新增授权路径（本里程碑）。
-  'src/services/p19-contracts.js',
-  'src/services/p19-store.js',
-  'src/services/p19-lineage.js',
-  'src/services/p19-workspace-service.js',
-  'src/services/p19-server-write-adapter.js',
-  'src/components/integrated-workspace/P19WorkbenchPanels.jsx',
-  // P19 迁移对账：2 个已验收规范文件替换了工作区中的旧版本（内容不一致）。
-  'supabase/migrations/20260722023000_ops_execution_gateway.sql',
-  'supabase/migrations/20260722033000_ops_business_tables_and_rls_hardening.sql',
-  'supabase/migrations/20260812000000_p19_workspace_command_contract_v1.sql',
-  'supabase/tests/p19_b0_command_contract.test.sql',
-  'supabase/functions/p19-workspace-command/command-core.mjs',
-  'supabase/functions/p19-workspace-command/index.ts',
-  'test/p19-contracts.test.mjs',
-  'test/p19-store.test.mjs',
-  'test/p19-workbench-service.test.mjs',
-  'test/p19-lineage.test.mjs',
-  'test/p19-backend-command.test.mjs',
-  'test/p19-forbidden-scan.test.mjs',
-  'docs/P19_OPERATIONAL_WORKBENCH.md',
-  'docs/P19_COMPLETION_REPORT.md',
-  // P19 合并修复（repair 1）：迁移工具链 + 边界函数 + 新聚焦测试。
-  'scripts/check-migrations.mjs',
-  'scripts/check-p19-deployment-gate.mjs',
-  'supabase/functions/p19-workspace-command/jwt-verify.mjs',
-  'supabase/tests/p19_b1_rpc_boundary.test.sql',
-  'supabase/tests/p19_b2_idempotency_replay.test.sql',
-  'test/p19-checker.test.mjs',
-  'test/p19-deployment-gate.test.mjs',
-  'test/p19-sql-integration.test.mjs',
-]);
-
-// P19 已验收迁移对账唯一允许的删除：5 个过时时间戳变体。
-const ALLOWED_DELETIONS = new Set([
-  'supabase/migrations/20260722141035_support_discord_and_read_business_intelligence.sql',
-  'supabase/migrations/20260722142451_hard_finish_security_rls_and_search_path.sql',
-  'supabase/migrations/20260722142535_restore_vector_operator_search_path.sql',
-  'supabase/migrations/20260724133735_fix_content_packages_update_policy.sql',
-  'supabase/migrations/20260725043407_day1_publish_state_machine.sql',
 ]);
 
 // ---- 辅助函数 ---------------------------------------------------------------
@@ -358,13 +318,8 @@ test('所有权与删除防护：仅授权路径发生受跟踪修改，无删�
     const x = line[0];
     const y = line[1];
     if (x === '?' && y === '?') continue; // 未跟踪文件允许
+    assert.ok(x !== 'D' && y !== 'D', `不允许删除文件: ${line}`);
     const paths = line.slice(3).split(' -> ').map((part) => part.trim());
-    if (x === 'D' || y === 'D') {
-      for (const path of paths) {
-        assert.ok(ALLOWED_DELETIONS.has(path), `不允许删除文件: ${path}`);
-      }
-      continue;
-    }
     for (const path of paths) {
       assert.ok(OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
     }

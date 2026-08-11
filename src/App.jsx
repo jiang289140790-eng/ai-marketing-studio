@@ -69,7 +69,7 @@ export default function App() {
   const { page: activePage, detailId, routeParams, navigate } = useAppRoute();
   const { error: authError, loading: authLoading, session, userId } = useAuth();
   const campaignState = useCampaignContext();
-  const contextPages = new Set(['dashboard', 'campaigns', 'plan', 'workspace', 'intelligence', 'assets', 'publish', 'data-analytics', 'analytics']);
+  const contextPages = new Set(['campaigns', 'plan', 'workspace', 'intelligence', 'assets', 'publish', 'data-analytics', 'analytics']);
   const auxiliaryDescription = auxiliaryPageDescriptions[activePage] || '';
   const [auxiliaryScope, setAuxiliaryScope] = useState('campaign');
   const [auxiliaryMode, setAuxiliaryMode] = useState('normal');

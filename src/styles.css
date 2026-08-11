@@ -8538,3 +8538,357 @@ textarea {
     flex-direction: column;
   }
 }
+
+/* ================================================================
+   P17-C Staging Integrated Preview — 新增与覆盖样式
+   ================================================================ */
+
+/* ---- Header：只读预览标识 ---- */
+.config-pill.preview {
+  background: rgba(34, 211, 238, 0.14);
+  color: var(--accent-2);
+  border: 1px solid rgba(34, 211, 238, 0.28);
+}
+
+/* ---- 工作流链 ---- */
+.workflow-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 0;
+}
+
+.workflow-chain-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  min-width: 90px;
+  text-align: center;
+}
+
+.workflow-chain-step i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.workflow-chain-step b {
+  font-size: 0.92rem;
+  color: var(--text-strong);
+}
+
+.workflow-chain-step small {
+  font-size: 0.72rem;
+  color: var(--muted);
+  max-width: 110px;
+}
+
+.workflow-chain-step em {
+  display: none;
+}
+
+.workflow-chain > em {
+  display: inline;
+  color: var(--muted);
+  font-style: normal;
+  font-size: 1.1rem;
+  margin: 0 -2px;
+}
+
+.workflow-chain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* ---- 世系状态网格 ---- */
+.lineage-state-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.lineage-state-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+  text-align: center;
+}
+
+.lineage-state-card strong {
+  font-size: 0.88rem;
+}
+
+.lineage-state-card .lineage-state-count {
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.lineage-state-card small {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.lineage-state-success strong { color: var(--success); }
+.lineage-state-success .lineage-state-count { color: var(--success); }
+.lineage-state-success { border-color: rgba(34, 197, 94, 0.3); }
+
+.lineage-state-warning strong { color: var(--warning); }
+.lineage-state-warning .lineage-state-count { color: var(--warning); }
+.lineage-state-warning { border-color: rgba(245, 158, 11, 0.3); }
+
+.lineage-state-error strong { color: var(--danger); }
+.lineage-state-error .lineage-state-count { color: var(--danger); }
+.lineage-state-error { border-color: rgba(239, 68, 68, 0.3); }
+
+/* ---- 世系条目列表 ---- */
+.lineage-entry-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.lineage-entry-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.lineage-entry-row .lineage-entry-badge {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.lineage-entry-badge.tone-success {
+  background: rgba(34, 197, 94, 0.18);
+  color: var(--success);
+}
+
+.lineage-entry-badge.tone-warning {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warning);
+}
+
+.lineage-entry-badge.tone-error {
+  background: rgba(239, 68, 68, 0.18);
+  color: var(--danger);
+}
+
+.lineage-entry-row div {
+  min-width: 0;
+}
+
+.lineage-entry-row strong {
+  display: block;
+  font-size: 0.9rem;
+  margin-bottom: 2px;
+}
+
+.lineage-entry-row p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* ---- 安全边界面板 ---- */
+.preview-boundary-section {
+  border: 1px solid rgba(34, 211, 238, 0.16);
+}
+
+.preview-boundary-detail {
+  display: grid;
+  gap: 8px;
+}
+
+.boundary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.boundary-row:last-child {
+  border-bottom: none;
+}
+
+.boundary-row span {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.boundary-row strong {
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+/* ---- 预览底栏 ---- */
+.preview-footer {
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+.preview-footer p {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.preview-footer-fine {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-top: 4px;
+}
+
+/* ---- 知识引擎页面 ---- */
+.knowledge-engine-page .ke-view-section {
+  margin-top: 16px;
+}
+
+.ke-view-head {
+  margin-bottom: 12px;
+}
+
+.ke-view-desc {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.ke-view-count {
+  font-size: 0.84rem;
+  color: var(--muted);
+  margin: 8px 0 14px;
+}
+
+.ke-data-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.ke-data-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+}
+
+.ke-detail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.ke-detail-list > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ke-detail-list dt {
+  font-size: 0.74rem;
+  color: var(--muted);
+  text-transform: none;
+}
+
+.ke-detail-list dd {
+  margin: 0;
+  font-size: 0.84rem;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 可点击统计卡片（知识引擎标签切换）---- */
+.stat-card-clickable {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: none;
+  padding: 0;
+  text-align: left;
+  transition: border-color 0.15s;
+}
+
+.stat-card-clickable:hover {
+  border-color: var(--accent);
+}
+
+.stat-card-clickable.active {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3);
+}
+
+/* ---- 窄屏适配 ---- */
+@media (max-width: 980px) {
+  .workflow-chain {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workflow-chain > em {
+    display: none;
+  }
+
+  .workflow-chain-step {
+    flex-direction: row;
+    gap: 10px;
+    text-align: left;
+  }
+
+  .workflow-chain-step em {
+    display: inline;
+    margin-left: auto;
+  }
+
+  .lineage-state-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .lineage-state-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ke-detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .boundary-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .boundary-row strong {
+    text-align: left;
+  }
+}

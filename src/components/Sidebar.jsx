@@ -1,9 +1,17 @@
 import { useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
+const PREVIEW_NAV_IDS = new Set(['dashboard', 'research', 'knowledge', 'workspace', 'intelligence']);
+
 export function Sidebar({ activePage, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
+  const previewNavigationSections = navigationSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => PREVIEW_NAV_IDS.has(item.id)),
+    }))
+    .filter((section) => section.items.length > 0);
 
   function navigate(pageId) {
     onNavigate(pageId);
@@ -18,8 +26,8 @@ export function Sidebar({ activePage, onNavigate }) {
             <img src={logoSrc} alt="AI 营销工作室标志" />
           </div>
           <div className="brand-copy">
-            <strong>AI 营销操作系统</strong>
-            <span>运营指挥中心</span>
+            <strong>AI 营销工作室</strong>
+            <span>线上只读预览</span>
           </div>
         </div>
         <button className="sidebar-toggle" type="button" aria-expanded={mobileOpen} aria-label="展开或收起导航" onClick={() => setMobileOpen((current) => !current)}>
@@ -28,7 +36,7 @@ export function Sidebar({ activePage, onNavigate }) {
       </div>
 
       <nav className="nav-list" aria-label="主导航">
-        {navigationSections.map((section) => (
+        {previewNavigationSections.map((section) => (
           <div className="nav-section" key={section.label}>
             <span className="nav-section-title">{section.label}</span>
             {section.items.map((item) => (

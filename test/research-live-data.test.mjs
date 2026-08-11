@@ -29,6 +29,12 @@ const OWNED_PATHS = new Set([
   'src/pages/Dashboard.jsx',
   'src/pages/KnowledgeVaultPage.jsx',
   'src/styles.css',
+  // P17-C staging integrated preview 新增授权路径。
+  'src/services/staging-preview-service.js',
+  'src/components/Header.jsx',
+  'src/components/Sidebar.jsx',
+  'src/pages/CommandCenter.jsx',
+  'test/p17c-staging-preview.test.mjs',
 ]);
 
 // 链式 mock：记录所有调用，按表返回固定数据或错误。测试环境绝不发起网络请求。

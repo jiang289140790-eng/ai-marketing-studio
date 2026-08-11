@@ -35,6 +35,12 @@ const OWNED_PATHS = new Set([
   'src/pages/Dashboard.jsx',
   'src/pages/KnowledgeVaultPage.jsx',
   'src/styles.css',
+  // P17-C staging integrated preview 新增授权路径。
+  'src/services/staging-preview-service.js',
+  'src/components/Header.jsx',
+  'src/components/Sidebar.jsx',
+  'src/pages/CommandCenter.jsx',
+  'test/p17c-staging-preview.test.mjs',
 ]);
 
 const ALLOWED_CAPTURE_STATUSES = new Set(['collected_local_preview', 'not_collected']);

@@ -35,6 +35,7 @@ export function Header({ description, title }) {
 
       <div className="header-actions">
         {!isSupabaseConfigured && <span className="config-pill warning">等待数据服务配置</span>}
+        {isSupabaseConfigured && <span className="config-pill preview">线上只读预览</span>}
         {user ? (
           <>
             <span className="status-badge connected">已登录</span>

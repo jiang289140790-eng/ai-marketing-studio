@@ -1,524 +1,353 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../contexts/auth-context';
 import { EmptyState } from '../components/EmptyState';
 import { StatusBadge } from '../components/StatusBadge';
-import { buildUserActionQueue } from '../services/action-queue-service';
-import { getExecutionStatus } from '../services/execution-gateway';
-import { displayText, getLatest, loadCommandCenterData } from '../services/ops-service';
-import { isSupabaseConfigured } from '../services/supabase-client';
-import { getContentPackageDay, normalizeCampaignDailyPlan } from '../utils/campaign-daily-plan';
-import { formatDate } from '../utils/formatters';
+import {
+  getStagingRuntimeStatus,
+  fetchLineageAuditData,
+  fetchAllStagingData,
+  lineageStateDisplay,
+} from '../services/staging-preview-service';
 
-const EMPTY_DATA = {
-  accounts: [],
-  accountProfiles: [],
-  accountReports: [],
-  campaigns: [],
-  strategies: [],
-  contentPackages: [],
-  legacyContent: [],
-  assets: [],
-  legacyAssets: [],
-  characters: [],
-  publishTasks: [],
-  publishMetrics: [],
-  contentMetrics: [],
-  knowledge: [],
-  insights: [],
-  contentMemory: [],
-  strategyMemory: [],
-  agentRuns: [],
-  workflowRuns: [],
-  platformConnections: [],
-  __errors: [],
-};
+// ---- 工作流链步骤 -----------------------------------------------------------
+const WORKFLOW_STEPS = [
+  { step: 1, label: '研究', hint: '发现内容机会与竞品对标', target: 'research' },
+  { step: 2, label: '证据', hint: '公开样本来源与溯源', target: 'research' },
+  { step: 3, label: '知识卡', hint: '已验证的可复用知识条目', target: 'knowledge' },
+  { step: 4, label: '人工审核', hint: 'Brief 与内容审核', target: 'knowledge' },
+  { step: 5, label: '世系追溯', hint: '数据来源与完整性追踪', target: 'dashboard' },
+];
 
-const PRIORITY_LABELS = {
-  urgent: '紧急',
-  high: '高优先级',
-  medium: '普通',
-  low: '低优先级',
-};
+const LINEAGE_STATE_ORDER = ['COMPLETE', 'PARTIAL', 'BROKEN', 'INVALID_SOURCE'];
 
-export function CommandCenter({ userId, onNavigate, activeCampaignId, campaignContext }) {
-  const [data, setData] = useState(EMPTY_DATA);
-  const [loading, setLoading] = useState(false);
-  const [gatewayStatus, setGatewayStatus] = useState({ loading: true, connected: false });
+// ---- 主组件 -----------------------------------------------------------------
+export function CommandCenter({ userId, onNavigate }) {
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const runtime = useMemo(() => getStagingRuntimeStatus(), []);
+  const signedIn = Boolean(userId) && isAuthenticated;
+
+  const [stagingData, setStagingData] = useState(null);
+  const [lineageData, setLineageData] = useState(null);
+  const [fetching, setFetching] = useState(false);
 
   useEffect(() => {
-    if (!userId || !isSupabaseConfigured) return undefined;
+    if (!runtime.configured || !signedIn) {
+      setStagingData(null);
+      setLineageData(null);
+      return undefined;
+    }
     let cancelled = false;
-    setLoading(true);
+    setFetching(true);
     Promise.all([
-      loadCommandCenterData(),
-      getExecutionStatus({ force: true }).catch(() => ({ connected: false })),
-    ]).then(([nextData, nextGatewayStatus]) => {
-      if (cancelled) return;
-      setData({ ...EMPTY_DATA, ...nextData });
-      setGatewayStatus({ loading: false, ...nextGatewayStatus });
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
+      fetchAllStagingData({ userId }),
+      fetchLineageAuditData({ userId }),
+    ])
+      .then(([nextStaging, nextLineage]) => {
+        if (!cancelled) {
+          setStagingData(nextStaging);
+          setLineageData(nextLineage);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStagingData({ status: 'read_error', error: { message: '读取 staging 数据失败。' } });
+          setLineageData({ status: 'read_error', error: { message: '读取世系数据失败。' } });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setFetching(false);
+      });
+    return () => { cancelled = true; };
+  }, [runtime.configured, signedIn, userId]);
 
-  const actionQueue = useMemo(() => buildUserActionQueue(data), [data]);
-  const currentActions = useMemo(
-    () => actionQueue.filter((item) => !activeCampaignId || String(item.campaign_id || '') === String(activeCampaignId)),
-    [actionQueue, activeCampaignId],
-  );
-  const timeline = useMemo(
-    () => buildSevenDayTimeline(campaignContext, data),
-    [campaignContext, data],
-  );
-  const exceptions = useMemo(
-    () => buildBusinessExceptions(data, actionQueue, gatewayStatus),
-    [actionQueue, data, gatewayStatus],
-  );
-
-  if (!isSupabaseConfigured) {
+  // ---- 渲染：各状态分支 ------------------------------------------------------
+  if (!runtime.configured) {
     return (
       <section className="page-stack">
-        <EmptyState title="等待数据服务配置" description="配置完成后，AI 运营指挥中心会读取真实运营数据。" />
+        <EmptyState
+          title="等待数据服务配置"
+          description="配置 VITE_SUPABASE_URL 与 VITE_SUPABASE_ANON_KEY 后，本页会显示研究工作流、知识引擎与世系审计的只读状态。"
+        />
       </section>
     );
   }
 
-  if (!userId) {
+  if (authLoading) {
     return (
       <section className="page-stack">
+        <div className="notice">正在恢复登录状态...</div>
+      </section>
+    );
+  }
+
+  if (!signedIn) {
+    return (
+      <section className="page-stack command-center-v2 staging-preview">
         <div className="hero-panel command-hero command-hero-simple">
-          <p className="eyebrow">AI 运营指挥中心</p>
-          <h2>请先登录你的个人运营工作台</h2>
-          <p>登录后，这里只展示今天需要处理的事项、当前活动进度和真正影响业务的异常。</p>
+          <p className="eyebrow">AI 运营指挥中心 · 线上只读预览</p>
+          <h2>从研究证据到可审核 Brief</h2>
+          <p>先浏览完整工作流；登录后再读取属于你的 staging 知识数据与世系审计。所有数据均为只读，不执行任何生成、路由或发布动作。</p>
         </div>
-      </section>
-    );
-  }
-
-  if (!loading && data.campaigns.length === 0) {
-    return <FirstUseGuide onNavigate={onNavigate} />;
-  }
-
-  const primaryAction = currentActions[0] || null;
-  const nextPublish = findNextPublishItem(campaignContext, data);
-
-  return (
-    <section className="page-stack command-center-v2">
-      <CurrentCampaignPanel
-        context={campaignContext}
-        actions={currentActions}
-        onNavigate={onNavigate}
-      />
-
-      <CurrentDayPanel context={campaignContext} action={primaryAction} onNavigate={onNavigate} />
-
-      <section className="command-section action-queue-section" aria-label="待我处理">
-        <div className="section-head compact-head">
-          <div>
-            <p className="eyebrow">待我处理</p>
-            <h3>{currentActions.length ? `当前活动有 ${currentActions.length} 项待办` : '当前活动暂无人工待办'}</h3>
-          </div>
-          <span className="command-count">{currentActions.length} 项</span>
-        </div>
-        {currentActions.length ? (
-          <div className="action-queue-list">
-            {currentActions.slice(0, 5).map((item) => (
-              <ActionQueueRow key={`${item.action_type}-${item.entity_id}`} item={item} onNavigate={onNavigate} />
-            ))}
-          </div>
-        ) : (
-          <div className="command-clear-state">
-            <span>✓</span>
+        <section className="command-section workflow-chain-section" aria-label="研究工作流">
+          <div className="section-head compact-head">
             <div>
-              <strong>暂时没有需要人工处理的任务</strong>
-              <p>系统不会把正常连接状态或无意义的 0 填满首页。</p>
+              <p className="eyebrow">智能工作流</p>
+              <h3>五步完成内容研究与人工审核准备</h3>
             </div>
           </div>
-        )}
-      </section>
-
-      <NextPublishPanel item={nextPublish} timeline={timeline} onNavigate={onNavigate} />
-
-      <BusinessExceptions exceptions={exceptions.filter((item) => (
-        !activeCampaignId || !item.campaignId || String(item.campaignId) === String(activeCampaignId)
-      ))} onNavigate={onNavigate} />
-    </section>
-  );
-}
-
-function CurrentDayPanel({ context, action, onNavigate }) {
-  const dayOne = context?.contentPackages?.find((item) => getContentPackageDay(item) === 1);
-  const stage = context?.progress?.currentStage || '等待活动数据';
-  return (
-    <section className="command-section current-day-panel" aria-label="当前 Day 与当前步骤">
-      <div className="section-head compact-head">
-        <div><p className="eyebrow">当前 Day 与当前步骤</p><h3>Day 1 · {stage}</h3></div>
-        <StatusBadge status={dayOne?.review_status || dayOne?.status || 'draft'} />
-      </div>
-      <p>{action?.summary || '当前步骤没有人工阻塞，可继续查看 Day 1 状态。'}</p>
-      <button
-        className="primary-button"
-        type="button"
-        onClick={() => action ? navigateToAction(action, onNavigate) : onNavigate('workspace', dayOne?.id || '', {
-          campaign_id: context?.campaign?.id,
-          day: 1,
-        })}
-      >
-        {action?.recommended_action || '进入 Day 1 内容生产'}
-      </button>
-    </section>
-  );
-}
-
-function NextPublishPanel({ item, timeline, onNavigate }) {
-  const fallback = timeline.find((entry) => !['published', 'completed'].includes(String(entry.status || '').toLowerCase()));
-  return (
-    <section className="command-section next-publish-panel" aria-label="下一条发布计划">
-      <div className="section-head compact-head">
-        <div><p className="eyebrow">下一条发布计划</p><h3>{item?.title || fallback?.topic || '尚未形成待发布内容'}</h3></div>
-        <StatusBadge status={item?.status || fallback?.status || 'draft'} />
-      </div>
-      <dl className="campaign-summary-grid">
-        <div><dt>Day</dt><dd>{item?.day ? `Day ${item.day}` : fallback?.day ? `Day ${fallback.day}` : 'Day 1'}</dd></div>
-        <div><dt>平台</dt><dd>{item?.platform || fallback?.platform || '待确认'}</dd></div>
-        <div><dt>时间</dt><dd>{item?.scheduled_at ? formatDate(item.scheduled_at) : fallback?.date || '待排期'}</dd></div>
-        <div><dt>状态</dt><dd>{packageStatusLabel(item || fallback || {})}</dd></div>
-      </dl>
-      <button className="ghost-button" type="button" onClick={() => onNavigate(item ? 'publish' : 'campaigns', item?.id || '')}>
-        {item ? '进入发布中心' : '查看 7 天计划'}
-      </button>
-    </section>
-  );
-}
-
-function findNextPublishItem(context, data) {
-  const campaignId = context?.campaign?.id;
-  const tasks = (data.publishTasks || [])
-    .filter((task) => !campaignId || String(task.campaign_id || '') === String(campaignId))
-    .filter((task) => !['published', 'cancelled', 'canceled'].includes(String(task.status || '').toLowerCase()))
-    .sort((left, right) => String(left.scheduled_at || left.publish_time || '').localeCompare(String(right.scheduled_at || right.publish_time || '')));
-  if (!tasks[0]) return null;
-  const contentPackage = (data.contentPackages || []).find((item) => String(item.id) === String(tasks[0].content_package_id || ''));
-  return {
-    ...tasks[0],
-    title: contentPackage?.title || tasks[0].title || 'Day 1 待发布内容',
-    day: getContentPackageDay(contentPackage),
-  };
-}
-
-function ActionQueueRow({ item, onNavigate }) {
-  return (
-    <article className={`action-queue-row priority-${item.priority}`}>
-      <div className="action-priority">
-        <span>{PRIORITY_LABELS[item.priority] || '普通'}</span>
-        <small>{actionTypeLabel(item.action_type)}</small>
-      </div>
-      <div className="action-copy">
-        <strong>{item.title}</strong>
-        <p>{truncate(item.summary, 120)}</p>
-        <small>
-          {item.campaign_name} · {item.account_name}{item.day ? ` · Day ${item.day}` : ''}
-        </small>
-      </div>
-      <button className="ghost-button" type="button" onClick={() => navigateToAction(item, onNavigate)}>
-        {item.recommended_action}
-      </button>
-    </article>
-  );
-}
-
-function CurrentCampaignPanel({ context, actions, onNavigate }) {
-  if (!context?.campaign) {
-    return (
-      <section className="command-section current-campaign-panel">
-        <div className="section-head compact-head">
-          <div><p className="eyebrow">当前运营活动</p><h3>请选择一个运营活动</h3></div>
-        </div>
-        <p>选择活动后，这里会显示目标、主账号、Day 1 进度和当前阻塞。</p>
-        <button className="ghost-button" type="button" onClick={() => onNavigate('campaigns')}>选择运营活动</button>
+          <div className="workflow-chain">
+            {WORKFLOW_STEPS.map((item, index) => (
+              <span className="workflow-chain-step" key={item.label}>
+                <i>{item.step}</i>
+                <b>{item.label}</b>
+                <small>{item.hint}</small>
+                {index < WORKFLOW_STEPS.length - 1 && <em>→</em>}
+              </span>
+            ))}
+          </div>
+          <div className="workflow-chain-actions">
+            <button className="primary-button" type="button" onClick={() => onNavigate('research')}>
+              先看研究工作台
+            </button>
+            <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>
+              查看知识引擎结构
+            </button>
+          </div>
+        </section>
+        <div className="notice">当前未登录：请先登录后查看你的 staging 数据；未登录时不会发起任何只读查询。</div>
       </section>
     );
   }
 
-  const { campaign, primaryAccount, progress, blockingItems = [], dailyPlan = [], contentPackages = [] } = context;
-  const dayOne = contentPackages.find((item) => getContentPackageDay(item) === 1);
-  const nextAction = actions[0];
-  const planProgress = Math.min(contentPackages.length, dailyPlan.length || 7);
+  if (fetching && !stagingData) {
+    return (
+      <section className="page-stack">
+        <div className="notice">正在从 staging api 读取只读数据（SELECT）...</div>
+      </section>
+    );
+  }
+
+  const stagingStatus = stagingData?.status || 'loading';
+  const stagingCounts = stagingData?.counts || {};
+  const lineageStatus = lineageData?.status || 'loading';
+  const lineageEntries = lineageData?.entries || [];
+  const lineageStateCounts = lineageData?.stateCounts || {};
 
   return (
-    <section className="command-section current-campaign-panel">
-      <div className="section-head compact-head">
-        <div>
-          <p className="eyebrow">当前运营活动</p>
-          <h3>{campaign.name || campaign.title || '未命名运营活动'}</h3>
+    <section className="page-stack command-center-v2 staging-preview">
+      {/* ---- 工作流链 ---- */}
+      <section className="command-section workflow-chain-section" aria-label="研究工作流">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">研究工作流</p>
+            <h3>从研究到世系追溯的完整链路</h3>
+          </div>
         </div>
-        <StatusBadge status={campaign.status || 'active'} />
-      </div>
-      <p className="campaign-goal">{campaign.goal || campaign.objective || campaign.description || '尚未填写活动目标'}</p>
-      <dl className="campaign-summary-grid">
-        <div><dt>主账号</dt><dd>{accountLabel(primaryAccount)}</dd></div>
-        <div><dt>当前阶段</dt><dd>{progress?.currentStage || '等待流程数据'}</dd></div>
-        <div><dt>7 天计划</dt><dd>{planProgress} / {dailyPlan.length || 7}</dd></div>
-        <div><dt>Day 1 状态</dt><dd>{dayOne ? packageStatusLabel(dayOne) : '尚未创建'}</dd></div>
-      </dl>
-      <div className="campaign-progress-track" aria-label="运营活动进度">
-        <span style={{ width: `${progress?.percent || 0}%` }} />
-      </div>
-      <div className="campaign-blocker">
-        <span>当前阻塞</span>
-        <strong>{nextAction?.title || blockingItems[0]?.label || '暂无阻塞'}</strong>
-      </div>
-      <div className="button-row">
-        <button className="ghost-button" type="button" onClick={() => onNavigate('campaigns', campaign.id, { campaign_id: campaign.id })}>
-          查看活动
-        </button>
-        {nextAction && (
-          <button className="primary-button" type="button" onClick={() => navigateToAction(nextAction, onNavigate)}>
-            下一步：{nextAction.recommended_action}
+        <div className="workflow-chain">
+          {WORKFLOW_STEPS.map((item, index) => (
+            <span className="workflow-chain-step" key={item.label}>
+              <i>{item.step}</i>
+              <b>{item.label}</b>
+              <small>{item.hint}</small>
+              {index < WORKFLOW_STEPS.length - 1 && <em>→</em>}
+            </span>
+          ))}
+        </div>
+        <div className="workflow-chain-actions">
+          <button className="primary-button" type="button" onClick={() => onNavigate('research')}>
+            进入研究工作台
           </button>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function _SevenDaySchedule({ timeline, onNavigate }) {
-  return (
-    <section className="command-section seven-day-schedule">
-      <div className="section-head compact-head">
-        <div><p className="eyebrow">未来 7 天发布计划</p><h3>内容与发布时间</h3></div>
-        <button className="ghost-button" type="button" onClick={() => onNavigate('campaigns')}>查看完整计划</button>
-      </div>
-      {timeline.length ? (
-        <div className="schedule-list">
-          {timeline.map((item) => (
-            <article key={item.day}>
-              <div className="schedule-day"><strong>Day {item.day}</strong><span>{item.date || '待排期'}</span></div>
-              <div><strong>{item.topic || '待确定主题'}</strong><small>{item.platform || '待选平台'} · {item.format || '待选形式'}</small></div>
-              <StatusBadge status={item.status} />
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-card-inline">策略批准并生成 7 天计划后，会在这里显示简洁日程。</div>
-      )}
-    </section>
-  );
-}
-
-function BusinessExceptions({ exceptions, onNavigate }) {
-  return (
-    <section className="command-section exception-panel">
-      <div className="section-head compact-head">
-        <div><p className="eyebrow">异常</p><h3>仅显示影响业务的问题</h3></div>
-        <button className="ghost-button" type="button" onClick={() => onNavigate('health')}>系统状态</button>
-      </div>
-      {exceptions.length ? (
-        <div className="exception-list">
-          {exceptions.slice(0, 5).map((item) => (
-            <article key={item.id}>
-              <span>!</span>
-              <div><strong>{item.title}</strong><p>{truncate(item.summary, 120)}</p></div>
-              <button className="ghost-button" type="button" onClick={() => onNavigate(item.page, item.entityId || '')}>处理</button>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="command-clear-state compact">
-          <span>✓</span>
-          <div><strong>没有影响当前业务的异常</strong><p>连接正常等技术状态已移至“系统状态”页面。</p></div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function _AiRecommendations({ items, onNavigate }) {
-  return (
-    <section className="command-section recommendation-panel-v2">
-      <div className="section-head compact-head">
-        <div><p className="eyebrow">AI 建议</p><h3>有依据、可执行</h3></div>
-        <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>知识库</button>
-      </div>
-      {items.length ? (
-        <div className="recommendation-list-v2">
-          {items.slice(0, 3).map((item) => (
-            <article key={item.id}>
-              <span>{item.index}</span>
-              <div><strong>{item.title}</strong><p>{truncate(item.text, 130)}</p><small>依据：{item.evidence}</small></div>
-              <button className="ghost-button" type="button" onClick={() => onNavigate(item.page)}>查看</button>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-card-inline">完成账号分析、发布回收或策略复盘后，这里最多显示 3 条有数据依据的建议。</div>
-      )}
-    </section>
-  );
-}
-
-function FirstUseGuide({ onNavigate }) {
-  const steps = [
-    ['1', '添加运营账号', '先确定要经营的主账号。', 'accounts'],
-    ['2', '添加对标账号', '从账号矩阵标记竞品或灵感账号。', 'accounts'],
-    ['3', '创建运营活动', '填写目标、平台和主账号。', 'campaigns'],
-    ['4', '生成并批准策略', '确认定位、内容支柱和风险边界。', 'campaigns'],
-    ['5', '生成 7 天计划', '先批准计划，再进入具体生产。', 'campaigns'],
-    ['6', '开始 Day 1', '在内容工作台完成文案、素材和审核。', 'workspace'],
-  ];
-  return (
-    <section className="page-stack command-center-v2">
-      <header className="command-focus-header onboarding">
-        <div>
-          <p className="eyebrow">首次使用</p>
-          <h2>从第一个运营活动开始</h2>
-          <p>按下面顺序建立最小闭环，首页不会用大量无意义的 0 干扰你。</p>
-        </div>
-        <button className="primary-button" type="button" onClick={() => onNavigate('accounts')}>添加运营账号</button>
-      </header>
-      <section className="command-section">
-        <div className="onboarding-step-list">
-          {steps.map(([number, title, description, page]) => (
-            <button type="button" key={number} onClick={() => onNavigate(page)}>
-              <span>{number}</span>
-              <div><strong>{title}</strong><p>{description}</p></div>
-              <em>进入 →</em>
-            </button>
-          ))}
+          <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>
+            浏览知识引擎
+          </button>
         </div>
       </section>
+
+      {/* ---- 知识引擎摘要 ---- */}
+      <section className="command-section knowledge-summary-section" aria-label="知识引擎摘要">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">知识引擎（只读）</p>
+            <h3>来自 staging api 的当前数据量</h3>
+          </div>
+          <StatusBadge
+            status={
+              stagingStatus === 'live'
+                ? 'connected'
+                : stagingStatus === 'partial'
+                  ? 'limited'
+                  : stagingStatus === 'access_denied'
+                    ? 'error'
+                    : stagingStatus === 'read_error'
+                      ? 'error'
+                      : stagingStatus === 'empty'
+                        ? 'draft'
+                        : 'not_connected'
+            }
+          />
+        </div>
+        {stagingStatus === 'read_error' ? (
+          <div className="command-clear-state">
+            <span>!</span>
+            <div>
+              <strong>知识引擎视图读取失败</strong>
+              <p>{stagingData?.error?.message || '无法读取 staging api 视图。请检查后端配置与访问权限。'}</p>
+            </div>
+          </div>
+        ) : stagingStatus === 'access_denied' ? (
+          <div className="command-clear-state">
+            <span>!</span>
+            <div>
+              <strong>知识引擎视图访问被拒绝</strong>
+              <p>当前凭据无权访问 staging api schema。请联系管理员确认 anon key 的 SELECT 权限。</p>
+            </div>
+          </div>
+        ) : stagingStatus === 'empty' ? (
+          <div className="command-clear-state">
+            <span>—</span>
+            <div>
+              <strong>知识引擎视图当前为空</strong>
+              <p>staging api 视图已配置并可访问，但尚未包含任何记录。在知识引擎流程产出入库后会自动出现。</p>
+            </div>
+          </div>
+        ) : (
+          <dl className="campaign-summary-grid">
+            <div><dt>知识卡</dt><dd>{stagingCounts.knowledgeCards || 0} 张</dd></div>
+            <div><dt>内容 Brief</dt><dd>{stagingCounts.contentBriefs || 0} 条</dd></div>
+            <div><dt>交接清单</dt><dd>{stagingCounts.handoffManifest || 0} 项</dd></div>
+            <div><dt>交接包详情</dt><dd>{stagingCounts.handoffPackageDetail || 0} 条</dd></div>
+          </dl>
+        )}
+        {(stagingStatus === 'live' || stagingStatus === 'partial') && (
+          <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>
+            查看知识引擎全部数据
+          </button>
+        )}
+      </section>
+
+      {/* ---- 世系审计 ---- */}
+      <section className="command-section lineage-section" aria-label="世系审计">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">世系审计（只读）</p>
+            <h3>数据来源完整性与链路追踪</h3>
+          </div>
+          <StatusBadge
+            status={
+              lineageStatus === 'live'
+                ? 'connected'
+                : lineageStatus === 'read_error'
+                  ? 'error'
+                  : lineageStatus === 'access_denied'
+                    ? 'error'
+                    : lineageStatus === 'empty'
+                      ? 'draft'
+                      : 'not_connected'
+            }
+          />
+        </div>
+        {lineageStatus === 'read_error' ? (
+          <div className="command-clear-state">
+            <span>!</span>
+            <div>
+              <strong>世系视图读取失败</strong>
+              <p>{lineageData?.error?.message || '无法读取 vg_lineage_audit_v1 视图。'}</p>
+            </div>
+          </div>
+        ) : lineageStatus === 'access_denied' ? (
+          <div className="command-clear-state">
+            <span>!</span>
+            <div>
+              <strong>世系视图访问被拒绝</strong>
+              <p>当前凭据无权访问 api.vg_lineage_audit_v1。</p>
+            </div>
+          </div>
+        ) : lineageStatus === 'empty' ? (
+          <div className="command-clear-state">
+            <span>—</span>
+            <div>
+              <strong>世系审计记录为空</strong>
+              <p>已配置并可访问，但尚无世系记录。在交接包导入与审核流程运行后会自动填充。</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="lineage-state-grid">
+              {LINEAGE_STATE_ORDER.map((state) => {
+                const display = lineageStateDisplay(state);
+                const count = lineageStateCounts[state] || 0;
+                return (
+                  <div className={`lineage-state-card lineage-state-${display.tone}`} key={state}>
+                    <strong>{display.label}</strong>
+                    <span className="lineage-state-count">{count}</span>
+                    <small>{state}</small>
+                  </div>
+                );
+              })}
+            </div>
+            {lineageEntries.length > 0 && (
+              <div className="lineage-entry-list">
+                {lineageEntries.slice(0, 5).map((entry, index) => {
+                  const state = String(entry.lineage_state || entry.state || '').toUpperCase();
+                  const display = lineageStateDisplay(state);
+                  return (
+                    <article className="lineage-entry-row" key={entry.id || index}>
+                      <span className={`lineage-entry-badge tone-${display.tone}`}>{display.label}</span>
+                      <div>
+                        <strong>{entry.source_label || entry.task_id || `记录 ${index + 1}`}</strong>
+                        <p>{entry.summary || entry.note || '暂无摘要'}</p>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+            {lineageEntries.length > 5 && (
+              <p className="notice">还有 {lineageEntries.length - 5} 条世系记录，请前往数据页面查看完整列表。</p>
+            )}
+          </>
+        )}
+      </section>
+
+      {/* ---- 安全边界 ---- */}
+      <section className="command-section preview-boundary-section" aria-label="预览安全边界">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">安全边界</p>
+            <h3>本页仅执行只读 SELECT</h3>
+          </div>
+        </div>
+        <div className="preview-boundary-detail">
+          <div className="boundary-row">
+            <span>数据源</span>
+            <strong>api schema · 公开 anon key</strong>
+          </div>
+          <div className="boundary-row">
+            <span>已读取视图</span>
+            <strong>{runtime.views.length} 个 staging 视图</strong>
+          </div>
+          <div className="boundary-row">
+            <span>写操作</span>
+            <strong>无（不执行 insert / update / delete / upsert / rpc）</strong>
+          </div>
+          <div className="boundary-row">
+            <span>生成 / 路由 / 发布</span>
+            <strong>未执行</strong>
+          </div>
+          <div className="boundary-row">
+            <span>服务角色密钥</span>
+            <strong>未使用</strong>
+          </div>
+        </div>
+      </section>
+
+      {/* ---- 底栏 ---- */}
+      <footer className="preview-footer">
+        <p>P17-C 线上 staging 集成预览 · 仅 SELECT 只读</p>
+        <p className="preview-footer-fine">
+          四条执行标志均为 false · 不采集、不生成、不路由、不发布
+        </p>
+      </footer>
     </section>
   );
-}
-
-function buildSevenDayTimeline(context, data) {
-  if (!context?.currentStrategy) return [];
-  const plan = normalizeCampaignDailyPlan(context.currentStrategy.daily_plan).slice(0, 7);
-  return plan.map((item) => {
-    const contentPackage = context.contentPackages?.find((row) => getContentPackageDay(row) === item.day);
-    const publishTask = data.publishTasks.find((task) => String(task.content_package_id || '') === String(contentPackage?.id || ''));
-    return {
-      day: item.day,
-      date: formatDate(item.planned_date || publishTask?.scheduled_at),
-      topic: item.topic || item.content_pillar,
-      platform: item.platform,
-      format: item.format,
-      status: publishTask?.status || contentPackage?.status || (item.day === 1 ? 'pending' : 'draft'),
-    };
-  });
-}
-
-function buildBusinessExceptions(data, queue, gatewayStatus) {
-  const items = [];
-  for (const error of data.__errors || []) {
-    items.push({
-      id: `read-${error.key}`,
-      title: '关键数据读取失败',
-      summary: error.message,
-      page: 'health',
-    });
-  }
-  for (const action of queue.filter((item) => ['resolve_publish_failure', 'resolve_metrics_failure'].includes(item.action_type))) {
-    items.push({
-      id: `${action.action_type}-${action.entity_id}`,
-      title: action.title,
-      summary: action.summary,
-      page: action.target_page,
-      entityId: action.entity_id,
-    });
-  }
-  const requiresExecution = queue.some((item) => ['generate_day1_content', 'generate_asset', 'resolve_metrics_failure'].includes(item.action_type));
-  if (!gatewayStatus.loading && !gatewayStatus.connected && requiresExecution) {
-    items.push({
-      id: 'execution-gateway',
-      title: '执行服务阻塞当前任务',
-      summary: gatewayStatus.reason || '当前待办需要调用执行服务，但执行网关尚未连接。',
-      page: 'health',
-    });
-  }
-  return [...new Map(items.map((item) => [item.id, item])).values()];
-}
-
-function _buildRecommendations(data) {
-  const candidates = [];
-  const report = getLatest([...data.accountReports, ...data.accountProfiles], 1)[0];
-  const strategyMemory = getLatest(data.strategyMemory, 1)[0];
-  const contentMemory = [...data.contentMemory]
-    .sort((left, right) => Number(right.success_rate || right.score || 0) - Number(left.success_rate || left.score || 0))[0];
-
-  if (report) {
-    candidates.push({
-      id: `account-${report.id || 'latest'}`,
-      title: '应用最新账号洞察',
-      text: firstDisplayText(report, ['key_findings', 'summary', 'analysis', 'report', 'description']),
-      evidence: `最新账号分析 · ${formatDate(report.updated_at || report.created_at)}`,
-      page: 'intelligence',
-    });
-  }
-  if (strategyMemory) {
-    candidates.push({
-      id: `strategy-${strategyMemory.id || 'latest'}`,
-      title: '把复盘结论用于下一步',
-      text: firstDisplayText(strategyMemory, ['lessons_learned', 'learning', 'recommendation', 'summary', 'description']),
-      evidence: `策略记忆 · ${formatDate(strategyMemory.updated_at || strategyMemory.created_at)}`,
-      page: 'analytics',
-    });
-  }
-  if (contentMemory) {
-    candidates.push({
-      id: `content-${contentMemory.id || 'best'}`,
-      title: '复用已验证的内容模式',
-      text: firstDisplayText(contentMemory, ['pattern', 'winning_pattern', 'recommendation', 'summary', 'description']),
-      evidence: `内容记忆 · 成功率 ${Number(contentMemory.success_rate || contentMemory.score || 0)}%`,
-      page: 'knowledge',
-    });
-  }
-  return candidates.filter((item) => item.text).slice(0, 3).map((item, index) => ({ ...item, index: index + 1 }));
-}
-
-function navigateToAction(item, onNavigate) {
-  onNavigate(item.target_page, item.target_id, item.target_params);
-}
-
-function actionTypeLabel(type) {
-  return {
-    approve_strategy: '策略审批',
-    approve_7_day_plan: '计划审批',
-    generate_day1_content: '内容生成',
-    review_copy: '文案审核',
-    generate_asset: '素材生成',
-    confirm_asset: '素材确认',
-    approve_publish: '发布审批',
-    resolve_publish_failure: '发布异常',
-    resolve_metrics_failure: '数据异常',
-  }[type] || '运营任务';
-}
-
-function accountLabel(account) {
-  if (!account) return '未关联账号';
-  const name = account.display_name || account.username || account.handle || account.account_name || '未命名账号';
-  return `${account.platform || '平台待定'} · ${name}`;
-}
-
-function packageStatusLabel(item) {
-  const workbench = item.source_insights?.content_workbench || {};
-  if (item.status === 'published') return '已发布';
-  if (item.status === 'scheduled') return '已排期';
-  if (workbench.copy_approved) return '文案已批准';
-  if (workbench.selected_version_id) return '文案待审核';
-  return '待生成';
-}
-
-function firstDisplayText(row, fields) {
-  for (const field of fields) {
-    if (row?.[field] != null && row[field] !== '') return displayText(row[field], '');
-  }
-  return '';
-}
-
-function truncate(value, length) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return text.length > length ? `${text.slice(0, length)}…` : text;
 }

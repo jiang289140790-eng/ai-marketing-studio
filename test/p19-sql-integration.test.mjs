@@ -52,7 +52,7 @@ const CONCURRENT_USER = '44444444-4444-4444-8444-444444444444';
 const CONCURRENT_PROJECT = 'prj-eeeeeeeeeeeeeeeeeeeeeeee';
 const CONCURRENT_KEY = 'conc-key-1';
 
-test('SQL 集成：全新数据库回放 41 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', { skip: containerUp() ? false : 'Docker 容器不可用，跳过真实 SQL 集成测试' }, async () => {
+test('SQL 集成：全新数据库回放 42 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', { skip: containerUp() ? false : 'Docker 容器不可用，跳过真实 SQL 集成测试' }, async () => {
   const dbName = `p19_verify_${process.pid}`;
   try {
     execFileSync('docker', ['exec', CONTAINER, 'createdb', '-U', 'postgres', dbName], { encoding: 'utf8' });
@@ -73,7 +73,7 @@ test('SQL 集成：全新数据库回放 41 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 41, '迁移集必须是规范 39 + P19 + P20 共 41 个');
+    assert.equal(migrations.length, 42, '迁移集必须是规范 39 + P19 + P20 + P20 ACL repair 共 42 个');
     for (const name of migrations) {
       const sql = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', name), 'utf8');
       const run = psql(dbName, null, { stdin: sql });

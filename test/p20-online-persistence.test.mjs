@@ -247,10 +247,14 @@ test('explicit project import preserves exact identity, verifies fingerprint and
 
 test('P20 migration is service-only and page switches between online and local truth', () => {
   const sql = readFileSync(join(root, 'supabase', 'migrations', '20260812001000_p20_online_workspace_read_contract.sql'), 'utf8');
+  const aclSql = readFileSync(join(root, 'supabase', 'migrations', '20260812002000_p20_api_service_role_schema_usage.sql'), 'utf8');
   assert.match(sql, /security definer/i);
   assert.match(sql, /where user_id = p_user_id/i);
   assert.match(sql, /revoke all on function api\.p20_list_projects\(uuid\) from public, anon, authenticated/i);
   assert.match(sql, /grant execute on function api\.p20_list_projects\(uuid\) to service_role/i);
+  assert.match(aclSql, /revoke all on schema api from public, anon, authenticated/i);
+  assert.match(aclSql, /grant usage on schema api to service_role/i);
+  assert.match(aclSql, /revoke create on schema api from service_role/i);
 
   const page = readFileSync(join(root, 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
   assert.match(page, /onlineMode = isAuthenticated && isServerWriteEnabled\(\)/);

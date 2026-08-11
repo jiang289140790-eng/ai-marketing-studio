@@ -31,10 +31,14 @@ reset role;
 
 set local role authenticated;
 select set_config('request.jwt.claims','{"sub":"33333333-3333-4333-8333-333333333333","role":"authenticated","user_metadata":{"staging_role":"admin"}}',true);
-select pg_temp.assert_true((select count(*)=0 from api.ke_knowledge_cards_v1), 'user_metadata must not grant staging access');
+do $$ begin
+  perform * from api.ke_knowledge_cards_v1;
+  raise exception 'P17_B0_ASSERT: authenticated unexpectedly entered server-only api schema';
+exception when insufficient_privilege then null; end $$;
+select pg_temp.assert_true((select count(*)=0 from ams_private.ke_knowledge_cards_v1), 'user_metadata must not grant staging access');
 
 select set_config('request.jwt.claims','{"sub":"11111111-1111-4111-8111-111111111111","role":"authenticated"}',true);
-select pg_temp.assert_true((select array_agg(knowledge_id order by knowledge_id)=array['knowledge-a'] from api.ke_knowledge_cards_v1), 'viewer A must see only A');
+select pg_temp.assert_true((select array_agg(knowledge_id order by knowledge_id)=array['knowledge-a'] from ams_private.ke_knowledge_cards_v1), 'viewer A must see only A through private RLS');
 do $$ begin
   insert into ams_private.ke_knowledge_cards_v1(user_id,knowledge_id,knowledge_version,schema_version,source_identity,evidence_refs,trust_status,validation_status,payload,payload_sha256)
   values ('11111111-1111-4111-8111-111111111111','write-denied',1,'x','{}','["e"]','x','x','{}',repeat('0',64));
@@ -42,7 +46,7 @@ do $$ begin
 exception when insufficient_privilege then null; end $$;
 
 select set_config('request.jwt.claims','{"sub":"22222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
-select pg_temp.assert_true((select array_agg(knowledge_id order by knowledge_id)=array['knowledge-b'] from api.ke_knowledge_cards_v1), 'viewer B must see only B');
+select pg_temp.assert_true((select array_agg(knowledge_id order by knowledge_id)=array['knowledge-b'] from ams_private.ke_knowledge_cards_v1), 'viewer B must see only B through private RLS');
 reset role;
 
 rollback;

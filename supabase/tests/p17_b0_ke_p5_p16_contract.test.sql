@@ -109,10 +109,17 @@ end $$;
 
 set local role authenticated;
 select set_config('request.jwt.claims','{"sub":"44444444-4444-4444-8444-444444444444","role":"authenticated"}',true);
+do $$ begin
+  perform * from api.vg_lineage_audit_v1;
+  raise exception 'P17_B0_ASSERT: authenticated unexpectedly entered server-only api schema';
+exception when insufficient_privilege then null; end $$;
+reset role;
+
+-- The view's deterministic audit semantics remain testable by the migration
+-- owner even though browser roles can no longer enter the server-only schema.
 select pg_temp.assert_true((select audit_state='COMPLETE' from api.vg_lineage_audit_v1 where package_id='handoff-pkg-111111111111111111111111'), 'complete chain must be COMPLETE');
 select pg_temp.assert_true((select audit_state='PARTIAL' from api.vg_lineage_audit_v1 where package_id='handoff-pkg-222222222222222222222222'), 'missing chain must be PARTIAL');
 select pg_temp.assert_true((select audit_state='BROKEN' from api.vg_lineage_audit_v1 where package_id='handoff-pkg-333333333333333333333333'), 'misbound/missing edges must be BROKEN');
 select pg_temp.assert_true((select audit_state='INVALID_SOURCE' and severity=3 from api.vg_lineage_audit_v1 where package_id='handoff-pkg-444444444444444444444444'), 'invalid source must have highest priority');
-reset role;
 
 rollback;

@@ -46,6 +46,13 @@ declare
   ho jsonb;
   target text;
 begin
+  -- The Edge Function's service client may enter the RPC schema but cannot
+  -- create objects there. Browser roles remain outside the schema entirely.
+  perform pg_temp.assert_true(not has_schema_privilege('anon', 'api', 'USAGE'), 'anon can use api schema');
+  perform pg_temp.assert_true(not has_schema_privilege('authenticated', 'api', 'USAGE'), 'authenticated can use api schema');
+  perform pg_temp.assert_true(has_schema_privilege('service_role', 'api', 'USAGE'), 'service_role cannot use api schema');
+  perform pg_temp.assert_true(not has_schema_privilege('service_role', 'api', 'CREATE'), 'service_role can create in api schema');
+
   -- 1. Client roles have zero EXECUTE on every boundary function; service_role has EXECUTE.
   foreach fn in array array[
     'api.p19_staging_role(uuid)',

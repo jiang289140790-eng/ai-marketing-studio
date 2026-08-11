@@ -37,7 +37,7 @@ select pg_temp.assert_true(
 select pg_temp.assert_true(not has_schema_privilege('anon','ams_private','USAGE'), 'anon must not use private schema');
 select pg_temp.assert_true(not has_schema_privilege('anon','api','USAGE'), 'anon must not use api schema');
 select pg_temp.assert_true(has_schema_privilege('authenticated','ams_private','USAGE'), 'authenticated needs private usage for invoker views');
-select pg_temp.assert_true(has_schema_privilege('authenticated','api','USAGE'), 'authenticated needs api usage');
+select pg_temp.assert_true(not has_schema_privilege('authenticated','api','USAGE'), 'authenticated must not use the server-only api schema after P20');
 select pg_temp.assert_true(
   not exists (
     select 1 from information_schema.role_table_grants

@@ -5,6 +5,16 @@ values ('44444444-4444-4444-8444-444444444444','authenticated','authenticated','
 
 do $$
 begin
+  if has_schema_privilege('anon', 'api', 'USAGE')
+    or has_schema_privilege('authenticated', 'api', 'USAGE') then
+    raise exception 'browser roles must not use the server-only api schema';
+  end if;
+  if not has_schema_privilege('service_role', 'api', 'USAGE') then
+    raise exception 'service_role must use the api schema';
+  end if;
+  if has_schema_privilege('service_role', 'api', 'CREATE') then
+    raise exception 'service_role must not create in the api schema';
+  end if;
   if has_function_privilege('anon', 'api.p20_list_projects(uuid)', 'EXECUTE') then
     raise exception 'anon must not execute api.p20_list_projects';
   end if;

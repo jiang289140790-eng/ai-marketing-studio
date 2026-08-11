@@ -46,10 +46,33 @@ import { getStagingRuntimeStatus } from '../services/staging-preview-service.js'
 import { useAuth } from '../contexts/auth-context.js';
 import { createP20OnlineStore } from '../services/p20-online-store.js';
 import { isServerWriteEnabled } from '../services/p19-server-write-adapter.js';
+import {
+  deriveP21GuidedState,
+  normalizeP21ViewMode,
+  panelIdForP21Step,
+  P21_VIEW_MODE_KEY,
+  P21_VIEW_MODES,
+} from '../services/p21-guided-workspace.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
 const IMPORT_MAX_TEXT = 2 * 1024 * 1024;
+
+function readP21ViewMode() {
+  try {
+    return normalizeP21ViewMode(globalThis.localStorage?.getItem(P21_VIEW_MODE_KEY));
+  } catch {
+    return P21_VIEW_MODES.GUIDED;
+  }
+}
+
+function writeP21ViewMode(mode) {
+  try {
+    globalThis.localStorage?.setItem(P21_VIEW_MODE_KEY, normalizeP21ViewMode(mode));
+  } catch {
+    // Presentation preference failure must never affect project persistence.
+  }
+}
 
 function readActiveProjectId() {
   try {
@@ -165,6 +188,8 @@ export function ResearchWorkspacePage() {
   const [notice, setNotice] = useState(null);
   const [creating, setCreating] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
+  const [viewMode, setViewMode] = useState(readP21ViewMode);
+  const [selectedStep, setSelectedStep] = useState(null);
   const importInputRef = useRef(null);
 
   const stagingStatus = useMemo(() => getStagingRuntimeStatus(), []);
@@ -283,6 +308,7 @@ export function ResearchWorkspacePage() {
 
   useEffect(() => {
     setPendingImport(null);
+    setSelectedStep(null);
   }, [activeId]);
 
   const selectProject = useCallback(async (id) => {
@@ -581,6 +607,25 @@ export function ResearchWorkspacePage() {
   }, [lineage, project]);
 
   const archiveDisabled = !project || project.status === 'archived';
+  const guidedState = useMemo(
+    () => deriveP21GuidedState({ workflow, project, requestedStep: selectedStep }),
+    [workflow, project, selectedStep],
+  );
+
+  const changeViewMode = useCallback((mode) => {
+    const normalized = normalizeP21ViewMode(mode);
+    setViewMode(normalized);
+    writeP21ViewMode(normalized);
+  }, []);
+
+  const handleNavigateStep = useCallback((stepId) => {
+    setSelectedStep(stepId);
+    if (viewMode !== P21_VIEW_MODES.FULL) return;
+    const panelId = panelIdForP21Step(stepId);
+    globalThis.requestAnimationFrame?.(() => {
+      globalThis.document?.getElementById(`p21-step-${panelId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [viewMode]);
 
   return (
     <section className="p19-workspace" aria-label="运营研究工作台">
@@ -608,6 +653,44 @@ export function ResearchWorkspacePage() {
       <div className="p19-strip">
         <P19FlagStrip />
       </div>
+
+      <section className="p21-guide" aria-label="智能引导">
+        <div className="p21-guide-copy">
+          <p className="p19-eyebrow">智能引导 · 确定性下一步</p>
+          <h3>{guidedState.complete ? '研究链已完成' : `当前建议：${guidedState.label}`}</h3>
+          <p>{guidedState.guidance}</p>
+          {guidedState.recommended_step_id !== guidedState.active_step_id && (
+            <small>建议步骤：{guidedState.recommended_step_id}；当前正在查看：{guidedState.active_step_id}</small>
+          )}
+        </div>
+        <div className="p21-view-switch" role="group" aria-label="工作台显示模式">
+          <button
+            className={`p19-btn ${viewMode === P21_VIEW_MODES.GUIDED ? 'p19-btn-primary' : 'p19-btn-ghost'}`}
+            type="button"
+            aria-pressed={viewMode === P21_VIEW_MODES.GUIDED}
+            onClick={() => changeViewMode(P21_VIEW_MODES.GUIDED)}
+          >
+            引导视图
+          </button>
+          <button
+            className={`p19-btn ${viewMode === P21_VIEW_MODES.FULL ? 'p19-btn-primary' : 'p19-btn-ghost'}`}
+            type="button"
+            aria-pressed={viewMode === P21_VIEW_MODES.FULL}
+            onClick={() => changeViewMode(P21_VIEW_MODES.FULL)}
+          >
+            完整视图
+          </button>
+          {project && (
+            <button
+              className="p19-btn p19-btn-ghost"
+              type="button"
+              onClick={() => handleNavigateStep(guidedState.recommended_step_id)}
+            >
+              回到建议步骤
+            </button>
+          )}
+        </div>
+      </section>
 
       {error && (
         <div className="p19-error-banner" role="alert">
@@ -734,22 +817,36 @@ export function ResearchWorkspacePage() {
         // Brief 理由与评论等全部项目级本地表单状态随之重置，绝不留存上一个
         // 项目的表单值（A 项目的值绝不会覆盖 B 项目）。
         <div className="p19-project-scope" key={`${project.id}:${project.version}`}>
-          <P19ChainProgress workflow={workflow} />
-          <div className="p19-grid">
-            <P19ProjectForm project={project} onSave={handleSaveProfile} busy={busy} />
-            <P19EvidenceList
-              project={project}
-              onAdd={handleAddEvidence}
-              onUpdate={handleUpdateEvidence}
-              onRemove={handleRemoveEvidence}
-              onAnalyze={handleRunAnalysis}
-              busy={busy}
-            />
-            <P19AnalysisList project={project} onMakeCard={handleMakeCard} busy={busy} />
-            <P19CardList project={project} workflow={workflow} />
-            <P19BriefSection project={project} workflow={workflow} onAssemble={handleAssembleBrief} onDecide={handleDecide} busy={busy} />
-            <P19HandoffSection project={project} workflow={workflow} onDerive={handleDeriveHandoff} onDownload={handleExport} busy={busy} />
-            <P19LineageSection row={activeRow} graph={graph} projects={projects} />
+          <P19ChainProgress workflow={workflow} onNavigateStep={handleNavigateStep} />
+          <div className={`p19-grid ${viewMode === P21_VIEW_MODES.GUIDED ? 'p21-guided-grid' : ''}`}>
+            <section className="p21-step-panel" id="p21-step-project" data-p21-step="project" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'project'}>
+              <P19ProjectForm project={project} onSave={handleSaveProfile} busy={busy} />
+            </section>
+            <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
+              <P19EvidenceList
+                project={project}
+                onAdd={handleAddEvidence}
+                onUpdate={handleUpdateEvidence}
+                onRemove={handleRemoveEvidence}
+                onAnalyze={handleRunAnalysis}
+                busy={busy}
+              />
+            </section>
+            <section className="p21-step-panel" id="p21-step-analysis" data-p21-step="analysis" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'analysis'}>
+              <P19AnalysisList project={project} onMakeCard={handleMakeCard} busy={busy} />
+            </section>
+            <section className="p21-step-panel" id="p21-step-card" data-p21-step="card" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'card'}>
+              <P19CardList project={project} workflow={workflow} />
+            </section>
+            <section className="p21-step-panel" id="p21-step-brief" data-p21-step="brief" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'brief'}>
+              <P19BriefSection project={project} workflow={workflow} onAssemble={handleAssembleBrief} onDecide={handleDecide} busy={busy} />
+            </section>
+            <section className="p21-step-panel" id="p21-step-handoff" data-p21-step="handoff" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'handoff'}>
+              <P19HandoffSection project={project} workflow={workflow} onDerive={handleDeriveHandoff} onDownload={handleExport} busy={busy} />
+            </section>
+            <section className="p21-step-panel" id="p21-step-lineage" data-p21-step="lineage" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'lineage'}>
+              <P19LineageSection row={activeRow} graph={graph} projects={projects} />
+            </section>
           </div>
         </div>
       )}

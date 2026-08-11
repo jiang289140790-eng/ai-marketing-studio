@@ -43,6 +43,9 @@ import {
   P19ProjectForm,
 } from '../components/integrated-workspace/P19WorkbenchPanels.jsx';
 import { getStagingRuntimeStatus } from '../services/staging-preview-service.js';
+import { useAuth } from '../contexts/auth-context.js';
+import { createP20OnlineStore } from '../services/p20-online-store.js';
+import { isServerWriteEnabled } from '../services/p19-server-write-adapter.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
@@ -65,9 +68,91 @@ function writeActiveProjectId(id) {
   }
 }
 
+function buildOnlineCommand(previous, next) {
+  if (!previous || !next) throw workbenchError('ONLINE_COMMAND_MISSING', '在线操作缺少项目快照。');
+  if (previous.status !== next.status && next.status === 'archived') {
+    return { command: 'project.archive', payload: { project_id: previous.id } };
+  }
+  const profileFields = ['topic', 'objective', 'audience', 'channel', 'constraints'];
+  const patch = {};
+  for (const field of profileFields) {
+    if (JSON.stringify(previous[field]) !== JSON.stringify(next[field])) patch[field] = next[field];
+  }
+  if (Object.keys(patch).length) return { command: 'project.update', payload: { project_id: previous.id, patch } };
+
+  const previousEvidence = new Map(previous.evidence.map((item) => [item.id, item]));
+  const nextEvidence = new Map(next.evidence.map((item) => [item.id, item]));
+  for (const item of next.evidence) {
+    if (!previousEvidence.has(item.id)) {
+      return { command: 'evidence.create', payload: { project_id: previous.id, evidence: item } };
+    }
+    const before = previousEvidence.get(item.id);
+    if (before.fingerprint !== item.fingerprint) {
+      const evidencePatch = {};
+      for (const field of ['source_url', 'label', 'platform', 'content_text', 'media_metadata']) {
+        if (JSON.stringify(before[field]) !== JSON.stringify(item[field])) evidencePatch[field] = item[field];
+      }
+      return { command: 'evidence.update', payload: { project_id: previous.id, evidence_id: item.id, expected_fingerprint: before.fingerprint, patch: evidencePatch } };
+    }
+  }
+  for (const item of previous.evidence) {
+    if (!nextEvidence.has(item.id)) {
+      return { command: 'evidence.remove', payload: { project_id: previous.id, evidence_id: item.id, expected_fingerprint: item.fingerprint } };
+    }
+  }
+
+  const newAnalysis = next.analyses.find((item) => !previous.analyses.some((before) => before.id === item.id && before.fingerprint === item.fingerprint));
+  if (newAnalysis) {
+    const before = previous.analyses.find((item) => item.id === newAnalysis.id);
+    return { command: 'analysis.create', payload: { project_id: previous.id, expected_fingerprint: before?.fingerprint || null, analysis: newAnalysis } };
+  }
+  const newCard = next.knowledge_cards.find((item) => !previous.knowledge_cards.some((before) => before.id === item.id && before.version === item.version && before.fingerprint === item.fingerprint));
+  if (newCard) {
+    const before = previous.knowledge_cards.find((item) => item.id === newCard.id && item.version === newCard.version);
+    return { command: 'card.create', payload: { project_id: previous.id, expected_fingerprint: before?.fingerprint || null, card: newCard } };
+  }
+  if (next.brief && next.brief.fingerprint !== previous.brief?.fingerprint) {
+    const decision = next.brief.review?.decision;
+    if (decision && decision.value !== 'pending' && decision.value !== previous.brief?.review?.decision?.value) {
+      return {
+        command: 'brief.decide',
+        payload: {
+          project_id: previous.id,
+          expected_fingerprint: previous.brief?.fingerprint,
+          decision: {
+            brief_id: previous.brief?.id,
+            brief_version: previous.brief?.version,
+            value: decision.value,
+            rationale: decision.rationale,
+            comments: next.brief.review?.comments || [],
+            source: 'local_manual',
+            decided_at: decision.decided_at,
+            decided_by: decision.decided_by,
+          },
+        },
+      };
+    }
+    const before = previous.brief && previous.brief.id === next.brief.id && previous.brief.version === next.brief.version
+      ? previous.brief
+      : null;
+    return { command: 'brief.assemble', payload: { project_id: previous.id, expected_fingerprint: before?.fingerprint || null, brief: next.brief } };
+  }
+  if (next.handoff && next.handoff.fingerprint !== previous.handoff?.fingerprint) {
+    const before = previous.handoff && previous.handoff.id === next.handoff.id && previous.handoff.version === next.handoff.version
+      ? previous.handoff
+      : null;
+    return { command: 'handoff.create', payload: { project_id: previous.id, expected_fingerprint: before?.fingerprint || null, handoff: next.handoff } };
+  }
+  throw workbenchError('ONLINE_COMMAND_MISSING', '无法将本次修改绑定到唯一在线命令，已拒绝保存。');
+}
+
 export function ResearchWorkspacePage() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const onlineMode = isAuthenticated && isServerWriteEnabled();
   const storeRef = useRef(null);
   if (storeRef.current == null) storeRef.current = createP19Store();
+  const onlineStoreRef = useRef(null);
+  if (onlineStoreRef.current == null) onlineStoreRef.current = createP20OnlineStore();
 
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(readActiveProjectId);
@@ -101,7 +186,18 @@ export function ResearchWorkspacePage() {
     };
   }, [projects, activeId]);
 
-  const reloadProjects = useCallback(() => {
+  const reloadProjects = useCallback(async () => {
+    if (onlineMode) {
+      try {
+        const onlineProjects = await onlineStoreRef.current.listProjects();
+        setProjects(onlineProjects);
+        setError(null);
+        return onlineProjects;
+      } catch (cause) {
+        setError({ code: cause?.code || 'ONLINE_LOAD_FAILED', message: String(cause?.message || cause).slice(0, 300) });
+        return [];
+      }
+    }
     const result = storeRef.current.listProjects();
     if (result.ok) {
       setProjects(result.projects);
@@ -114,9 +210,21 @@ export function ResearchWorkspacePage() {
     }
     setError({ code: result.code, message: result.message });
     return [];
-  }, []);
+  }, [onlineMode]);
 
-  const reloadProject = useCallback((id) => {
+  const reloadProject = useCallback(async (id) => {
+    if (onlineMode) {
+      try {
+        const onlineProject = await onlineStoreRef.current.getProject(id);
+        setProject(onlineProject);
+        setError(null);
+        return onlineProject;
+      } catch (cause) {
+        setError({ code: cause?.code || 'ONLINE_LOAD_FAILED', message: String(cause?.message || cause).slice(0, 300) });
+        setProject(null);
+        return null;
+      }
+    }
     const result = storeRef.current.getProject(id);
     if (result.ok) {
       setProject(result.project);
@@ -125,22 +233,29 @@ export function ResearchWorkspacePage() {
     setError({ code: result.code, message: result.message });
     setProject(null);
     return null;
-  }, []);
+  }, [onlineMode]);
 
   // 初次加载：项目列表 + 激活项目
   useEffect(() => {
-    const list = reloadProjects();
-    let target = list.find((item) => item.id === activeId) || null;
-    if (!target && list.length > 0) target = list[0];
-    if (target) {
-      setActiveId(target.id);
-      writeActiveProjectId(target.id);
-      reloadProject(target.id);
-    } else {
-      writeActiveProjectId(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (authLoading) return undefined;
+    let cancelled = false;
+    const load = async () => {
+      const list = await reloadProjects();
+      if (cancelled) return;
+      let target = list.find((item) => item.id === activeId) || null;
+      if (!target && list.length > 0) target = list[0];
+      if (target) {
+        setActiveId(target.id);
+        writeActiveProjectId(target.id);
+        await reloadProject(target.id);
+      } else {
+        setProject(null);
+        writeActiveProjectId(null);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [activeId, authLoading, onlineMode, reloadProject, reloadProjects]);
 
   // 项目变化 → 工作流状态 + 世系审计 + 图谱
   useEffect(() => {
@@ -170,10 +285,10 @@ export function ResearchWorkspacePage() {
     setPendingImport(null);
   }, [activeId]);
 
-  const selectProject = useCallback((id) => {
+  const selectProject = useCallback(async (id) => {
     setActiveId(id);
     writeActiveProjectId(id);
-    reloadProject(id);
+    await reloadProject(id);
     setError(null);
     setNotice(null);
   }, [reloadProject]);
@@ -191,6 +306,16 @@ export function ResearchWorkspacePage() {
     setNotice(null);
     try {
       const next = await action();
+      if (onlineMode) {
+        const spec = typeof options.onlineCommand === 'function'
+          ? options.onlineCommand(next, project)
+          : buildOnlineCommand(project, next);
+        const persisted = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+        if (persisted) setProject(persisted);
+        await reloadProjects();
+        if (options.notice) setNotice(options.notice.replace(/本地/g, '在线'));
+        return true;
+      }
       const saved = storeRef.current.putProject(next);
       if (!saved.ok) {
         setError({ code: saved.code, message: saved.message });
@@ -207,10 +332,28 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [project, reloadProject, reloadProjects]);
+  }, [onlineMode, project, reloadProject, reloadProjects]);
 
   // ---- 项目操作 ----
   const handleCreateProject = useCallback(async (form) => {
+    if (onlineMode) {
+      setBusy(true);
+      setError(null);
+      try {
+        const created = await onlineStoreRef.current.execute('project.create', { project: form });
+        setCreating(false);
+        setProject(created);
+        setActiveId(created.id);
+        writeActiveProjectId(created.id);
+        await reloadProjects();
+        setNotice('项目已保存到在线工作区。');
+      } catch (cause) {
+        setError({ code: cause?.code || 'ONLINE_CREATE_FAILED', message: String(cause?.message || cause).slice(0, 300) });
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const ok = await run('创建项目', async () => {
       const next = await createProject(form);
       const saved = storeRef.current.putProject(next);
@@ -226,7 +369,7 @@ export function ResearchWorkspacePage() {
         selectProject(created.id);
       }
     }
-  }, [run, reloadProjects, selectProject]);
+  }, [onlineMode, run, reloadProjects, selectProject]);
 
   const handleSaveProfile = useCallback((patch) => {
     return run('保存项目档案', () => updateProjectProfile(project, patch), { notice: '项目档案已保存；下游 Brief/交接包已标记为过时。' });
@@ -308,6 +451,19 @@ export function ResearchWorkspacePage() {
         setError({ code: inspected.code, message: inspected.message });
         return;
       }
+      if (onlineMode) {
+        const onlineProjects = await onlineStoreRef.current.listProjects();
+        if (onlineProjects.some((item) => item.id === inspected.project_id)) {
+          setError({
+            code: 'IMPORT_PROJECT_COLLISION',
+            message: '在线工作区已存在相同 project_id；不会静默覆盖或合并。',
+          });
+          return;
+        }
+        setPendingImport({ ...inspected, fileName: file.name, online: true });
+        setNotice('备份已通过版本、指纹和绑定校验；尚未上传，请确认后原子导入在线工作区。');
+        return;
+      }
       if (inspected.replaces_existing) {
         setPendingImport({ text, fileName: file.name, ...inspected });
         setNotice('检测到同 ID 项目：尚未写入。请核对版本与指纹后明确确认替换。');
@@ -327,13 +483,23 @@ export function ResearchWorkspacePage() {
       if (importInputRef.current) importInputRef.current.value = '';
       setBusy(false);
     }
-  }, [reloadProjects, selectProject]);
+  }, [onlineMode, reloadProjects, selectProject]);
 
   const handleConfirmImportReplacement = useCallback(async () => {
     if (!pendingImport) return;
     setBusy(true);
     setError(null);
     try {
+      if (pendingImport.online) {
+        const imported = await onlineStoreRef.current.importPackage(pendingImport.pkg);
+        setPendingImport(null);
+        setProject(imported);
+        setActiveId(imported.id);
+        writeActiveProjectId(imported.id);
+        await reloadProjects();
+        setNotice('备份已按完整身份原子导入在线工作区；本机备份未删除。');
+        return;
+      }
       const result = await storeRef.current.importProjectPackage(pendingImport.text, {
         replacement_confirmation: pendingImport.replacement_confirmation,
       });
@@ -355,6 +521,21 @@ export function ResearchWorkspacePage() {
   }, [pendingImport, reloadProjects, selectProject]);
 
   const handleArchiveProject = useCallback(async (id) => {
+    if (onlineMode) {
+      setBusy(true);
+      setError(null);
+      try {
+        const persisted = await onlineStoreRef.current.execute('project.archive', { project_id: id });
+        setProject(persisted);
+        await reloadProjects();
+        setNotice('项目已在线归档并保持只读。');
+      } catch (cause) {
+        setError({ code: cause?.code || 'ONLINE_ARCHIVE_FAILED', message: String(cause?.message || cause).slice(0, 300) });
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     const result = storeRef.current.getProject(id);
     if (result.ok && result.project.status !== 'archived') {
@@ -370,9 +551,13 @@ export function ResearchWorkspacePage() {
     }
     reloadProjects();
     setBusy(false);
-  }, [reloadProjects, reloadProject]);
+  }, [onlineMode, reloadProjects, reloadProject]);
 
   const handleDeleteProject = useCallback((id) => {
+    if (onlineMode) {
+      setError({ code: 'ONLINE_DELETE_DISABLED', message: '在线项目不提供破坏性删除；请使用归档。' });
+      return;
+    }
     setBusy(true);
     const result = storeRef.current.deleteProject(id);
     if (!result.ok) setError({ code: result.code, message: result.message });
@@ -388,7 +573,7 @@ export function ResearchWorkspacePage() {
       }
     }
     setBusy(false);
-  }, [activeId, reloadProjects, selectProject]);
+  }, [activeId, onlineMode, reloadProjects, selectProject]);
 
   const activeRow = useMemo(() => {
     if (!project || !lineage) return null;
@@ -406,9 +591,14 @@ export function ResearchWorkspacePage() {
           <h2>研究项目 → 证据 → 确定性分析 → 知识卡 → 可审核 Brief → 交接包 → 世系审计</h2>
         </div>
         <div className="p19-topbar-right">
-          <span className="p19-storage-chip" title={`本地存储 ${storageSummary.total}/${storageSummary.max} 个项目`}>
-            {storageSummary.total}/{storageSummary.max} 项目（localStorage）
+          <span className={`p19-storage-chip ${onlineMode ? 'online' : 'off'}`} data-testid="p20-persistence-mode">
+            {onlineMode ? '在线工作区 · 已同步' : '本机草稿 · 未上传'}
           </span>
+          {!onlineMode && (
+            <span className="p19-storage-chip" title={`本地存储 ${storageSummary.total}/${storageSummary.max} 个项目`}>
+              {storageSummary.total}/{storageSummary.max} 项目（localStorage）
+            </span>
+          )}
           <span className={`p19-storage-chip ${stagingStatus.configured ? '' : 'off'}`} title={stagingStatus.configured ? 'staging 五视图只读读者保持可用（本页不写入）' : 'staging 未配置：本页完全离线运行'}>
             {stagingStatus.configured ? 'staging 只读读者可用' : 'staging 未配置'}
           </span>
@@ -457,7 +647,7 @@ export function ResearchWorkspacePage() {
             ))}
           </select>
         </label>
-        <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={() => { setCreating(true); setError(null); }} title="新建一个本地研究项目">
+        <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={() => { setCreating(true); setError(null); }} title={onlineMode ? '新建一个在线研究项目' : '新建一个本地研究项目'}>
           + 新建项目
         </button>
         <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || !project} onClick={handleExport} title="导出当前项目的本地备份 JSON（仅备份）">
@@ -495,16 +685,21 @@ export function ResearchWorkspacePage() {
       </div>
 
       {pendingImport && (
-        <div className="p19-panel p19-import-confirm" role="alert" aria-label="确认替换同 ID 项目">
+        <div className="p19-panel p19-import-confirm" role="alert" aria-label={pendingImport.online ? '确认导入在线工作区' : '确认替换同 ID 项目'}>
           <div className="p19-panel-head">
-            <h3>同 ID 项目替换确认</h3>
+            <h3>{pendingImport.online ? '确认导入在线工作区' : '同 ID 项目替换确认'}</h3>
             <span className="p19-panel-note">尚未写入</span>
           </div>
           <p>文件：{pendingImport.fileName}</p>
-          <p>项目：{pendingImport.project_id}；当前版本：{pendingImport.replacement_confirmation.existing_version}；导入版本：{pendingImport.incoming_version}</p>
+          <p>
+            项目：{pendingImport.project_id}；
+            {pendingImport.online ? `导入版本：${pendingImport.incoming_version}` : `当前版本：${pendingImport.replacement_confirmation.existing_version}；导入版本：${pendingImport.incoming_version}`}
+          </p>
           <p>导入指纹：{pendingImport.incoming_fingerprint}</p>
           <div className="p19-actions">
-            <button className="p19-btn p19-btn-danger" type="button" disabled={busy} onClick={handleConfirmImportReplacement}>确认替换此项目</button>
+            <button className={`p19-btn ${pendingImport.online ? 'p19-btn-primary' : 'p19-btn-danger'}`} type="button" disabled={busy} onClick={handleConfirmImportReplacement}>
+              {pendingImport.online ? '确认原子导入' : '确认替换此项目'}
+            </button>
             <button className="p19-btn p19-btn-ghost" type="button" disabled={busy} onClick={() => setPendingImport(null)}>取消</button>
           </div>
         </div>
@@ -514,7 +709,7 @@ export function ResearchWorkspacePage() {
         <div className="p19-panel p19-create-panel">
           <div className="p19-panel-head">
             <h3>新建研究项目</h3>
-            <span className="p19-panel-note">最多 {storageSummary.max} 个项目（本地）</span>
+          <span className="p19-panel-note">{onlineMode ? '保存到当前账号的在线工作区' : `最多 ${storageSummary.max} 个项目（本地）`}</span>
           </div>
           <NewProjectForm busy={busy} onCancel={() => setCreating(false)} onCreate={handleCreateProject} />
         </div>
@@ -561,8 +756,9 @@ export function ResearchWorkspacePage() {
 
       <footer className="p19-footer">
         <p>
-          本地草稿：所有记录仅保存在本浏览器的有界本地存储（p19_store_v1），未写入任何后端；
-          staging 五视图只读读者保持 fail closed。导入/导出只是本地备份，不是发布任务。
+          {onlineMode
+            ? '在线工作区：保存操作通过已认证命令边界写入当前账号的数据空间；刷新或更换浏览器后可重新读取。在线项目不提供破坏性删除，只能归档。'
+            : '本地草稿：所有记录仅保存在本浏览器的有界本地存储（p19_store_v1），未写入任何后端；导入/导出只是本地备份，不是发布任务。'}
         </p>
         <p className="p19-footer-fine">
           确定性分析 deterministic_local · 人工决定 local_manual · 四项执行标志均为 false · 无采集 / 无模型推理 / 无生成 / 无路由 / 无发布

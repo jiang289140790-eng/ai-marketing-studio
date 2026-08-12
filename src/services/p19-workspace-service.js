@@ -31,6 +31,7 @@ import {
   evidenceProofFingerprint,
   fingerprintOf,
   isNonEmptyString,
+  sha256Hex,
   stableId,
   validateBrief,
   validateEvidenceRecord,
@@ -141,10 +142,14 @@ function ruleMediaMetadataBounds(evidence) {
 }
 
 function ruleManualProvenanceTrust(evidence) {
+  const p22Verified = evidence.provenance?.manual === false
+    && evidence.provenance?.schema_version === 'p22_apify_evidence_provenance_v1';
   return {
     manual: evidence.provenance && evidence.provenance.manual === true,
-    trust_status: evidence.provenance && evidence.provenance.manual === true ? 'manual_local' : 'unknown',
-    note: '人工录入的证据按 manual_local 标记可信来源；不依赖任何平台验证。',
+    trust_status: evidence.provenance && evidence.provenance.manual === true ? 'manual_local' : p22Verified ? 'apify_server_bound' : 'unknown',
+    note: p22Verified
+      ? 'P22 Apify 公开来源已由服务端证明绑定正文、身份与采集运行。'
+      : '人工录入的证据按 manual_local 标记可信来源；不依赖任何平台验证。',
   };
 }
 
@@ -244,6 +249,17 @@ async function refreshFingerprint(project, hasher) {
 export async function addEvidence(project, input, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
   assertNotArchived(project);
   const timestamp = now();
+  const provenance = input.provenance && typeof input.provenance === 'object' && !Array.isArray(input.provenance)
+    ? clonePlain(input.provenance)
+    : {
+      manual: true,
+      statement: '该证据由用户手工录入并核对；来源 URL 为人工填写，未经任何平台采集或验证。',
+    };
+  const p22Source = provenance.manual === false && provenance.schema_version === 'p22_apify_evidence_provenance_v1';
+  const rawContent = String(input.content_text ?? '');
+  if (p22Source && (!rawContent.trim() || rawContent.length > MAX_STRING_LENGTH)) {
+    throw workbenchError('EVIDENCE_INVALID', 'P22 证据正文缺失或超过 5000 字符，已拒绝。');
+  }
   const record = {
     schema_version: EVIDENCE_SCHEMA_VERSION,
     id: '',
@@ -251,18 +267,18 @@ export async function addEvidence(project, input, { now = () => new Date().toISO
     source_url: boundedSlice(input.source_url, 1000),
     label: boundedSlice(input.label, 200),
     platform: boundedSlice(input.platform, 80),
-    content_text: boundedSlice(input.content_text, MAX_STRING_LENGTH),
+    content_text: p22Source ? rawContent : boundedSlice(input.content_text, MAX_STRING_LENGTH),
     recorded_at: isNonEmptyString(input.recorded_at) ? input.recorded_at : timestamp,
-    provenance: {
-      manual: true,
-      statement: '该证据由用户手工录入并核对；来源 URL 为人工填写，未经任何平台采集或验证。',
-    },
+    provenance,
     media_metadata: normalizeMediaMetadata(input.media_metadata),
     version: 1,
     fingerprint: '',
     created_at: timestamp,
     updated_at: timestamp,
   };
+  if (p22Source && await sha256Hex(record.content_text) !== provenance.content_sha256) {
+    throw workbenchError('EVIDENCE_HASH_MISMATCH', 'P22 证据正文与来源 SHA-256 不一致，已拒绝。');
+  }
   const id = await stableId('ev-', { project_id: project.id, source_url: record.source_url, recorded_at: timestamp });
   record.id = id;
   const verdict = validateEvidenceRecord(record);

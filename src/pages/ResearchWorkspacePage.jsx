@@ -53,6 +53,8 @@ import {
   P21_VIEW_MODE_KEY,
   P21_VIEW_MODES,
 } from '../services/p21-guided-workspace.js';
+import { P22ResearchAssistPanel } from '../components/integrated-workspace/P22ResearchAssistPanel.jsx';
+import { toP19EvidenceInput } from '../services/p22-research-assist.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
@@ -404,6 +406,10 @@ export function ResearchWorkspacePage() {
   const handleAddEvidence = useCallback((input) => {
     return run('添加证据', () => addEvidence(project, input), { notice: '证据已添加（仅本地）。' });
   }, [run, project]);
+
+  const handleSaveAssistedEvidence = useCallback(async (item) => {
+    return handleAddEvidence(await toP19EvidenceInput(item));
+  }, [handleAddEvidence]);
 
   const handleUpdateEvidence = useCallback((evidenceId, patch) => {
     return run('编辑证据', () => updateEvidence(project, evidenceId, patch), { notice: '证据已更新；下游分析/知识卡/Brief 已标记为过时。' });
@@ -823,6 +829,7 @@ export function ResearchWorkspacePage() {
               <P19ProjectForm project={project} onSave={handleSaveProfile} busy={busy} />
             </section>
             <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
+              {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}
               <P19EvidenceList
                 project={project}
                 onAdd={handleAddEvidence}

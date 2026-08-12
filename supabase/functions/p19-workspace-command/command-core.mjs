@@ -49,6 +49,7 @@ import {
   isNonEmptyString,
   isPlainObject,
   issue,
+  sha256Hex,
   validateAnalysis,
   validateBrief,
   validateEvidenceRecord,
@@ -162,7 +163,7 @@ export function parseCommandRequest(input) {
  * 规范化哈希校验 + 幂等预留 + 受修订保护的变更）。
  * 返回有界结构化诊断；任何失败都不写入。
  */
-export async function executeCommand({ command, idempotency_key: idempotencyKey, payload, payload_sha256: payloadSha256, user_id: userId, access_role: accessRole }, { db, hasher = fingerprintOf } = {}) {
+export async function executeCommand({ command, idempotency_key: idempotencyKey, payload, payload_sha256: payloadSha256, user_id: userId, access_role: accessRole }, { db, hasher = fingerprintOf, verifyP22Evidence = null } = {}) {
   if (!db) throw new Error('executeCommand 需要注入 db。');
   const definition = COMMAND_ALLOWLIST[command];
   if (!definition) return fail('UNKNOWN_COMMAND', '命令不在允许清单内，已 fail closed。');
@@ -170,7 +171,7 @@ export async function executeCommand({ command, idempotency_key: idempotencyKey,
     return fail('ROLE_DENIED', `当前 staging 角色无权执行 ${definition.label}（需要 ${definition.role}）。`, { command, idempotency_key: idempotencyKey });
   }
 
-  const applied = await applyCommand(command, payload, payloadSha256, userId, idempotencyKey, { db, hasher });
+  const applied = await applyCommand(command, payload, payloadSha256, userId, idempotencyKey, { db, hasher, verifyP22Evidence });
   if (!applied.ok) return applied;
   if (applied.replayed) {
     // 幂等重放：边界原子预留失败，返回已记录结果，绝不重复写入。
@@ -299,8 +300,8 @@ function writeResult(write, type, id, extraDiagnostics = { issues: [] }) {
   return okResult(type, id, extraDiagnostics);
 }
 
-async function applyCommand(command, payload, payloadSha256, userId, idempotencyKey, { db, hasher }) {
-  const ctx = { command, idempotencyKey, payloadSha256, userId, db, hasher, payload };
+async function applyCommand(command, payload, payloadSha256, userId, idempotencyKey, { db, hasher, verifyP22Evidence }) {
+  const ctx = { command, idempotencyKey, payloadSha256, userId, db, hasher, verifyP22Evidence, payload };
   switch (command) {
     case 'project.list': return applyProjectList(ctx);
     case 'project.read': return applyProjectRead(ctx);
@@ -625,6 +626,12 @@ async function applyEvidenceCreate(ctx) {
   if (!owned.ok) return owned;
   const raw = payload.evidence;
   if (!isPlainObject(raw)) return fail('EVIDENCE_INVALID', 'evidence 必须是对象。');
+  const p22Source = raw.provenance?.manual === false
+    && raw.provenance?.schema_version === 'p22_apify_evidence_provenance_v1';
+  const rawContent = String(raw.content_text || '');
+  if (p22Source && (!rawContent.trim() || rawContent.length > 5000)) {
+    return fail('EVIDENCE_INVALID', 'P22 证据正文缺失或超过 5000 字符。');
+  }
   const recordedAt = String(raw.recorded_at || new Date().toISOString()).slice(0, 80);
   if (!ISO8601_PATTERN.test(recordedAt)) {
     return fail('EVIDENCE_INVALID', 'recorded_at 必须是 ISO-8601 时间字符串（边界 required 列）。', { entity: { type: 'project', id: owned.projectId } });
@@ -636,7 +643,7 @@ async function applyEvidenceCreate(ctx) {
     source_url: String(raw.source_url || '').trim().slice(0, 1000),
     label: String(raw.label || '').trim().slice(0, 200),
     platform: String(raw.platform || '').trim().slice(0, 80),
-    content_text: String(raw.content_text || '').slice(0, 5000),
+    content_text: p22Source ? rawContent : String(raw.content_text || '').slice(0, 5000),
     recorded_at: recordedAt,
     provenance: isPlainObject(raw.provenance) ? clonePlain(raw.provenance) : { manual: true, statement: '服务端登记：来源由人工提交。' },
     media_metadata: isPlainObject(raw.media_metadata) ? clonePlain(raw.media_metadata) : null,
@@ -645,6 +652,21 @@ async function applyEvidenceCreate(ctx) {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
+  if (p22Source) {
+    if (await sha256Hex(record.content_text) !== record.provenance.content_sha256) {
+      return fail('P22_EVIDENCE_HASH_MISMATCH', 'P22 证据正文与来源 SHA-256 不一致。');
+    }
+    if (typeof ctx.verifyP22Evidence !== 'function') {
+      return fail('P22_SOURCE_PROOF_UNVERIFIED', 'P22 服务端来源证明无法验证，已拒绝。');
+    }
+    try {
+      if (await ctx.verifyP22Evidence(ctx.userId, record) !== true) {
+        return fail('P22_SOURCE_PROOF_INVALID', 'P22 服务端来源证明无效，已拒绝。');
+      }
+    } catch {
+      return fail('P22_SOURCE_PROOF_INVALID', 'P22 服务端来源证明无效，已拒绝。');
+    }
+  }
   const { valid, issues } = validateEvidenceShape(record);
   if (!valid) return fail('EVIDENCE_INVALID', '证据记录未通过 P19 证据契约校验。', { entity: { type: 'project', id: owned.projectId }, diagnostics: boundedDiagnostics(issues) });
   record.id = `ev-${(await hasher(record)).slice(0, 24)}`;

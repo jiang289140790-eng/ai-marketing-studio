@@ -29,6 +29,7 @@ import {
   hasRequiredRole,
   parseCommandRequest,
 } from './command-core.mjs';
+import { verifyCollectionProof } from '../p22-research-assist/assist-core.mjs';
 const ALLOWED_ORIGINS = new Set([
   'https://jiang289140790-eng.github.io',
   'http://localhost:3000',
@@ -47,6 +48,29 @@ const BOUNDED_STATUS = Object.freeze({
   PROJECT_ARCHIVED: 409,
   IDEMPOTENCY_CONFLICT: 409,
 });
+
+async function verifyP22EvidenceRecord(proofSecret: string, userId: string, record: Record<string, unknown>) {
+  const provenance = record?.provenance as Record<string, unknown>;
+  const media = record?.media_metadata as Record<string, unknown>;
+  const item = {
+    id: provenance.source_id,
+    source_url: record.source_url,
+    label: record.label,
+    platform: 'x',
+    content_text: record.content_text,
+    external_id: provenance.external_id,
+    content_sha256: media?.sha256,
+    provenance: {
+      schema_version: 'p22_collected_source_v1',
+      provider: provenance.provider,
+      run_id: provenance.run_id,
+      collected_at: provenance.collected_at,
+      usage_total_usd: provenance.usage_total_usd,
+      budget_reservation_id: provenance.budget_reservation_id,
+    },
+  };
+  return verifyCollectionProof(proofSecret, userId, item, provenance.collection_proof);
+}
 
 function corsHeaders(request: Request) {
   const origin = request.headers.get('origin') || '';
@@ -188,7 +212,8 @@ Deno.serve(async (request) => {
   try {
     const url = Deno.env.get('SUPABASE_URL');
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-    if (!url || !serviceKey) {
+    const proofSecret = Deno.env.get('P22_COLLECTION_PROOF_SECRET');
+    if (!url || !serviceKey || !proofSecret) {
       return json(request, { ok: false, code: 'SERVICE_CONFIG_MISSING', message: '服务端配置缺失（不暴露任何密钥给浏览器）。', diagnostics: { issues: [] } }, 500);
     }
     const supabase = createClient(url, serviceKey);
@@ -205,7 +230,10 @@ Deno.serve(async (request) => {
       return json(request, { ok: false, ...parsed, diagnostics: parsed.diagnostics || { issues: [parsed.message] } }, 400);
     }
     const definition = COMMAND_ALLOWLIST[parsed.command];
-    const result = await executeCommand({ ...parsed, user_id: userId, access_role: accessRole }, { db });
+    const result = await executeCommand(
+      { ...parsed, user_id: userId, access_role: accessRole },
+      { db, verifyP22Evidence: (boundUserId, record) => verifyP22EvidenceRecord(proofSecret, boundUserId, record) },
+    );
     if (!result.ok) return json(request, result, BOUNDED_STATUS[result.code] || 400);
     return json(request, {
       ...result,

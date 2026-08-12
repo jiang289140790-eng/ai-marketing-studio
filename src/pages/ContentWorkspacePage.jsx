@@ -3,6 +3,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ContextAIBox } from '../components/ContextAIBox';
 import { ExecutionButton } from '../components/ExecutionButton';
 import { StatusBadge } from '../components/StatusBadge';
+import { ContentCreationModePanel } from '../components/content-workspace/ContentCreationModePanel';
 import {
   applyContextAIResult,
   displayText,
@@ -17,6 +18,7 @@ import { buildContentContext } from '../services/context-ai-service';
 import { createPrompt } from '../services/prompt-service';
 import { getExecutionStatus } from '../services/execution-gateway';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { fetchKnowledgeEngineData, STAGING_VIEWS } from '../services/staging-preview-service';
 import { normalizeContentPackageSequence } from '../utils/content-package-sequence';
 import {
   buildReadiness,
@@ -140,6 +142,16 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
   const [activeWorkflow, setActiveWorkflow] = useState('all');
   const [hideTests, setHideTests] = useState(true);
   const [gateway, setGateway] = useState({ loading: true, connected: false });
+  const [creationMode, setCreationMode] = useState('quick'); // quick | brief | cycle
+  const [cycleDays, setCycleDays] = useState(null); // null = 未选择, 3/7/14/自定义数字
+  const [customCycleDays, setCustomCycleDays] = useState('10');
+  const [cycleFrequency, setCycleFrequency] = useState('daily');
+  const [cycleExpanded, setCycleExpanded] = useState(false);
+  const [briefs, setBriefs] = useState([]);
+  const [briefsLoading, setBriefsLoading] = useState(false);
+  const [selectedBriefId, setSelectedBriefId] = useState('');
+  const [draftCount, setDraftCount] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [selectedStrategyId, setSelectedStrategyId] = useState(routeParams.strategy_id || '');
   const [selectedPackageId, setSelectedPackageId] = useState(detailId || '');
 
@@ -170,6 +182,49 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
     });
     return () => { cancelled = true; };
   }, [userId]);
+
+  // 加载可用于生成的 Brief 列表
+  useEffect(() => {
+    if (!userId || !isSupabaseConfigured) return;
+    let cancelled = false;
+    async function loadBriefs() {
+      setBriefsLoading(true);
+      try {
+        const response = await fetchKnowledgeEngineData({ userId });
+        const rows = response.byView?.[STAGING_VIEWS.CONTENT_BRIEFS]?.data || [];
+        const approvedBriefs = rows.map((row) => {
+          const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+          return {
+            ...row,
+            id: row.brief_id,
+            version: row.brief_version,
+            fingerprint: row.payload_sha256,
+            status: row.brief_status,
+            name: payload.title || payload.name || `Brief ${row.brief_id}`,
+            summary: payload.summary || payload.objective || payload.description || '已批准的内容 Brief',
+            target_audience: payload.target_audience || payload.audience || null,
+            platforms: payload.channels || payload.platforms || null,
+            constraints: payload.constraints || null,
+            schema_version: row.brief_schema_version,
+            knowledge_citation_ids: Array.isArray(row.knowledge_citation_ids) ? row.knowledge_citation_ids : [],
+            evidence_provenance: row.evidence_provenance && typeof row.evidence_provenance === 'object'
+              ? row.evidence_provenance
+              : {},
+            structural_guidance: Array.isArray(payload.structural_guidance) ? payload.structural_guidance : [],
+            topic: payload.topic || null,
+            source_type: 'ke_content_briefs_v1',
+          };
+        });
+        if (!cancelled) setBriefs(approvedBriefs);
+      } catch {
+        if (!cancelled) setBriefs([]);
+      } finally {
+        if (!cancelled) setBriefsLoading(false);
+      }
+    }
+    loadBriefs();
+    return () => { cancelled = true; };
+  }, [userId, refreshKey]);
 
   const contentPackages = useMemo(() => {
     const all = getContentPackages(data);
@@ -225,6 +280,19 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
     const allowed = new Set(filteredPackages.map((item) => String(item.id)));
     return daySequence.filter((item) => allowed.has(String(item.id)));
   }, [daySequence, filteredPackages]);
+  const cycleSequence = useMemo(() => {
+    if (!cycleDays) return [];
+    return visibleSequence
+      .filter((item) => !Number.isFinite(item.dayIndex) || item.dayIndex <= cycleDays)
+      .slice(0, cycleDays);
+  }, [cycleDays, visibleSequence]);
+
+  useEffect(() => {
+    if (creationMode !== 'cycle' || !cycleDays || cycleSequence.length === 0) return;
+    if (!cycleSequence.some((item) => String(item.id) === String(selectedPackageId))) {
+      setSelectedPackageId(String(cycleSequence[0].id));
+    }
+  }, [creationMode, cycleDays, cycleSequence, selectedPackageId]);
 
   useEffect(() => {
     const requestedDay = Number(routeParams.day);
@@ -262,144 +330,344 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
     })
     : null;
 
-  if (!isSupabaseConfigured) {
-    return <EmptyState title="等待数据服务配置" description="配置完成后，内容工作台会读取真实内容、素材、角色和生成任务。" />;
-  }
-
-  if (!userId) {
-    return <EmptyState title="请先登录" description="登录后才能查看内容工作台。" />;
-  }
+  const selectedBrief = briefs.find((b) => String(b.id) === String(selectedBriefId)) || null;
 
   return (
     <section className="page-stack content-workspace-page">
+      {(!isSupabaseConfigured || !userId) && (
+        <div className="notice warning" role="status">
+          {!isSupabaseConfigured
+            ? '当前为界面预览：配置 staging 数据服务并登录后即可使用 AI 生成与保存。'
+            : '请先登录后使用 AI 生成与保存；三种创建模式可先预览。'}
+        </div>
+      )}
       {loadError && (
         <div className="notice error" role="alert">
           内容工作台数据读取失败：{loadError}
         </div>
       )}
-      <div className="hero-panel">
-        <p className="eyebrow">内容工作台</p>
-        <h2>按策略日程推进每日内容生产</h2>
-        <p>
-          从 Day 1 开始，依次完成文案、角色模型、素材、视觉生成、结果审核和发布队列。
-          页面只突出当前需要处理的一天和下一步动作。
-        </p>
-        <div className="button-row">
-          <button className="ghost-button" type="button" onClick={() => onNavigate('assets')}>打开素材库</button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('characters')}>打开角色库</button>
+      {/* 页面头部 + 模式切换 */}
+      <div className="content-workspace-header">
+        <div className="workspace-header-left">
+          <p className="eyebrow">内容工作台</p>
+          <h2>三模式智能内容工作台</h2>
+        </div>
+        <div className="workspace-header-right">
+          <span className="draft-count-badge" aria-live="polite">
+            本次会话已保存 {draftCount} 条草稿
+          </span>
         </div>
       </div>
 
-      {!gateway.loading && !gateway.connected && (
-        <div className="execution-service-notice">
-          <div><strong>执行服务暂未连接</strong><span>内容查看、编辑和审核不受影响；生成、导入与发布动作暂不可执行。</span></div>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>查看运营指挥中心的执行服务状态</button>
+      {/* 三模式切换 */}
+      <nav className="creation-mode-switcher" role="tablist" aria-label="内容创建模式">
+        {[
+          ['quick', '快速生成一条', '输入一句话需求，AI 自动补全并生成主版本与候选方案。'],
+          ['brief', '从 Brief 生成', '选择已批准的创意简报，按策略方向生成内容。'],
+          ['cycle', '创建周期计划', '设定 3/7/14 天或自定义周期，展开高级生产工作台。'],
+        ].map(([mode, label, desc]) => (
+          <button
+            key={mode}
+            type="button"
+            role="tab"
+            className={`mode-switch-tab ${creationMode === mode ? 'active' : ''}`}
+            aria-selected={creationMode === mode}
+            onClick={() => {
+              setCreationMode(mode);
+              if (mode !== 'cycle') { setCycleDays(null); setCycleExpanded(false); }
+            }}
+            onKeyDown={(e) => {
+              const modes = ['quick', 'brief', 'cycle'];
+              const idx = modes.indexOf(mode);
+              if (e.key === 'ArrowRight' && idx < modes.length - 1) { e.preventDefault(); setCreationMode(modes[idx + 1]); }
+              if (e.key === 'ArrowLeft' && idx > 0) { e.preventDefault(); setCreationMode(modes[idx - 1]); }
+            }}
+          >
+            <span className="mode-tab-label">{label}</span>
+            <small className="mode-tab-desc">{desc}</small>
+          </button>
+        ))}
+      </nav>
+
+      {/* 模式 1：快速生成一条（默认） */}
+      {creationMode === 'quick' && (
+        <div className="creation-mode-content" role="tabpanel" aria-label="快速生成一条">
+          <ContentCreationModePanel
+            mode="quick"
+            brief={null}
+            userId={userId}
+            onNavigate={onNavigate}
+            onDraftCountChange={(delta) => setDraftCount((c) => c + delta)}
+          />
         </div>
       )}
 
-      {selectedSequence && selectedGuide && (
-        <StrategyDayProgress
-          campaign={selectedCampaign}
-          strategy={selectedStrategy}
-          sequence={visibleSequence}
-          selected={selectedSequence}
-          guide={selectedGuide}
-          strategyOptions={strategyOptions}
-          selectedStrategyId={selectedStrategyId}
-          onStrategyChange={(strategyId) => {
-            setSelectedStrategyId(strategyId);
-            setSelectedPackageId('');
-            onNavigate('workspace', '', { strategy_id: strategyId, day: 1 });
-          }}
-        />
-      )}
-
-      <div className="day-production-layout">
-        <aside className="day-plan-panel" aria-label="七天内容计划">
-          <div className="day-plan-panel-head">
-            <div><span>策略日程</span><strong>{visibleSequence.length || 0} 天内容计划</strong></div>
-            <small>按 Day 顺序生产</small>
-          </div>
-          <div className="day-plan-list">
-            {visibleSequence.map((sequenceItem) => (
-              <button
-                type="button"
-                key={sequenceItem.id}
-                className={`day-plan-item ${String(sequenceItem.id) === String(selectedSequence?.id) ? 'active' : ''} ${sequenceItem.isCompleted ? 'completed' : ''} ${sequenceItem.isBlocked ? 'blocked' : ''}`}
-                onClick={() => {
-                  setSelectedPackageId(String(sequenceItem.id));
-                  onNavigate('workspace', sequenceItem.id, {
-                    strategy_id: sequenceItem.contentPackage.strategyId || selectedStrategyId,
-                    day: sequenceItem.dayIndex,
-                  });
-                }}
-              >
-                <span className="day-plan-index">{sequenceItem.dayLabel}</span>
-                <span className="day-plan-copy">
-                  <strong>{sequenceItem.pillar}</strong>
-                  <small>{sequenceItem.platform} · {sequenceItem.productionStep.label}</small>
-                </span>
-                <span className={`day-plan-state ${sequenceItem.isCompleted ? 'completed' : sequenceItem.isBlocked ? 'blocked' : 'pending'}`}>
-                  {sequenceItem.isCompleted ? '完成' : sequenceItem.isBlocked ? '阻塞' : '进行中'}
-                </span>
+      {/* 模式 2：从 Brief 生成 */}
+      {creationMode === 'brief' && (
+        <div className="creation-mode-content" role="tabpanel" aria-label="从 Brief 生成">
+          <div className="brief-selector-section">
+            <div className="brief-selector-header">
+              <h3>选择一个已批准的 Brief</h3>
+              <button className="ghost-button" type="button" onClick={() => { setRefreshKey((k) => k + 1); }} disabled={briefsLoading}>
+                {briefsLoading ? '加载中...' : '刷新列表'}
               </button>
-            ))}
-            {!visibleSequence.length && <div className="empty-card-inline">当前策略还没有可用的 Day 内容包。</div>}
-          </div>
-        </aside>
-
-        <main className="current-day-production">
-          {selectedItem ? (
-            selectedSequence.dayIndex === 1 ? (
-              <DayOneContentWorkbench
-                key={`${selectedItem.sourceKey}-${selectedItem.id}`}
-                item={selectedItem}
-                data={data}
-                assets={assets}
-                onNavigate={onNavigate}
-                onRefresh={refreshData}
-              />
+            </div>
+            {briefs.length === 0 && !briefsLoading ? (
+              <div className="empty-card-inline">
+                暂无可用的 Brief。请在「运营研究工作台」（#/research）中创建并批准策略/简报后刷新列表。
+              </div>
             ) : (
-              <ContentPackageCard
-                key={`${selectedItem.sourceKey}-${selectedItem.id}`}
-                item={selectedItem}
-                data={data}
-                assets={assets}
-                gateway={gateway}
-                userId={userId}
-                onNavigate={onNavigate}
-                onRefresh={refreshData}
-                initialOpen
-                dayIndex={selectedSequence.dayIndex}
-                strategyId={selectedStrategyId}
-              />
-            )
-          ) : (
-            <EmptyState
-              title={loading ? '正在读取内容包' : '没有匹配的内容包'}
-              description="批准策略后，Day 1 到 Day 7 的内容会按顺序显示在这里。"
-            />
-          )}
-        </main>
-      </div>
-
-      <details className="content-workspace-secondary">
-        <summary>筛选与查看其它内容</summary>
-        <div className="content-workflow-toolbar">
-          <div className="workflow-filter-list" aria-label="内容工作流筛选">
-            {WORKFLOW_FILTERS.map(([id, label]) => (
-              <button className={activeWorkflow === id ? 'active' : ''} type="button" key={id} onClick={() => setActiveWorkflow(id)}>
-                {label}<span>{workflowCounts[id] || 0}</span>
-              </button>
-            ))}
+              <div className="brief-selector-list">
+                {briefs.filter((b) => b.status === 'approved').map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    className={`brief-selector-card ${selectedBriefId === String(b.id) ? 'selected' : ''}`}
+                    onClick={() => setSelectedBriefId(String(b.id))}
+                  >
+                    <div className="brief-card-content">
+                      <strong>{b.name || b.title || '未命名简报'}</strong>
+                      <small>{b.summary || b.description || b.goal || '暂无摘要'}</small>
+                      <span className="detail-label">知识系统 · 已审核 Brief</span>
+                    </div>
+                    <span className="status-badge approved">已批准</span>
+                  </button>
+                ))}
+                {briefs.filter((b) => b.status !== 'approved').map((b) => (
+                  <div key={b.id} className="brief-selector-card disabled" aria-disabled="true">
+                    <div className="brief-card-content">
+                      <strong>{b.name || b.title || '未命名简报'}</strong>
+                      <small>{b.summary || b.description || '暂无摘要'}</small>
+                    </div>
+                    <span className={`status-badge ${b.status === 'pending' ? 'pending' : 'draft'}`}>
+                      {b.status === 'pending' ? '待审批' : b.status === 'returned' ? '已退回' : b.status === 'stale' ? '已过期' : b.status || 'draft'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <label className="hide-test-toggle">
-            <input type="checkbox" checked={hideTests} onChange={(event) => setHideTests(event.target.checked)} />
-            隐藏测试内容
-          </label>
+          <ContentCreationModePanel
+            mode="brief"
+            brief={selectedBrief}
+            userId={userId}
+            onNavigate={onNavigate}
+            onDraftCountChange={(delta) => setDraftCount((c) => c + delta)}
+          />
         </div>
-      </details>
+      )}
 
+      {/* 模式 3：创建周期计划 */}
+      {creationMode === 'cycle' && (
+        <div className="creation-mode-content" role="tabpanel" aria-label="创建周期计划">
+          {/* 周期选择器 */}
+          <div className="cycle-duration-selector">
+            <h3>选择内容周期</h3>
+            <p>先选择发布周期天数，然后展开高级工作台进行内容排期和生产。</p>
+            <div className="cycle-duration-options" role="group" aria-label="周期天数">
+              {[
+                [3, '3 天', '短周期，适合快速活动'],
+                [7, '7 天', '标准周期，一周内容计划'],
+                [14, '14 天', '长周期，双周内容排期'],
+                ['custom', '自定义', '自由设置天数（1-30 天）'],
+              ].map(([value, label, hint]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`cycle-duration-option ${cycleDays === value || (value !== 'custom' && cycleDays === Number(value)) ? 'active' : ''}`}
+                  onClick={() => {
+                    if (value === 'custom') {
+                      const num = Number(customCycleDays);
+                      if (Number.isFinite(num) && num >= 1 && num <= 30) {
+                        setCycleDays(num);
+                      }
+                    } else {
+                      setCycleDays(Number(value));
+                    }
+                  }}
+                >
+                  <strong>{label}</strong>
+                  <small>{hint}</small>
+                </button>
+              ))}
+            </div>
+            <details className="collapse-panel cycle-custom-panel">
+              <summary>自定义周期天数</summary>
+              <div className="cycle-custom-row">
+                <label htmlFor="custom-cycle-days">1–30 天</label>
+                <input
+                  id="custom-cycle-days"
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={customCycleDays}
+                  onChange={(event) => setCustomCycleDays(event.target.value)}
+                />
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => {
+                    const num = Number(customCycleDays);
+                    if (Number.isInteger(num) && num >= 1 && num <= 30) setCycleDays(num);
+                  }}
+                >
+                  使用此周期
+                </button>
+              </div>
+            </details>
+            <div className="cycle-frequency-field">
+              <label htmlFor="cycle-frequency">发布频率</label>
+              <select
+                id="cycle-frequency"
+                value={cycleFrequency}
+                onChange={(event) => setCycleFrequency(event.target.value)}
+              >
+                <option value="daily">每天 1 条</option>
+                <option value="weekdays">仅工作日</option>
+                <option value="three_per_week">每周 3 条</option>
+                <option value="custom_manual">自定义排期</option>
+              </select>
+            </div>
+            {cycleDays && (
+              <div className="cycle-confirmation">
+                <p>已选择 <strong>{cycleDays} 天</strong>内容周期 · {
+                  cycleFrequency === 'daily' ? '每天 1 条'
+                    : cycleFrequency === 'weekdays' ? '仅工作日'
+                      : cycleFrequency === 'three_per_week' ? '每周 3 条' : '自定义排期'
+                }。</p>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => setCycleExpanded(true)}
+                >
+                  展开周期计划高级工作台
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 旧周期工作台（折叠） */}
+          {cycleDays && cycleExpanded && (
+            <details className="cycle-legacy-workbench" open>
+              <summary>周期计划高级工作台 · {cycleDays} 天周期</summary>
+              <p className="form-hint" style={{ marginTop: '8px' }}>
+                以下是完整的 Day 1 至 Day {cycleDays} 内容生产工作台，保留原有策略、活动、角色模型和发布流程。
+              </p>
+              <div className="legacy-production-wrapper">
+                {!gateway.loading && !gateway.connected && (
+                  <div className="execution-service-notice">
+                    <div><strong>执行服务暂未连接</strong><span>内容查看、编辑和审核不受影响；生成、导入与发布动作暂不可执行。</span></div>
+                    <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>查看运营指挥中心的执行服务状态</button>
+                  </div>
+                )}
+
+                {selectedSequence && selectedGuide && (
+                  <StrategyDayProgress
+                    campaign={selectedCampaign}
+                    strategy={selectedStrategy}
+                    sequence={cycleSequence}
+                    selected={selectedSequence}
+                    guide={selectedGuide}
+                    strategyOptions={strategyOptions}
+                    selectedStrategyId={selectedStrategyId}
+                    onStrategyChange={(strategyId) => {
+                      setSelectedStrategyId(strategyId);
+                      setSelectedPackageId('');
+                      onNavigate('workspace', '', { strategy_id: strategyId, day: 1 });
+                    }}
+                  />
+                )}
+
+                <div className="day-production-layout">
+                  <aside className="day-plan-panel" aria-label="周期内容计划">
+                    <div className="day-plan-panel-head">
+                      <div><span>策略日程</span><strong>{cycleSequence.length || 0} 天内容计划</strong></div>
+                      <small>按 Day 顺序生产</small>
+                    </div>
+                    <div className="day-plan-list">
+                      {cycleSequence.map((sequenceItem) => (
+                        <button
+                          type="button"
+                          key={sequenceItem.id}
+                          className={`day-plan-item ${String(sequenceItem.id) === String(selectedSequence?.id) ? 'active' : ''} ${sequenceItem.isCompleted ? 'completed' : ''} ${sequenceItem.isBlocked ? 'blocked' : ''}`}
+                          onClick={() => {
+                            setSelectedPackageId(String(sequenceItem.id));
+                            onNavigate('workspace', sequenceItem.id, {
+                              strategy_id: sequenceItem.contentPackage.strategyId || selectedStrategyId,
+                              day: sequenceItem.dayIndex,
+                            });
+                          }}
+                        >
+                          <span className="day-plan-index">{sequenceItem.dayLabel}</span>
+                          <span className="day-plan-copy">
+                            <strong>{sequenceItem.pillar}</strong>
+                            <small>{sequenceItem.platform} · {sequenceItem.productionStep.label}</small>
+                          </span>
+                          <span className={`day-plan-state ${sequenceItem.isCompleted ? 'completed' : sequenceItem.isBlocked ? 'blocked' : 'pending'}`}>
+                            {sequenceItem.isCompleted ? '完成' : sequenceItem.isBlocked ? '阻塞' : '进行中'}
+                          </span>
+                        </button>
+                      ))}
+                      {!cycleSequence.length && <div className="empty-card-inline">当前 {cycleDays} 天周期还没有可用的 Day 内容包。</div>}
+                    </div>
+                  </aside>
+
+                  <main className="current-day-production">
+                    {selectedItem ? (
+                      selectedSequence.dayIndex === 1 ? (
+                        <DayOneContentWorkbench
+                          key={`${selectedItem.sourceKey}-${selectedItem.id}`}
+                          item={selectedItem}
+                          data={data}
+                          assets={assets}
+                          onNavigate={onNavigate}
+                          onRefresh={refreshData}
+                        />
+                      ) : (
+                        <ContentPackageCard
+                          key={`${selectedItem.sourceKey}-${selectedItem.id}`}
+                          item={selectedItem}
+                          data={data}
+                          assets={assets}
+                          gateway={gateway}
+                          userId={userId}
+                          onNavigate={onNavigate}
+                          onRefresh={refreshData}
+                          initialOpen
+                          dayIndex={selectedSequence.dayIndex}
+                          strategyId={selectedStrategyId}
+                        />
+                      )
+                    ) : (
+                      <EmptyState
+                        title={loading ? '正在读取内容包' : '没有匹配的内容包'}
+                        description={`批准策略后，Day 1 到 Day ${cycleDays} 的内容会按所选频率显示在这里。`}
+                      />
+                    )}
+                  </main>
+                </div>
+
+                <details className="content-workspace-secondary">
+                  <summary>筛选与查看其它内容</summary>
+                  <div className="content-workflow-toolbar">
+                    <div className="workflow-filter-list" aria-label="内容工作流筛选">
+                      {WORKFLOW_FILTERS.map(([id, label]) => (
+                        <button className={activeWorkflow === id ? 'active' : ''} type="button" key={id} onClick={() => setActiveWorkflow(id)}>
+                          {label}<span>{workflowCounts[id] || 0}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <label className="hide-test-toggle">
+                      <input type="checkbox" checked={hideTests} onChange={(event) => setHideTests(event.target.checked)} />
+                      隐藏测试内容
+                    </label>
+                  </div>
+                </details>
+              </div>
+            </details>
+          )}
+        </div>
+      )}
     </section>
   );
 }

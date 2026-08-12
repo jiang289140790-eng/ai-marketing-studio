@@ -55,11 +55,12 @@ export const P29_MEDIA_ID_PATTERN = /^m-[0-9a-f]{24}$/;
 export const P29_MAX_MEDIA = 8; // 正常 X 帖子媒体上限；超出声明边界必须硬失败，绝不静默截断
 export const P29_MEDIA_KINDS = Object.freeze(['image', 'video', 'gif']);
 export const P29_HASH_KINDS = Object.freeze(['url', 'content']); // 明确区分 URL 字符串哈希与内容哈希
-export const P29_ENGAGEMENT_KEYS = Object.freeze(['likes', 'retweets', 'replies', 'quotes', 'views', 'bookmarks']);
+export const P29_ENGAGEMENT_KEYS = Object.freeze(['likes', 'retweets', 'replies', 'quotes', 'views', 'bookmarks', 'reddit_score', 'reddit_comments', 'reddit_upvote_ratio']);
 export const P29_MAX_ENGAGEMENT = 1000000000000; // 互动计数上界（1e12）
 export const P29_MAX_MEDIA_BYTES = 536870912; // 512 MiB，与媒体元数据字节边界一致
 export const MODEL_ANALYSIS_SCHEMA_VERSION = 'p29_multimodal_model_v1';
 export const P32_MODEL_ANALYSIS_SCHEMA_VERSION = 'p32_multimodal_model_v2';
+export const P32_TEXT_MODEL_METHOD = 'text_model';
 export const MULTIMODAL_MODEL = 'qwen3.5-omni-flash';
 export const MULTIMODAL_PROVIDER = 'dashscope';
 export const MULTIMODAL_METHOD = 'multimodal_model';
@@ -434,8 +435,10 @@ export function validateSourceMetadata(meta) {
     issue(issues, '来源快照必须是对象或 null。');
     return { valid: false, issues };
   }
-  const unknown = Object.keys(meta).filter((key) => !['author', 'published_at', 'engagement'].includes(key));
+  const unknown = Object.keys(meta).filter((key) => !['author', 'published_at', 'engagement', 'community'].includes(key));
   if (unknown.length) issue(issues, '来源快照包含未知字段。');
+  if (meta.community !== null && meta.community !== undefined
+    && (typeof meta.community !== 'string' || !/^[A-Za-z0-9_]{2,32}$/.test(meta.community))) issue(issues, '来源社区格式无效。');
   const author = meta.author;
   if (author !== null && author !== undefined) {
     if (!isPlainObject(author)) {
@@ -462,7 +465,11 @@ export function validateSourceMetadata(meta) {
       if (engagementUnknown.length) issue(issues, '互动计数包含未知字段。');
       for (const key of P29_ENGAGEMENT_KEYS) {
         const value = engagement[key];
-        if (value !== null && value !== undefined && (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT)) {
+        if (key === 'reddit_upvote_ratio') {
+          if (value !== null && value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1)) issue(issues, 'Reddit upvote ratio 必须为 0..1 或 null。');
+        } else if (key === 'reddit_score') {
+          if (value !== null && value !== undefined && (!Number.isInteger(value) || value < -P29_MAX_ENGAGEMENT || value > P29_MAX_ENGAGEMENT)) issue(issues, 'Reddit score 必须是有界整数或 null。');
+        } else if (value !== null && value !== undefined && (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT)) {
           issue(issues, `互动计数 ${key} 必须是非负有界整数或 null。`);
         }
       }
@@ -618,7 +625,7 @@ export function validateP32ModelAnalysis(extension) {
   if (unknown.length) issue(issues, '模型分析扩展包含未知字段。');
   if (extension.schema_version !== P32_MODEL_ANALYSIS_SCHEMA_VERSION) issue(issues, '模型分析扩展 schema_version 不是精确的 p32_multimodal_model_v2。');
   if (extension.provider !== MULTIMODAL_PROVIDER) issue(issues, '模型提供方不是精确的 dashscope。');
-  if (extension.method !== MULTIMODAL_METHOD) issue(issues, '模型分析方法不是精确的 multimodal_model。');
+  if (![MULTIMODAL_METHOD, P32_TEXT_MODEL_METHOD].includes(extension.method)) issue(issues, 'P32 模型分析方法无效。');
   if (!isNonEmptyString(extension.model) || extension.model.length > 80) issue(issues, '模型标识缺失或超长。');
   if (!isNonEmptyString(extension.executed_at) || extension.executed_at.length > 80 || !ISO8601_PATTERN.test(extension.executed_at)) issue(issues, '模型执行时间必须是 ISO-8601 字符串。');
   const mediaIds = extension.media_ids;
@@ -627,6 +634,10 @@ export function validateP32ModelAnalysis(extension) {
     issue(issues, '媒体绑定列表必须是有界的 m-<24位十六进制> id 数组。');
   } else if (new Set(mediaIds).size !== mediaIds.length) {
     issue(issues, '媒体绑定列表包含重复 id。');
+  }
+  if (Array.isArray(mediaIds)) {
+    if (mediaIds.length === 0 && extension.method !== P32_TEXT_MODEL_METHOD) issue(issues, '无媒体来源必须使用 text_model。');
+    if (mediaIds.length > 0 && extension.method !== MULTIMODAL_METHOD) issue(issues, '带媒体来源必须使用 multimodal_model。');
   }
   const usage = extension.usage;
   if (!isPlainObject(usage) || !Number.isInteger(usage.total_tokens) || usage.total_tokens <= 0) {
@@ -702,8 +713,11 @@ export function validateEvidenceRecord(record) {
     if (Object.keys(provenance).some((key) => !allowed.includes(key))) issue(issues, 'P22 来源 provenance 包含未知字段。');
     if (provenance.schema_version !== P22_EVIDENCE_PROVENANCE_SCHEMA_VERSION) issue(issues, 'P22 来源 schema_version 无效。');
     if (provenance.method !== 'apify_public_collection') issue(issues, 'P22 来源 method 无效。');
-    if (provenance.provider !== 'apify:xquik/x-tweet-scraper') issue(issues, 'P22 来源 provider 无效。');
-    if (provenance.source_platform !== 'x') issue(issues, 'P22 来源平台无效。');
+    if (!['x', 'reddit'].includes(provenance.source_platform)) issue(issues, 'P22 来源平台无效。');
+    const expectedProvider = provenance.source_platform === 'reddit'
+      ? 'apify:endspec/reddit-instant-search-scraper'
+      : 'apify:xquik/x-tweet-scraper';
+    if (provenance.provider !== expectedProvider) issue(issues, 'P22 来源 provider 与平台不一致。');
     if (!isNonEmptyString(provenance.source_id) || provenance.source_id.length > 160) issue(issues, 'P22 来源 ID 缺失或超长。');
     if (provenance.external_id !== null && (!isNonEmptyString(provenance.external_id) || provenance.external_id.length > 160)) issue(issues, 'P22 平台内容 ID 无效。');
     if (provenance.source_url !== record.source_url) issue(issues, 'P22 provenance 来源 URL 与证据不一致。');
@@ -961,12 +975,15 @@ export function validateBrief(brief) {
         issue(issues, 'Brief 多帖综合六项摘要结构无效。');
       }
       const basis = synthesis.engagement_basis;
-      const basisAllowed = ['evidence_id', 'evidence_label', 'views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'total_engagement', 'engagement_rate'];
-      const countKeys = ['views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'total_engagement'];
+      const basisAllowed = ['evidence_id', 'evidence_label', 'views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'reddit_score', 'reddit_comments', 'reddit_upvote_ratio', 'total_engagement', 'engagement_rate'];
+      const countKeys = ['views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'reddit_score', 'reddit_comments', 'total_engagement'];
       if (!Array.isArray(basis) || basis.length !== selected?.length || new Set(basis.map((row) => row?.evidence_id)).size !== selected?.length || !basis.every((row) => {
         if (!isPlainObject(row) || Object.keys(row).some((key) => !basisAllowed.includes(key)) || !selected.includes(row.evidence_id) || !isNonEmptyString(row.evidence_label) || row.evidence_label.length > 60) return false;
-        if (!countKeys.every((key) => row[key] === null || (Number.isInteger(row[key]) && row[key] >= 0 && row[key] <= Number.MAX_SAFE_INTEGER))) return false;
-        return row.engagement_rate === null || (Number.isFinite(row.engagement_rate) && row.engagement_rate >= 0);
+        if (!countKeys.every((key) => row[key] === null || (Number.isInteger(row[key])
+          && row[key] <= Number.MAX_SAFE_INTEGER
+          && (key === 'reddit_score' || key === 'total_engagement' ? row[key] >= -Number.MAX_SAFE_INTEGER : row[key] >= 0)))) return false;
+        return (row.reddit_upvote_ratio === null || row.reddit_upvote_ratio === undefined || (Number.isFinite(row.reddit_upvote_ratio) && row.reddit_upvote_ratio >= 0 && row.reddit_upvote_ratio <= 1))
+          && (row.engagement_rate === null || (Number.isFinite(row.engagement_rate) && row.engagement_rate >= 0));
       })) issue(issues, 'Brief 多帖综合互动依据与选择不一致或指标结构无效。');
       if (!isNonEmptyString(synthesis.generated_at) || synthesis.generated_at.length > 80 || Number.isNaN(Date.parse(synthesis.generated_at))) issue(issues, 'Brief 多帖综合生成时间无效。');
       if (Array.isArray(selected) && Array.isArray(snapshots)) {

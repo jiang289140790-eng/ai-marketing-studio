@@ -28,6 +28,7 @@ import {
   MAX_STRING_LENGTH,
   MODEL_ANALYSIS_SCHEMA_VERSION,
   P32_MODEL_ANALYSIS_SCHEMA_VERSION,
+  P32_TEXT_MODEL_METHOD,
   MULTIMODAL_METHOD,
   MULTIMODAL_MODEL,
   MULTIMODAL_PROVIDER,
@@ -626,13 +627,14 @@ export async function recordAssistedAnalysis(project, evidenceId, modelResult, {
  * 每次重新分析产生新的唯一分析 id，版本号为该证据下的顺序递增版本。
  * v2 多模态模型扩展（p32_multimodal_model_v2）直接持久化，不与 v1 混用。
  */
-export async function recordVersionedReanalysis(project, evidenceId, modelResult, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
+async function recordVersionedModelAnalysis(project, evidenceId, modelResult, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}, allowText = false) {
   assertNotArchived(project);
   const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
   if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要分析的证据不存在。');
   // 验证媒体资产完整性
   const mediaIds = (evidence.media_assets || []).map((asset) => asset.id);
-  if (!mediaIds.length) throw workbenchError('REANALYSIS_MEDIA_MISSING', '证据缺少已验证的媒体资产，无法进行 Qwen 多模态重新分析。');
+  if (!mediaIds.length && !allowText) throw workbenchError('REANALYSIS_MEDIA_MISSING', '证据缺少已验证的媒体资产，无法进行 Qwen 多模态重新分析。');
+  if (mediaIds.length && allowText) throw workbenchError('REANALYSIS_MEDIA_PRESENT', '带媒体证据必须走多模态重新分析。');
   if (!modelResult || typeof modelResult !== 'object') throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析结果缺失，已拒绝。');
   const sourceId = String(modelResult.source_id || '');
   if (!sourceId || sourceId !== String(evidence.provenance?.source_id || '')) {
@@ -675,7 +677,7 @@ export async function recordVersionedReanalysis(project, evidenceId, modelResult
     schema_version: P32_MODEL_ANALYSIS_SCHEMA_VERSION,
     provider: MULTIMODAL_PROVIDER,
     model,
-    method: MULTIMODAL_METHOD,
+    method: mediaIds.length > 0 ? MULTIMODAL_METHOD : P32_TEXT_MODEL_METHOD,
     executed_at: String(modelResult.executed_at || timestamp).slice(0, 80),
     media_ids: mediaIds,
     result: clonePlain(result),
@@ -697,7 +699,9 @@ export async function recordVersionedReanalysis(project, evidenceId, modelResult
       generated_by: ANALYSIS_ENGINE_VERSION,
       model,
       executed_at: timestamp,
-      statement: `本分析包含 P32 版本化多模态 Qwen 重新分析（p32_multimodal_model_v2，第 ${nextVersion} 版）；模型结果按来源与逐媒体精确绑定。`,
+      statement: mediaIds.length > 0
+        ? `本分析包含 P32 版本化多模态 Qwen 重新分析（p32_multimodal_model_v2，第 ${nextVersion} 版）；模型结果按来源与逐媒体精确绑定。`
+        : `本分析包含 P32 版本化文本 Qwen 重新分析（p32_multimodal_model_v2，第 ${nextVersion} 版）；模型结果按来源身份精确绑定，媒体绑定为空。`,
     },
     model_analysis: extension,
     result: {
@@ -718,6 +722,14 @@ export async function recordVersionedReanalysis(project, evidenceId, modelResult
   // 追加，不覆写
   next.analyses = [...next.analyses, record];
   return bumpProject(next, { now, hasher });
+}
+
+export function recordVersionedReanalysis(project, evidenceId, modelResult, options) {
+  return recordVersionedModelAnalysis(project, evidenceId, modelResult, options, false);
+}
+
+export function recordVersionedTextReanalysis(project, evidenceId, modelResult, options) {
+  return recordVersionedModelAnalysis(project, evidenceId, modelResult, options, true);
 }
 
 /**
@@ -888,7 +900,7 @@ export function validateSynthesisSelection(project, selectedEvidenceIds) {
 }
 
 const P32_ENGAGEMENT_TOTAL_KEYS = ['likes', 'retweets', 'replies', 'quotes', 'bookmarks'];
-const P32_ENGAGEMENT_DISPLAY_KEYS = ['views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks'];
+const P32_ENGAGEMENT_DISPLAY_KEYS = ['views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'reddit_score', 'reddit_comments', 'reddit_upvote_ratio'];
 
 function synthesisRowFor(binding) {
   const { evidence, analysis, extension } = binding;
@@ -907,8 +919,19 @@ function synthesisRowFor(binding) {
     }
   }
   const views = Number.isInteger(engagement?.views) ? engagement.views : null;
+  const redditScore = Number.isInteger(engagement?.reddit_score) ? engagement.reddit_score : null;
+  const redditComments = Number.isInteger(engagement?.reddit_comments) ? engagement.reddit_comments : null;
+  if (!anyPresent && redditScore !== null && redditComments !== null) {
+    total = redditScore + redditComments;
+    anyPresent = true;
+  }
+  present.reddit_score = redditScore;
+  present.reddit_comments = redditComments;
+  present.reddit_upvote_ratio = Number.isFinite(engagement?.reddit_upvote_ratio) ? engagement.reddit_upvote_ratio : null;
   const totalEngagement = anyPresent ? total : null;
-  const rate = views !== null && views > 0 && totalEngagement !== null ? totalEngagement / views : null;
+  const rate = views !== null && views > 0 && totalEngagement !== null
+    ? totalEngagement / views
+    : present.reddit_upvote_ratio;
   const mediaRows = Array.isArray(result.media_analysis) ? result.media_analysis : [];
   const styles = mediaRows
     .map((row) => (isV2 ? String(row?.style_pattern || '') : String(row?.visual_content || '')))

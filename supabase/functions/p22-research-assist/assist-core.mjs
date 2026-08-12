@@ -36,7 +36,7 @@ export const P22_LIMITS = Object.freeze({
 export const P29_MAX_MEDIA = 8;
 export const P29_MEDIA_KINDS = Object.freeze(['image', 'video', 'gif']);
 export const P29_HASH_KINDS = Object.freeze(['url', 'content']);
-export const P29_ENGAGEMENT_KEYS = Object.freeze(['likes', 'retweets', 'replies', 'quotes', 'views', 'bookmarks']);
+export const P29_ENGAGEMENT_KEYS = Object.freeze(['likes', 'retweets', 'replies', 'quotes', 'views', 'bookmarks', 'reddit_score', 'reddit_comments', 'reddit_upvote_ratio']);
 export const P29_MAX_ENGAGEMENT = 1000000000000;
 export const P29_MAX_MEDIA_BYTES = 12 * 1024 * 1024;
 export const P29_MEDIA_ID_PATTERN = /^m-[0-9a-f]{24}$/;
@@ -63,6 +63,7 @@ const ACTION_FIELDS = Object.freeze({
   collect: new Set(['action', 'topic', 'count']),
   collect_url: new Set(['action', 'url']),
   search: new Set(['action', 'keyword', 'count', 'sort']),
+  search_reddit: new Set(['action', 'keyword', 'count', 'sort', 'subreddit', 'time_filter']),
   analyze: new Set(['action', 'items']),
 });
 const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof', 'source_metadata', 'media_assets']);
@@ -190,6 +191,32 @@ export function parseP22Request(raw) {
     }
     return { action, keyword, count, sort };
   }
+  if (action === 'search_reddit') {
+    const keyword = text(input.keyword, 'keyword', P22_LIMITS.search_keyword_max).replace(/\s+/gu, ' ');
+    if (isUrlLikeKeyword(keyword)) {
+      throw new P22Error('KEYWORD_IS_URL', 'Reddit 主题搜索不接受帖子 URL。', 400, { field: 'keyword' });
+    }
+    const count = Number(input.count ?? P22_LIMITS.search_default);
+    if (!Number.isInteger(count) || count < 1 || count > P22_LIMITS.search_max) {
+      throw new P22Error('COUNT_OUT_OF_RANGE', `搜索数量必须为 1–${P22_LIMITS.search_max}。`, 400, { field: 'count' });
+    }
+    const sort = input.sort === undefined ? 'relevance' : String(input.sort).trim().toLowerCase();
+    if (!['relevance', 'hot', 'new', 'top', 'comments'].includes(sort)) {
+      throw new P22Error('SORT_INTENT_UNSUPPORTED', 'Reddit 排序只支持 relevance/hot/new/top/comments。', 400, { field: 'sort' });
+    }
+    const timeFilter = input.time_filter === undefined ? 'all' : String(input.time_filter).trim().toLowerCase();
+    if (!['hour', 'day', 'week', 'month', 'year', 'all'].includes(timeFilter)) {
+      throw new P22Error('TIME_FILTER_UNSUPPORTED', 'Reddit 时间范围无效。', 400, { field: 'time_filter' });
+    }
+    let subreddit = null;
+    if (input.subreddit !== undefined && input.subreddit !== null && String(input.subreddit).trim()) {
+      subreddit = text(input.subreddit, 'subreddit', 64).replace(/^r\//i, '');
+      if (!/^[A-Za-z0-9_]{2,32}$/.test(subreddit)) {
+        throw new P22Error('SUBREDDIT_INVALID', 'subreddit 只能包含字母、数字和下划线。', 400, { field: 'subreddit' });
+      }
+    }
+    return { action, keyword, count, sort, subreddit, time_filter: timeFilter };
+  }
   if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > P22_LIMITS.analyze) {
     throw new P22Error('ITEM_COUNT_OUT_OF_RANGE', '分析项目必须为 1–2 条。', 400, { field: 'items' });
   }
@@ -211,7 +238,7 @@ export function parseP22Request(raw) {
     }
     const normalized = {
       id: text(item.id, `items[${index}].id`, 160),
-      source_url: normalizeXUrl(text(item.source_url, `items[${index}].source_url`, 1000)),
+      source_url: normalizeSourceUrl(text(item.source_url, `items[${index}].source_url`, 1000), String(item.platform || '').toLowerCase()),
       label: text(item.label, `items[${index}].label`, 200),
       platform: text(item.platform, `items[${index}].platform`, 40).toLowerCase(),
       content_text: text(item.content_text, `items[${index}].content_text`, P22_LIMITS.persist_text),
@@ -223,7 +250,7 @@ export function parseP22Request(raw) {
       media_assets: mediaAssets === undefined ? undefined : mediaAssets.map((asset) => clonePlain(asset)),
     };
     if (!/^[a-f0-9]{64}$/i.test(normalized.content_sha256)) throw new P22Error('INVALID_HASH', '内容哈希无效。', 400, { field: `items[${index}].content_sha256` });
-    if (normalized.platform !== 'x') throw new P22Error('UNSUPPORTED_PLATFORM', '当前只支持 X 公开来源。', 400, { field: `items[${index}].platform` });
+    if (!['x', 'reddit'].includes(normalized.platform)) throw new P22Error('UNSUPPORTED_PLATFORM', '当前只支持 X 或 Reddit 公开来源。', 400, { field: `items[${index}].platform` });
     if (ids.has(normalized.id)) throw new P22Error('DUPLICATE_ITEM', '分析项目 ID 重复。', 400, { field: `items[${index}].id` });
     ids.add(normalized.id);
     return normalized;
@@ -242,6 +269,28 @@ export function normalizeXUrl(value) {
   url.search = '';
   url.hash = '';
   return url.toString().replace(/\/$/, '');
+}
+
+export function normalizeRedditUrl(value) {
+  let url;
+  try { url = new globalThis.URL(String(value), 'https://www.reddit.com'); } catch { throw new P22Error('INVALID_SOURCE_URL', 'Reddit 来源 URL 无效。', 400, { field: 'source_url' }); }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (host !== 'reddit.com' && !host.endsWith('.reddit.com')) {
+    throw new P22Error('UNSUPPORTED_SOURCE', '当前只接受 Reddit 公开帖子来源。', 400, { field: 'source_url' });
+  }
+  if (!/^\/r\/[^/]+\/comments\/[^/]+\//i.test(url.pathname)) {
+    throw new P22Error('INVALID_POST_URL', 'Reddit 来源必须指向具体帖子 permalink。', 422, { field: 'source_url' });
+  }
+  url.protocol = 'https:';
+  url.hostname = 'www.reddit.com';
+  url.port = '';
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
+export function normalizeSourceUrl(value, platform) {
+  return platform === 'reddit' ? normalizeRedditUrl(value) : normalizeXUrl(value);
 }
 
 /**
@@ -318,6 +367,22 @@ function boundedEngagementCount(value, field) {
   if (value === undefined || value === null || value === '') return null;
   if (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT) {
     throw new P22Error('SOURCE_METADATA_INVALID', `${field} 必须是非负有界整数。`, 422, { field });
+  }
+  return value;
+}
+
+function boundedRedditScore(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (!Number.isInteger(value) || value < -P29_MAX_ENGAGEMENT || value > P29_MAX_ENGAGEMENT) {
+    throw new P22Error('SOURCE_METADATA_INVALID', `${field} 必须是有界整数。`, 422, { field });
+  }
+  return value;
+}
+
+function boundedRedditRatio(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new P22Error('SOURCE_METADATA_INVALID', `${field} 必须是 0..1 的有界数值。`, 422, { field });
   }
   return value;
 }
@@ -796,7 +861,9 @@ export function validateSourceMetadataShape(meta) {
   if (meta === null) return true;
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return false;
   const keys = Object.keys(meta);
-  if (keys.some((key) => !['author', 'published_at', 'engagement'].includes(key))) return false;
+  if (keys.some((key) => !['author', 'published_at', 'engagement', 'community'].includes(key))) return false;
+  if (meta.community !== null && meta.community !== undefined
+    && (typeof meta.community !== 'string' || !/^[A-Za-z0-9_]{2,32}$/.test(meta.community))) return false;
   const author = meta.author;
   if (author !== null && author !== undefined) {
     if (!author || typeof author !== 'object' || Array.isArray(author)) return false;
@@ -814,7 +881,11 @@ export function validateSourceMetadataShape(meta) {
     if (Object.keys(engagement).some((key) => !P29_ENGAGEMENT_KEYS.includes(key))) return false;
     for (const key of P29_ENGAGEMENT_KEYS) {
       const value = engagement[key];
-      if (value !== null && value !== undefined && (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT)) return false;
+      if (key === 'reddit_upvote_ratio') {
+        if (value !== null && value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1)) return false;
+      } else if (key === 'reddit_score') {
+        if (value !== null && value !== undefined && (!Number.isInteger(value) || value < -P29_MAX_ENGAGEMENT || value > P29_MAX_ENGAGEMENT)) return false;
+      } else if (value !== null && value !== undefined && (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT)) return false;
     }
   }
   return true;
@@ -1032,6 +1103,89 @@ export async function normalizeCollectedItems(rawItems, context, digest, options
   return output;
 }
 
+function redditQueryObject(value) {
+  if (typeof value === 'string') {
+    try { return object(JSON.parse(value)); } catch { return null; }
+  }
+  return object(value);
+}
+
+function exactRedditQuery(actual, expected) {
+  if (!actual) return false;
+  const allowed = ['search', 'subreddit', 'sortType', 'timeFilter', 'limit'];
+  if (Object.keys(actual).some((key) => !allowed.includes(key))) return false;
+  return actual.search === expected.search
+    && (actual.subreddit ?? null) === (expected.subreddit ?? null)
+    && actual.sortType === expected.sortType
+    && actual.timeFilter === expected.timeFilter
+    && Number(actual.limit) === Number(expected.limit);
+}
+
+/** Normalize the fixed endspec Reddit search Actor output into proof-bound P22 evidence. */
+export async function normalizeRedditSearchItems(rawItems, context, digest, query) {
+  if (!Array.isArray(rawItems)) throw new P22Error('PROVIDER_RESPONSE_INVALID', 'Reddit 搜索响应不是数组。', 502);
+  const expected = {
+    search: String(query?.search || ''),
+    subreddit: query?.subreddit || null,
+    sortType: String(query?.sortType || ''),
+    timeFilter: String(query?.timeFilter || ''),
+    limit: Number(query?.limit),
+  };
+  const providerErrorRow = rawItems.find((row) => object(row)?.status === 'error');
+  if (providerErrorRow) {
+    throw new P22Error('REDDIT_NO_RESULTS', 'Reddit 没有返回可验证的搜索结果。', 422, { field: 'items' });
+  }
+  const output = [];
+  for (const [index, rawValue] of rawItems.entries()) {
+    const raw = object(rawValue);
+    if (!raw) throw new P22Error('PROVIDER_RESPONSE_INVALID', 'Reddit 搜索结果形状无效。', 502, { field: `items[${index}]` });
+    if (!exactRedditQuery(redditQueryObject(raw._query), expected)) {
+      throw new P22Error('REDDIT_QUERY_MISMATCH', 'Reddit 搜索结果未绑定本次服务端查询。', 502, { field: `items[${index}]._query` });
+    }
+    const externalId = text(String(raw.id ?? ''), `items[${index}].id`, 160);
+    const title = text(String(raw.title ?? ''), `items[${index}].title`, 500);
+    const body = raw.text == null ? '' : String(raw.text).trim();
+    if (body.length > P22_LIMITS.persist_text) throw new P22Error('PROVIDER_RESPONSE_INVALID', 'Reddit 正文超过上限。', 502, { field: `items[${index}].text` });
+    const contentText = `${title}${body ? `\n\n${body}` : ''}`.slice(0, P22_LIMITS.persist_text);
+    const sourceUrl = normalizeRedditUrl(text(String(raw.permalink ?? ''), `items[${index}].permalink`, 1000));
+    const author = text(String(raw.author ?? ''), `items[${index}].author`, 80);
+    const community = text(String(raw.subreddit ?? ''), `items[${index}].subreddit`, 32);
+    if (!/^[A-Za-z0-9_]{2,32}$/.test(community)) throw new P22Error('SOURCE_METADATA_INVALID', 'subreddit 格式无效。', 502, { field: `items[${index}].subreddit` });
+    const score = boundedRedditScore(raw.score, `items[${index}].score`);
+    const comments = boundedEngagementCount(raw.num_comments, `items[${index}].num_comments`);
+    const upvoteRatio = boundedRedditRatio(raw.upvote_ratio, `items[${index}].upvote_ratio`);
+    const publishedAt = normalizePublishedAt(raw.created_utc);
+    const contentSha256 = await digest(contentText);
+    output.push({
+      id: `p22-reddit-${contentSha256.slice(0, 24)}`,
+      source_url: sourceUrl,
+      label: title.slice(0, 200),
+      platform: 'reddit',
+      content_text: contentText,
+      external_id: externalId,
+      content_sha256: contentSha256,
+      source_metadata: {
+        author: { name: author, handle: author, user_id: null },
+        published_at: publishedAt,
+        community,
+        engagement: { reddit_score: score, reddit_comments: comments, reddit_upvote_ratio: upvoteRatio },
+      },
+      media_assets: [],
+      provenance: {
+        schema_version: 'p22_collected_source_v1',
+        provider: context.provider,
+        run_id: context.run_id,
+        collected_at: context.collected_at,
+        usage_total_usd: context.usage_total_usd,
+        budget_reservation_id: context.budget_reservation_id,
+      },
+    });
+  }
+  if (!output.length) throw new P22Error('REDDIT_NO_RESULTS', 'Reddit 没有返回可验证的搜索结果。', 422, { field: 'items' });
+  assertUniqueSearchResults(output);
+  return output;
+}
+
 /**
  * Exact-URL collection is a one-post contract. Validate the provider's raw
  * response before normalization can remove duplicate rows.
@@ -1101,6 +1255,15 @@ export async function searchBatchId({ keyword, count, sort, runId, collectedAt, 
   return `p32-search-${String(digestValue).slice(0, 24)}`;
 }
 
+export async function redditSearchBatchId({ keyword, subreddit, count, sort, timeFilter, runId, collectedAt, items }, digest) {
+  const identities = (Array.isArray(items) ? items : [])
+    .map((item) => `${String(item?.source_url || '')}|${item?.external_id == null ? '' : String(item.external_id)}|${String(item?.content_sha256 || '')}`)
+    .join(';');
+  const value = `p32-reddit-search-batch\0${String(keyword || '')}\0${String(subreddit || '')}\0${String(count ?? '')}\0${String(sort || '')}\0${String(timeFilter || '')}\0${String(runId || '')}\0${String(collectedAt || '')}\0${identities}`;
+  const digestValue = await digest(value);
+  return `p32-reddit-search-${String(digestValue).slice(0, 24)}`;
+}
+
 /** Bind a provider response to exactly one requested post identity. */
 export function bindExactCollectedPost(items, requested) {
   if (!Array.isArray(items)) throw new P22Error('PROVIDER_RESPONSE_INVALID', '采集响应不是数组。', 502);
@@ -1124,9 +1287,9 @@ export function buildQwenPrompt(items) {
   const sources = items.map((item, index) => ({ index: index + 1, id: item.id, url: item.source_url, text: item.content_text }));
   return [
     '你是只读内容研究助手。只分析给定公开来源，不补写事实。',
-    '返回严格 JSON：{"analyses":[{"source_id":"...","summary":"...","signals":["..."],"risks":["..."]}]}。',
-    '每条摘要不超过 300 字；signals/risks 各最多 5 项；不得生成营销成品、路由或发布指令。',
-    'Each summary must be non-empty and at most 300 Unicode characters. signals and risks must be arrays with at most 5 non-empty items, each at most 240 Unicode characters.',
+    '返回严格 JSON：{"analyses":[{"source_id":"...","text_expression":"...","hook":"...","copy_pattern":"...","target_audience":"...","audience_need_emotion":"...","virality_drivers":["..."],"reusable_methods":["..."],"rewrite_suggestions":["..."],"signals":["..."],"risks":["..."]}]}。',
+    '分析标题/文案钩子、受众、传播原因、可复用内容公式、风险和改写建议；不得生成营销成品、路由或发布指令。',
+    'Each text field must be non-empty and at most 500 Unicode characters (legacy summary remains bounded to 300 Unicode characters). Every list must contain at most 5 non-empty items, each at most 240 Unicode characters.',
     JSON.stringify(sources),
   ].join('\n');
 }
@@ -1146,11 +1309,32 @@ export function parseQwenAnalyses(payload, items) {
       if (!Array.isArray(value) || value.length > 5) throw new P22Error('MODEL_RESPONSE_INVALID', `${field} 无效。`, 502, { field });
       return value.map((entry) => boundedModelText(entry, field, 240));
     };
+    // Backward-compatible read path for already-issued P22 text responses. New
+    // requests use the richer P32 text-analysis contract below.
+    if (row.text_expression === undefined) {
+      return {
+        source_id: sourceId,
+        source_url: byId.get(sourceId).source_url,
+        content_sha256: byId.get(sourceId).content_sha256,
+        summary: boundedModelText(row.summary, 'summary', 300),
+        signals: boundedList(row.signals, 'signals'),
+        risks: boundedList(row.risks, 'risks'),
+        method: 'qwen_assisted_review',
+      };
+    }
     return {
       source_id: sourceId,
       source_url: byId.get(sourceId).source_url,
       content_sha256: byId.get(sourceId).content_sha256,
-      summary: boundedModelText(row.summary, 'summary', 300),
+      text_expression: boundedModelText(row.text_expression, 'text_expression', 500),
+      hook: boundedModelText(row.hook, 'hook', 500),
+      copy_pattern: boundedModelText(row.copy_pattern, 'copy_pattern', 500),
+      target_audience: boundedModelText(row.target_audience, 'target_audience', 500),
+      audience_need_emotion: boundedModelText(row.audience_need_emotion, 'audience_need_emotion', 500),
+      media_analysis: [],
+      virality_drivers: boundedList(row.virality_drivers, 'virality_drivers'),
+      reusable_methods: boundedList(row.reusable_methods, 'reusable_methods'),
+      rewrite_suggestions: boundedList(row.rewrite_suggestions, 'rewrite_suggestions'),
       signals: boundedList(row.signals, 'signals'),
       risks: boundedList(row.risks, 'risks'),
       method: 'qwen_assisted_review',
@@ -1428,6 +1612,7 @@ function verifyRunIdentity(payload, runId, datasetId, stage) {
  * @param {string} options.actorId Apify Actor 标识（xquik/x-tweet-scraper）。
  * @param {string} [options.topic] 关键词搜索主题（与 sourceUrl 二选一）。
  * @param {string} [options.sourceUrl] 单帖读取 URL（与 topic 二选一）。
+ * @param {object} [options.actorInput] 服务端构造并按白名单验证的固定 Actor 输入。
  * @param {number} [options.count] 请求的 Actor 输入条数。
  * @param {number} [options.maxItems] 请求的 Actor 输入上限（P32-B 搜索 20 / 采集 5）。
  * @param {number} [options.hardMax] 服务端硬上限（搜索 20 / 采集 5；两者分离，绝不放宽普通采集）。
@@ -1447,6 +1632,7 @@ export async function runApifyCollectionSequence({
   actorId,
   topic,
   sourceUrl,
+  actorInput,
   count,
   maxItems = P22_LIMITS.collect,
   /** P32-B：搜索允许最多 P22_LIMITS.search_max 条；其余调用保持 P22_LIMITS.collect。 */
@@ -1470,7 +1656,20 @@ export async function runApifyCollectionSequence({
   const boundedCharge = Math.max(0, Math.min(Number(maxTotalChargeUsd) || P22_LIMITS.apify_reservation_cny / P22_CNY_PER_USD, P22_LIMITS.apify_reservation_cny / P22_CNY_PER_USD));
   const actorPath = String(actorId || '').trim().replace('/', '~');
   if (typeof token !== 'string' || !token) throw providerError('APIFY_UPSTREAM_REJECTED', 'start', { reason: 'not_configured' });
-  if ((!boundedTopic && !boundedSourceUrl) || (boundedTopic && boundedSourceUrl) || !PROVIDER_ACTOR_PATTERN.test(actorPath)) {
+  const fixedActorInput = actorInput === undefined ? null : object(actorInput);
+  const fixedInputValid = !fixedActorInput || (
+    Object.keys(fixedActorInput).every((key) => ['search', 'subreddit', 'sortType', 'timeFilter', 'limit'].includes(key))
+    && typeof fixedActorInput.search === 'string' && fixedActorInput.search.trim().length > 0 && fixedActorInput.search.length <= P22_LIMITS.search_keyword_max
+    && (fixedActorInput.subreddit === undefined || /^[A-Za-z0-9_]{2,32}$/.test(fixedActorInput.subreddit))
+    && ['relevance', 'hot', 'new', 'top', 'comments'].includes(fixedActorInput.sortType)
+    && ['hour', 'day', 'week', 'month', 'year', 'all'].includes(fixedActorInput.timeFilter)
+    && Number.isInteger(fixedActorInput.limit) && fixedActorInput.limit === boundedCount && fixedActorInput.limit <= P22_LIMITS.search_max
+  );
+  if ((!fixedActorInput && !boundedTopic && !boundedSourceUrl)
+    || (!fixedActorInput && boundedTopic && boundedSourceUrl)
+    || (fixedActorInput && (boundedTopic || boundedSourceUrl))
+    || !fixedInputValid
+    || !PROVIDER_ACTOR_PATTERN.test(actorPath)) {
     throw providerError('APIFY_RUN_ID_INVALID', 'start', { reason: 'malformed' });
   }
 
@@ -1481,7 +1680,7 @@ export async function runApifyCollectionSequence({
   // canonical /i/web/status URL through startUrls is less deterministic across
   // Actor router versions and can yield a diagnostic row instead of the tweet.
   const urlBody = JSON.stringify({ maxItems: 1, tweetIds: [boundedSourceId] });
-  const actorBody = boundedSourceUrl ? urlBody : topicBody;
+  const actorBody = fixedActorInput ? JSON.stringify(fixedActorInput) : (boundedSourceUrl ? urlBody : topicBody);
   const startResponse = await providerFetch(fetchImpl, startUrl, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

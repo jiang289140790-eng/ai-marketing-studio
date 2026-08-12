@@ -28,6 +28,7 @@ import {
   generateSynthesisInsight,
   recordAssistedAnalysis,
   recordVersionedReanalysis,
+  recordVersionedTextReanalysis,
   removeEvidence,
   reviewBrief,
   runAnalysis,
@@ -593,19 +594,16 @@ export function ResearchWorkspacePage() {
     try {
       const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
       if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要重新分析的证据不存在。');
-      if (!evidence.media_assets || evidence.media_assets.length === 0) {
-        throw workbenchError('REANALYSIS_MEDIA_MISSING', '证据没有已验证的媒体资产，无法进行多模态重新分析。');
-      }
       const item = {
         id: evidence.provenance?.source_id || evidence.id,
         source_url: evidence.source_url,
         label: evidence.label,
-        platform: evidence.platform,
+        platform: evidence.provenance?.source_platform || 'x',
         content_text: evidence.content_text,
         external_id: evidence.provenance?.external_id || null,
         content_sha256: evidence.media_metadata?.sha256 || evidence.provenance?.content_sha256 || '',
         source_metadata: evidence.source_metadata,
-        media_assets: evidence.media_assets,
+        media_assets: evidence.media_assets || [],
         provenance: {
           schema_version: 'p22_collected_source_v1',
           provider: evidence.provenance?.provider || '',
@@ -619,7 +617,8 @@ export function ResearchWorkspacePage() {
       const response = await assistClient.analyze([item]);
       const modelResult = (response.analyses || []).find((row) => row.source_id === evidence.provenance?.source_id);
       if (!modelResult) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '模型分析没有精确绑定来源身份，已停止。');
-      const afterAnalysis = await recordVersionedReanalysis(project, evidenceId, {
+      const recordAnalysis = evidence.media_assets?.length ? recordVersionedReanalysis : recordVersionedTextReanalysis;
+      const afterAnalysis = await recordAnalysis(project, evidenceId, {
         source_id: modelResult.source_id,
         model: modelResult.model,
         result: {

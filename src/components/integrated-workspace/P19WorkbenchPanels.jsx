@@ -20,10 +20,13 @@ import {
   P32_SEARCH_COUNT_DEFAULT,
   P32_SEARCH_SORT_KEYS,
   P32_SEARCH_SORT_LABELS,
+  P32_REDDIT_SORT_KEYS,
+  P32_REDDIT_SORT_LABELS,
   computeEngagementMetrics,
   findConflictingEvidence,
   looksLikePublicUrl,
   rankSearchResults,
+  rankRedditSearchResults,
 } from '../../services/p22-research-assist.js';
 
 const STATE_TEXT = {
@@ -727,6 +730,9 @@ function engagementSummary(engagement) {
   for (const [key, label] of [['likes', '赞'], ['retweets', '转'], ['replies', '评']]) {
     if (Number.isInteger(engagement[key])) parts.push(`${label}${engagement[key]}`);
   }
+  if (Number.isInteger(engagement.reddit_score)) parts.push(`Score ${engagement.reddit_score}`);
+  if (Number.isInteger(engagement.reddit_comments)) parts.push(`评论 ${engagement.reddit_comments}`);
+  if (Number.isFinite(engagement.reddit_upvote_ratio)) parts.push(`赞成率 ${(engagement.reddit_upvote_ratio * 100).toFixed(1)}%`);
   return parts.length > 0 ? parts.join(' ') : null;
 }
 
@@ -770,7 +776,7 @@ export function P32EvidenceLibrary({ project, onReanalyze, onMakeCard, busy }) {
           const sourceMeta = record.source_metadata || {};
           const author = sourceMeta.author || {};
           const hasMedia = Array.isArray(record.media_assets) && record.media_assets.length > 0;
-          const canReanalyze = hasMedia && record.provenance?.manual === false;
+          const canReanalyze = record.provenance?.manual === false;
 
           return (
             <li className="p32-evidence-card" key={record.id}>
@@ -795,6 +801,7 @@ export function P32EvidenceLibrary({ project, onReanalyze, onMakeCard, busy }) {
                 {author.name && <span>作者：{boundedText(author.name, 30)}</span>}
                 {author.handle && <span>@{boundedText(author.handle, 20)}</span>}
                 {sourceMeta.published_at && <span>发布时间：{formatPublishedShort(sourceMeta.published_at)}</span>}
+                {sourceMeta.community && <span>社区：r/{boundedText(sourceMeta.community, 32)}</span>}
                 {hasMedia && <span>媒体 {record.media_assets.length} 项</span>}
               </div>
               {sourceMeta.engagement && (
@@ -1280,6 +1287,10 @@ export function P32HotTopicSearchPanel({
   importError,
 }) {
   const [keyword, setKeyword] = useState('');
+  const [platform, setPlatform] = useState('x');
+  const [subreddit, setSubreddit] = useState('');
+  const [redditSort, setRedditSort] = useState('relevance');
+  const [timeFilter, setTimeFilter] = useState('all');
   const [count, setCount] = useState(P32_SEARCH_COUNT_DEFAULT);
   const [sortKey, setSortKey] = useState('views');
   const [working, setWorking] = useState(false);
@@ -1287,7 +1298,13 @@ export function P32HotTopicSearchPanel({
   const [error, setError] = useState('');
   const batch = searchState?.batch || null;
   const selectedIds = Array.isArray(searchState?.selectedIds) ? searchState.selectedIds : [];
-  const results = batch ? rankSearchResults(batch.items || [], sortKey) : [];
+  const isReddit = (batch?.platform || platform) === 'reddit';
+  const displaySortKeys = isReddit ? P32_REDDIT_SORT_KEYS : P32_SEARCH_SORT_KEYS;
+  const displaySortLabels = isReddit ? P32_REDDIT_SORT_LABELS : P32_SEARCH_SORT_LABELS;
+  const effectiveSortKey = displaySortKeys.includes(sortKey) ? sortKey : displaySortKeys[0];
+  const results = batch
+    ? (isReddit ? rankRedditSearchResults(batch.items || [], effectiveSortKey) : rankSearchResults(batch.items || [], effectiveSortKey))
+    : [];
   const selectedCount = selectedIds.length;
   // 页面级 P32 导入错误镜像：项目版本变化会确定性重挂载本面板（清空本地
   // error 状态），因此在线部分失败的结构化错误必须由页面持有并在此镜像，
@@ -1299,6 +1316,9 @@ export function P32HotTopicSearchPanel({
 
   const runSearch = async () => {
     const cleanKeyword = keyword.trim();
+    // 每次实际触发搜索都先让旧批次与选择失效；任何本地校验或上游失败都不得
+    // 继续显示、选择或导入旧结果。空关键词时按钮本身禁用，Enter 仍安全清空。
+    onSearchStateChange(null);
     if (!cleanKeyword) {
       setError('请输入搜索关键词。');
       return;
@@ -1311,7 +1331,9 @@ export function P32HotTopicSearchPanel({
     setError('');
     setMessage('');
     try {
-      const response = await client.search(cleanKeyword, count, 'latest');
+      const response = platform === 'reddit'
+        ? await client.searchReddit(cleanKeyword, { count, sort: redditSort, subreddit: subreddit.trim() || null, timeFilter })
+        : await client.search(cleanKeyword, count, 'latest');
       const items = Array.isArray(response.items) ? response.items : [];
       if (!response.search_batch_id || !items.length) {
         throw new Error('搜索未返回可导入的结果（无来源证明）。');
@@ -1320,9 +1342,12 @@ export function P32HotTopicSearchPanel({
         batch: {
           batch_id: response.search_batch_id,
           project_id: project.id,
+          platform: String(response.platform || platform),
           keyword: String(response.keyword || cleanKeyword),
           count: Number(response.count) || count,
           sort_intent: String(response.sort_intent || 'latest'),
+          time_filter: response.time_filter || null,
+          subreddit: response.subreddit || null,
           collected_at: String(response.collected_at || ''),
           cost: response.cost || null,
           items,
@@ -1373,17 +1398,24 @@ export function P32HotTopicSearchPanel({
     <div className="p32-search" aria-label="热门主题搜索">
       <div className="p32-search-head">
         <div>
-          <span className="p22-kicker">P32-B · 热门主题搜索</span>
+          <span className="p22-kicker">P32-B/D · 跨平台热门主题搜索</span>
           <h4>热门主题搜索（批量导入当前项目）</h4>
         </div>
-        <span className="p32-search-mode-note">与「智能找资料」的单帖 URL 读取区分：本面板只按关键词批量搜索 X 公共帖子</span>
+        <span className="p32-search-mode-note">与「智能找资料」的单帖 URL 读取区分：本面板按关键词批量搜索 X 或 Reddit</span>
       </div>
       <p className="p19-panel-note">
-        输入关键词搜索 X 公共帖子（默认 10、最多 20 条，来源带服务端证明）；按浏览量/点赞/转发/总互动/互动率
+        输入关键词搜索 X 或 Reddit 公共帖子（默认 10、最多 20 条，来源带服务端证明）；按真实平台指标
         确定性排序后，勾选 1–5 条导入当前项目 Evidence（导入前整批验证，在线失败后权威重载并幂等续传，绝不谎报全成功）。
         不自动批准 Brief、不自动路由、不生成、不发布。
       </p>
       <div className="p32-search-query-row">
+        <label className="p32-search-count">
+          <span>平台</span>
+          <select value={platform} onChange={(event) => { const value = event.target.value; setPlatform(value); setSortKey(value === 'reddit' ? 'reddit_score' : 'views'); onSearchStateChange(null); }} aria-label="搜索平台">
+            <option value="x">X</option>
+            <option value="reddit">Reddit</option>
+          </select>
+        </label>
         <input
           value={keyword}
           maxLength={120}
@@ -1398,6 +1430,13 @@ export function P32HotTopicSearchPanel({
             {P32_SEARCH_COUNT_OPTIONS.map((option) => <option value={option} key={option}>{option}</option>)}
           </select>
         </label>
+        {platform === 'reddit' && (
+          <>
+            <input value={subreddit} maxLength={32} onChange={(event) => setSubreddit(event.target.value.replace(/^r\//i, ''))} placeholder="subreddit（可选）" aria-label="限定 subreddit" />
+            <label className="p32-search-count"><span>平台排序</span><select value={redditSort} onChange={(event) => setRedditSort(event.target.value)} aria-label="Reddit 平台排序"><option value="relevance">相关</option><option value="hot">热门</option><option value="new">最新</option><option value="top">高分</option><option value="comments">评论</option></select></label>
+            <label className="p32-search-count"><span>时间</span><select value={timeFilter} onChange={(event) => setTimeFilter(event.target.value)} aria-label="Reddit 时间范围"><option value="all">不限</option><option value="hour">一小时</option><option value="day">一天</option><option value="week">一周</option><option value="month">一月</option><option value="year">一年</option></select></label>
+          </>
+        )}
         <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || !capabilitiesReady || !keyword.trim()} onClick={runSearch}>
           {working ? '搜索中…' : '搜索公开帖子'}
         </button>
@@ -1409,7 +1448,7 @@ export function P32HotTopicSearchPanel({
       {message && <p className="p22-message" role="status">{message}</p>}
       {batch && (
         <div className="p32-search-batch-line">
-          批次 {batch.batch_id} · 关键词「{boundedText(batch.keyword, 40)}」 · 采集 {formatPublishedShortUtc(batch.collected_at)}
+          批次 {batch.batch_id} · {batch.platform === 'reddit' ? `Reddit${batch.subreddit ? ` / r/${batch.subreddit}` : ''}` : 'X'} · 关键词「{boundedText(batch.keyword, 40)}」 · 采集 {formatPublishedShortUtc(batch.collected_at)}
           {batch.cost ? ` · 费用记录 ¥${batch.cost.actual_cny ?? batch.cost.recorded_cny ?? 0}（预留 ¥${batch.cost.recorded_cny ?? 0}）` : ''}
         </div>
       )}
@@ -1417,9 +1456,9 @@ export function P32HotTopicSearchPanel({
         <div className="p32-search-results">
           <div className="p32-search-toolbar">
             <label className="p32-search-sort">
-              <span>排序（本地展示口径，不是 X 官方热门榜）</span>
-              <select value={sortKey} onChange={(event) => setSortKey(event.target.value)} aria-label="结果排序方式">
-                {P32_SEARCH_SORT_KEYS.map((key) => <option value={key} key={key}>{P32_SEARCH_SORT_LABELS[key]}</option>)}
+              <span>{isReddit ? '排序（使用真实 Reddit 快照指标）' : '排序（本地展示口径，不是 X 官方热门榜）'}</span>
+              <select value={effectiveSortKey} onChange={(event) => setSortKey(event.target.value)} aria-label="结果排序方式">
+                {displaySortKeys.map((key) => <option value={key} key={key}>{displaySortLabels[key]}</option>)}
               </select>
             </label>
             <span className="p32-search-selection">已选 {selectedCount} / {P32_BATCH_IMPORT_MAX}</span>
@@ -1434,9 +1473,9 @@ export function P32HotTopicSearchPanel({
             </button>
           </div>
           <p className="p32-search-sort-note">
-            排序口径：按所选指标降序；缺失指标排在可用指标之后（显示「—」，绝不伪造为 0）；
-            主指标相同时按发布时间（较新在前）与完整来源身份稳定排序。总互动 = 点赞 + 转发 + 回复 + 引用 + 收藏；
-            互动率 = 总互动 ÷ 浏览量（浏览量非正或总互动不可用时显示「—」）。
+            {isReddit
+              ? 'Reddit 排序是本地确定性展示口径，不是 Reddit 官方排行榜；score 是采集时刻的净得分快照，不是投票总数。总互动 = score + 评论数；互动速率使用 Actor 明确返回的赞成率，未返回时显示「—」，绝不伪造为 0。'
+              : '排序口径：按所选真实指标降序；缺失指标排在可用指标之后（显示「—」，绝不伪造为 0）；主指标相同时按发布时间（较新在前）与完整来源身份稳定排序。总互动 = 点赞 + 转发 + 回复 + 引用 + 收藏；互动率 = 总互动 ÷ 浏览量（浏览量非正或总互动不可用时显示「—」）。'}
           </p>
           <ul className="p32-search-list">
             {results.map((item) => {
@@ -1449,7 +1488,15 @@ export function P32HotTopicSearchPanel({
               const isSelected = selectedIds.includes(item.id);
               const engagementRaw = metadata.engagement || {};
               const rawCount = (key) => (Number.isInteger(engagementRaw[key]) ? engagementRaw[key] : null);
-              const metricCells = [
+              const redditTotal = Number.isInteger(engagementRaw.reddit_score) && Number.isInteger(engagementRaw.reddit_comments)
+                ? engagementRaw.reddit_score + engagementRaw.reddit_comments
+                : null;
+              const metricCells = isReddit ? [
+                ['reddit_score', 'Score', Number.isInteger(engagementRaw.reddit_score) ? engagementRaw.reddit_score : null],
+                ['reddit_comments', '评论', Number.isInteger(engagementRaw.reddit_comments) ? engagementRaw.reddit_comments : null],
+                ['reddit_total_engagement', '总互动', redditTotal],
+                ['reddit_interaction_rate', '互动速率', Number.isFinite(engagementRaw.reddit_upvote_ratio) ? engagementRaw.reddit_upvote_ratio : null],
+              ] : [
                 ['views', '浏览', metrics.views],
                 ['likes', '点赞', metrics.likes],
                 ['retweets', '转发', metrics.retweets],
@@ -1474,7 +1521,7 @@ export function P32HotTopicSearchPanel({
                     <span className="p32-search-author">
                       {author.name || author.handle || '未知作者'}{author.handle ? ` @${boundedText(author.handle, 20)}` : ''}
                     </span>
-                    <span className="p32-search-meta">X · {formatPublishedShortUtc(metadata.published_at)}</span>
+                    <span className="p32-search-meta">{isReddit ? `Reddit${metadata.community ? ` · r/${metadata.community}` : ''}` : 'X'} · {formatPublishedShortUtc(metadata.published_at)}</span>
                     {alreadyImported && (
                       <span className="p32-search-imported" title={conflicting.id}>已导入 ✓</span>
                     )}
@@ -1488,7 +1535,7 @@ export function P32HotTopicSearchPanel({
                     {metricCells.map(([key, label, value]) => (
                       <span className="p32-search-metric" data-metric={key} key={key}>
                         <b>{label}</b>
-                        <i>{key === 'rate' ? formatSearchRate(value) : formatSearchCount(value)}</i>
+                        <i>{key === 'rate' || key === 'reddit_interaction_rate' ? formatSearchRate(value) : formatSearchCount(value)}</i>
                       </span>
                     ))}
                   </div>

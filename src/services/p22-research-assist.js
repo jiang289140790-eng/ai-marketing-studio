@@ -12,6 +12,7 @@ export const P32_SEARCH_COUNT_MAX = 20;
 export const P32_BATCH_IMPORT_MIN = 1;
 export const P32_BATCH_IMPORT_MAX = 5;
 export const P32_SEARCH_BATCH_ID_PATTERN = /^p32-search-[0-9a-f]{24}$/;
+export const P32_REDDIT_SEARCH_BATCH_ID_PATTERN = /^p32-reddit-search-[0-9a-f]{24}$/;
 
 /**
  * P32-B 确定性排序口径（纯展示层，绝不是 X 官方热门榜）：
@@ -27,6 +28,13 @@ export const P32_SEARCH_SORT_LABELS = Object.freeze({
   retweets: '转发',
   total_engagement: '总互动',
   engagement_rate: '互动率',
+});
+export const P32_REDDIT_SORT_KEYS = Object.freeze(['reddit_score', 'reddit_comments', 'reddit_total_engagement', 'reddit_interaction_rate']);
+export const P32_REDDIT_SORT_LABELS = Object.freeze({
+  reddit_score: 'Reddit score',
+  reddit_comments: '评论数',
+  reddit_total_engagement: '总互动（score + 评论）',
+  reddit_interaction_rate: '互动速率（赞成率，如可用）',
 });
 
 /** 只保留服务端有界诊断中的白名单字段；令牌、正文、URL 等一律丢弃。 */
@@ -79,6 +87,9 @@ export function createP22ResearchAssistClient({ client = supabase } = {}) {
     collect: (topic, count = 5) => invoke({ action: 'collect', topic, count }),
     collectUrl: (url) => invoke({ action: 'collect_url', url }),
     search: (keyword, count = P32_SEARCH_COUNT_DEFAULT, sort = 'latest') => invoke({ action: 'search', keyword, count, sort }),
+    searchReddit: (keyword, { count = P32_SEARCH_COUNT_DEFAULT, sort = 'relevance', subreddit = null, timeFilter = 'all' } = {}) => invoke({
+      action: 'search_reddit', keyword, count, sort, subreddit, time_filter: timeFilter,
+    }),
     analyze: (items) => invoke({ action: 'analyze', items }),
   });
 }
@@ -155,6 +166,33 @@ export function rankSearchResults(items, sortKey) {
   return rows.sort((a, b) => byMetric(a, b) || byTieBreak(a, b)).map((row) => row.item);
 }
 
+export function rankRedditSearchResults(items, sortKey) {
+  const key = String(sortKey || 'reddit_score');
+  if (!P32_REDDIT_SORT_KEYS.includes(key)) throw safeError('P32_SORT_UNSUPPORTED', '不支持的 Reddit 排序方式。');
+  return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const redditMetric = (item) => {
+      const engagement = item?.source_metadata?.engagement || {};
+      if (key === 'reddit_total_engagement') {
+        return Number.isInteger(engagement.reddit_score) && Number.isInteger(engagement.reddit_comments)
+          ? engagement.reddit_score + engagement.reddit_comments
+          : null;
+      }
+      if (key === 'reddit_interaction_rate') return engagement.reddit_upvote_ratio;
+      return engagement[key];
+    };
+    const lv = redditMetric(left);
+    const rv = redditMetric(right);
+    const leftAvailable = Number.isFinite(lv);
+    const rightAvailable = Number.isFinite(rv);
+    if (leftAvailable !== rightAvailable) return leftAvailable ? -1 : 1;
+    if (leftAvailable && rv !== lv) return rv - lv;
+    const lp = String(left?.source_metadata?.published_at || '');
+    const rp = String(right?.source_metadata?.published_at || '');
+    if (lp !== rp) return lp < rp ? 1 : -1;
+    return searchItemIdentity(left).localeCompare(searchItemIdentity(right));
+  });
+}
+
 export function isP22Duplicate(project, item) {
   const sourceUrl = String(item?.source_url || '').trim();
   const hash = String(item?.content_sha256 || '').trim();
@@ -180,7 +218,7 @@ export function p22ItemFromEvidence(evidence) {
     id: provenance.source_id,
     source_url: evidence.source_url,
     label: evidence.label,
-    platform: 'x',
+    platform: provenance.source_platform || 'x',
     content_text: evidence.content_text,
     external_id: provenance.external_id ?? null,
     content_sha256: provenance.content_sha256,
@@ -215,7 +253,12 @@ export async function toP19EvidenceInput(item) {
   const collectedAt = requireText(provenance.collected_at, '采集时间', 80);
   const runId = requireText(provenance.run_id, '采集运行 ID', 200);
   const provider = requireText(provenance.provider, '采集提供方', 120);
-  if (provider !== 'apify:xquik/x-tweet-scraper') throw safeError('P22_EVIDENCE_INVALID', '采集提供方不符合 P22 合同。');
+  const sourcePlatform = String(item?.platform || '').toLowerCase();
+  const providerByPlatform = {
+    x: 'apify:xquik/x-tweet-scraper',
+    reddit: 'apify:endspec/reddit-instant-search-scraper',
+  };
+  if (!providerByPlatform[sourcePlatform] || provider !== providerByPlatform[sourcePlatform]) throw safeError('P22_EVIDENCE_INVALID', '采集提供方与来源平台不符合 P22/P32 合同。');
   const usageTotalUsd = Number(provenance.usage_total_usd);
   if (!Number.isFinite(usageTotalUsd) || usageTotalUsd < 0 || usageTotalUsd > 10) {
     throw safeError('P22_EVIDENCE_INVALID', '采集费用证据无效。');
@@ -238,8 +281,8 @@ export async function toP19EvidenceInput(item) {
   }
   return {
     source_url: sourceUrl,
-    label: String(item.label || 'X 公开内容').slice(0, 200),
-    platform: 'X · Apify',
+    label: String(item.label || (sourcePlatform === 'reddit' ? 'Reddit 公开内容' : 'X 公开内容')).slice(0, 200),
+    platform: sourcePlatform === 'reddit' ? 'Reddit · Apify' : 'X · Apify',
     content_text: contentText,
     recorded_at: collectedAt,
     provenance: {
@@ -247,7 +290,7 @@ export async function toP19EvidenceInput(item) {
       manual: false,
       method: 'apify_public_collection',
       provider,
-      source_platform: 'x',
+      source_platform: sourcePlatform,
       source_id: sourceId,
       external_id: externalId,
       source_url: sourceUrl,
@@ -257,10 +300,10 @@ export async function toP19EvidenceInput(item) {
       budget_reservation_id: requireText(provenance.budget_reservation_id, '预算预留 ID', 80),
       content_sha256: declaredHash,
       collection_proof: collectionProof,
-      statement: '该证据由 P22 通过 Apify 从 X 公开来源采集，并由服务端来源证明绑定正文、身份与采集运行。',
+      statement: `该证据由 P22/P32 通过 Apify 从 ${sourcePlatform === 'reddit' ? 'Reddit' : 'X'} 公开来源采集，并由服务端来源证明绑定正文、身份与采集运行。`,
     },
     media_metadata: {
-      filename: `p22-x-${String(externalId || sourceId).replace(/[^a-z0-9_-]/gi, '_').slice(0, 160)}.txt`,
+      filename: `p22-${sourcePlatform}-${String(externalId || sourceId).replace(/[^a-z0-9_-]/gi, '_').slice(0, 150)}.txt`,
       mime_type: 'text/plain; charset=utf-8',
       byte_size: new globalThis.TextEncoder().encode(contentText).byteLength,
       last_modified: collectedAt,
@@ -304,7 +347,7 @@ export function evidenceMatchesSearchIdentity(record, item) {
   return (url && rowUrl === url) || (hash && rowHash === hash) || (extId && rowExtId === extId);
 }
 
-function requireXSourceUrl(value) {
+function requireSearchSourceUrl(value, platform) {
   const text = String(value ?? '').trim();
   let url;
   try {
@@ -312,8 +355,12 @@ function requireXSourceUrl(value) {
   } catch {
     throw safeError('P32_ITEM_INVALID', '结果来源 URL 无效，已拒绝导入。');
   }
-  if (!['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(url.hostname.toLowerCase())) {
-    throw safeError('P32_ITEM_INVALID', '结果来源不是 X 公开链接，已拒绝导入。');
+  const host = url.hostname.toLowerCase();
+  const valid = platform === 'reddit'
+    ? (host === 'reddit.com' || host === 'www.reddit.com' || host.endsWith('.reddit.com'))
+    : ['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(host);
+  if (!valid) {
+    throw safeError('P32_ITEM_INVALID', '结果来源平台与 URL 不一致，已拒绝导入。');
   }
   return text;
 }
@@ -337,7 +384,9 @@ export async function validateSearchResultItem(item, { nowMs = Date.now() } = {}
   if (await sha256Hex(contentText) !== declaredHash) {
     throw safeError('P32_HASH_MISMATCH', '结果正文与 SHA-256 不一致（内容被篡改），已拒绝导入。');
   }
-  requireXSourceUrl(item.source_url);
+  const platform = String(item.platform || '').toLowerCase();
+  if (!['x', 'reddit'].includes(platform)) throw safeError('P32_ITEM_INVALID', '结果平台无效，已拒绝导入。');
+  requireSearchSourceUrl(item.source_url, platform);
   if (typeof item.id !== 'string' || !item.id.trim() || item.id.length > 160) {
     throw safeError('P32_ITEM_INVALID', '结果缺少有效来源 ID，已拒绝导入。');
   }
@@ -374,9 +423,12 @@ export async function recomputeSearchBatchId(batch) {
   const identities = batch.items
     .map((item) => `${String(item?.source_url || '')}|${item?.external_id == null ? '' : String(item.external_id)}|${String(item?.content_sha256 || '')}`)
     .join(';');
-  const value = `p32-search-batch\0${String(batch.keyword ?? '')}\0${String(batch.count ?? '')}\0${String(batch.sort_intent || '')}\0${String(runId)}\0${String(batch.collected_at || '')}\0${identities}`;
+  const isReddit = batch.platform === 'reddit';
+  const value = isReddit
+    ? `p32-reddit-search-batch\0${String(batch.keyword ?? '')}\0${String(batch.subreddit || '')}\0${String(batch.count ?? '')}\0${String(batch.sort_intent || '')}\0${String(batch.time_filter || '')}\0${String(runId)}\0${String(batch.collected_at || '')}\0${identities}`
+    : `p32-search-batch\0${String(batch.keyword ?? '')}\0${String(batch.count ?? '')}\0${String(batch.sort_intent || '')}\0${String(runId)}\0${String(batch.collected_at || '')}\0${identities}`;
   const digestValue = await sha256Hex(value);
-  return `p32-search-${digestValue.slice(0, 24)}`;
+  return `${isReddit ? 'p32-reddit-search' : 'p32-search'}-${digestValue.slice(0, 24)}`;
 }
 
 /**
@@ -388,7 +440,8 @@ export async function validateSearchBatch({ project, batch, selectedIds, nowMs =
   if (!batch || typeof batch !== 'object' || Array.isArray(batch)) {
     throw safeError('P32_BATCH_INVALID', '搜索结果批次缺失或无效，请重新搜索。');
   }
-  if (typeof batch.batch_id !== 'string' || !P32_SEARCH_BATCH_ID_PATTERN.test(batch.batch_id)) {
+  const expectedPattern = batch.platform === 'reddit' ? P32_REDDIT_SEARCH_BATCH_ID_PATTERN : P32_SEARCH_BATCH_ID_PATTERN;
+  if (typeof batch.batch_id !== 'string' || !expectedPattern.test(batch.batch_id)) {
     throw safeError('P32_BATCH_INVALID', '搜索结果批次身份无效，请重新搜索。');
   }
   // 批次身份必须与内容重算一致：乱序结果、篡改正文哈希、错改关键词/数量/

@@ -1,12 +1,13 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 import {
   P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, P22_SCHEMA_VERSION, P22Error, buildMultimodalQwenContent, buildQwenPrompt,
-  assertUniqueRawCollectedPost, assertUniqueSearchResults, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, parseQwenMultimodalAnalyses, publicError,
-  runApifyCollectionSequence, searchBatchId, verifyAnalyzeSources,
+  assertUniqueRawCollectedPost, assertUniqueSearchResults, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, normalizeRedditSearchItems, parseP22Request, parseQwenAnalyses, parseQwenMultimodalAnalyses, publicError,
+  redditSearchBatchId, runApifyCollectionSequence, searchBatchId, verifyAnalyzeSources,
 } from './assist-core.mjs';
 
 const ORIGINS = new Set(['https://jiang289140790-eng.github.io','http://localhost:3000','http://127.0.0.1:3000','http://127.0.0.1:5173','http://127.0.0.1:5174']);
 const ACTOR = 'xquik/x-tweet-scraper';
+const REDDIT_ACTOR = 'endspec/reddit-instant-search-scraper';
 
 function headers(request: Request) {
   const origin = request.headers.get('origin') || '';
@@ -61,13 +62,21 @@ async function collect(db, userId: string, input, proofSecret: string) {
     // 数量（1–20）与排序意图（latest）都由服务端绑定，绝不接受客户端任意 Actor 输入。
     // P22_LIMITS 在 JS 模块中推断为字面量类型（search_max: 20 / collect: 5），
     // 此处显式声明 number 保持类型边界：collect 仍上限 5、search 仍上限 20。
-    const isSearch=input.action==='search';
+    const isSearch=input.action==='search'||input.action==='search_reddit';
+    const isRedditSearch=input.action==='search_reddit';
     const hardMax: number=isSearch?P22_LIMITS.search_max:P22_LIMITS.collect;
     const count: number=isSearch?input.count:(input.action==='collect'?input.count:1);
     const sequence=await runApifyCollectionSequence({
-      token, actorId:ACTOR,
-      topic:isSearch?input.keyword:(input.action==='collect'?input.topic:undefined),
+      token, actorId:isRedditSearch?REDDIT_ACTOR:ACTOR,
+      topic:isSearch&&!isRedditSearch?input.keyword:(input.action==='collect'?input.topic:undefined),
       sourceUrl:input.action==='collect_url'?input.url:undefined,
+      actorInput:isRedditSearch?{
+        search:input.keyword,
+        ...(input.subreddit?{subreddit:input.subreddit}:{}),
+        sortType:input.sort,
+        timeFilter:input.time_filter,
+        limit:input.count,
+      }:undefined,
       count,
       maxItems:hardMax,
       hardMax,
@@ -76,7 +85,16 @@ async function collect(db, userId: string, input, proofSecret: string) {
     });
     if (input.action==='collect_url') assertUniqueRawCollectedPost(sequence.items,{canonical_url:input.url,external_id:input.external_id});
     const collectedAt=new Date().toISOString();
-    const normalizedAll=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:collectedAt,usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:costRecord.reservation_id},sha256,{fetchImpl:globalThis.fetch,maxItems:hardMax});
+    const provenance={provider:`apify:${isRedditSearch?REDDIT_ACTOR:ACTOR}`,run_id:sequence.runId,collected_at:collectedAt,usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:costRecord.reservation_id};
+    const normalizedAll=isRedditSearch
+      ? await normalizeRedditSearchItems(sequence.items,provenance,sha256,{
+        search:input.keyword,
+        subreddit:input.subreddit,
+        sortType:input.sort,
+        timeFilter:input.time_filter,
+        limit:input.count,
+      })
+      : await normalizeCollectedItems(sequence.items,provenance,sha256,{fetchImpl:globalThis.fetch,maxItems:hardMax});
     const normalized=input.action==='collect_url'
       ? bindExactCollectedPost(normalizedAll,{canonical_url:input.url,external_id:input.external_id})
       : normalizedAll;
@@ -85,8 +103,10 @@ async function collect(db, userId: string, input, proofSecret: string) {
     const items=await Promise.all(normalized.map(async (item)=>({...item,collection_proof:await issueCollectionProof(proofSecret,userId,item)})));
     const cost={recorded_cny:P22_LIMITS.apify_reservation_cny,actual_cny:Number((sequence.usageTotalUsd*P22_CNY_PER_USD).toFixed(4)),tracking:costRecord};
     if (isSearch) {
-      const batchId=await searchBatchId({keyword:input.keyword,count:input.count,sort:input.sort,runId:sequence.runId,collectedAt,items:normalized},sha256);
-      return {items,cost,search_batch_id:batchId,keyword:input.keyword,count:input.count,sort_intent:input.sort,collected_at:collectedAt};
+      const batchId=isRedditSearch
+        ? await redditSearchBatchId({keyword:input.keyword,subreddit:input.subreddit,count:input.count,sort:input.sort,timeFilter:input.time_filter,runId:sequence.runId,collectedAt,items:normalized},sha256)
+        : await searchBatchId({keyword:input.keyword,count:input.count,sort:input.sort,runId:sequence.runId,collectedAt,items:normalized},sha256);
+      return {items,cost,search_batch_id:batchId,platform:isRedditSearch?'reddit':'x',keyword:input.keyword,count:input.count,sort_intent:input.sort,time_filter:isRedditSearch?input.time_filter:null,subreddit:isRedditSearch?input.subreddit:null,collected_at:collectedAt};
     }
     return {items,cost};
   } catch (error) { if (error?.name==='AbortError') throw new P22Error('APIFY_TIMEOUT','采集超时。',504); throw error; }
@@ -137,7 +157,7 @@ Deno.serve(async (request)=>{
     const capabilities={apify_configured:configured('APIFY_TOKEN'),qwen_configured:configured('DASHSCOPE_API_KEY')};
     if(input.action==='status') return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,role,capabilities,limits:P22_LIMITS,cost_tracking:await costStatus(db),execution_flags:P22_EXECUTION_FLAGS});
     if(!['operator','admin'].includes(role)) throw new P22Error('OPERATOR_REQUIRED','智能研究仅向 operator 开放。',403);
-    const result=(input.action==='collect'||input.action==='collect_url'||input.action==='search')
+    const result=(input.action==='collect'||input.action==='collect_url'||input.action==='search'||input.action==='search_reddit')
       ? await collect(db,userId,input,proofSecret)
       : await analyze(db,userId,input.items,proofSecret);
     return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,action:input.action,...result,execution_flags:P22_EXECUTION_FLAGS});

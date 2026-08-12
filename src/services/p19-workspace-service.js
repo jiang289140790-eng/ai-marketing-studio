@@ -279,11 +279,30 @@ export async function addEvidence(project, input, { now = () => new Date().toISO
   if (p22Source && await sha256Hex(record.content_text) !== provenance.content_sha256) {
     throw workbenchError('EVIDENCE_HASH_MISMATCH', 'P22 证据正文与来源 SHA-256 不一致，已拒绝。');
   }
-  const id = await stableId('ev-', { project_id: project.id, source_url: record.source_url, recorded_at: timestamp });
+  const identity = p22Source
+    ? {
+      project_id: project.id,
+      provider: provenance.provider,
+      source_url: record.source_url,
+      external_id: provenance.external_id || null,
+      content_sha256: provenance.content_sha256,
+    }
+    : { project_id: project.id, source_url: record.source_url, recorded_at: timestamp };
+  const id = await stableId('ev-', identity);
   record.id = id;
   const verdict = validateEvidenceRecord(record);
   if (!verdict.valid) throw workbenchError('EVIDENCE_INVALID', verdict.issues[0] || '证据记录未通过契约校验。');
   record.fingerprint = await hasher(record);
+  const existing = (project.evidence || []).find((item) => item.id === id);
+  if (existing) {
+    if (!p22Source
+      || existing.source_url !== record.source_url
+      || existing.provenance?.content_sha256 !== provenance.content_sha256
+      || existing.provenance?.external_id !== provenance.external_id) {
+      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '相同证据身份绑定了不同来源内容，已失败关闭。');
+    }
+    return clonePlain(project);
+  }
   const next = clonePlain(project);
   next.evidence = [...next.evidence, record];
   return bumpProject(next, { now, hasher });

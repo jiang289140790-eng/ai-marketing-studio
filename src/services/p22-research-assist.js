@@ -50,16 +50,60 @@ export function createP22ResearchAssistClient({ client = supabase } = {}) {
     }
     return data;
   }
-  return Object.freeze({ status: () => invoke({ action: 'status' }), collect: (topic, count = 5) => invoke({ action: 'collect', topic, count }), analyze: (items) => invoke({ action: 'analyze', items }) });
+  return Object.freeze({
+    status: () => invoke({ action: 'status' }),
+    collect: (topic, count = 5) => invoke({ action: 'collect', topic, count }),
+    collectUrl: (url) => invoke({ action: 'collect_url', url }),
+    analyze: (items) => invoke({ action: 'analyze', items }),
+  });
+}
+
+export function looksLikePublicUrl(value) {
+  const text = String(value || '').trim();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return true;
+  return /^(?:www\.)?(?:x\.com|twitter\.com|instagram\.com|tiktok\.com|youtube\.com|youtu\.be|reddit\.com|linkedin\.com)\//i.test(text)
+    || /^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\//i.test(text);
 }
 
 export function isP22Duplicate(project, item) {
   const sourceUrl = String(item?.source_url || '').trim();
   const hash = String(item?.content_sha256 || '').trim();
   return (project?.evidence || []).some((row) => {
-    if (String(row.source_url || '').trim() === sourceUrl) return true;
-    return hash && String(row.media_metadata?.sha256 || '').trim() === hash;
+    return String(row.source_url || '').trim() === sourceUrl
+      && hash
+      && String(row.media_metadata?.sha256 || row.provenance?.content_sha256 || '').trim() === hash;
   });
+}
+
+export function findP22Evidence(project, item) {
+  const sourceUrl = String(item?.source_url || '').trim();
+  const hash = String(item?.content_sha256 || '').trim();
+  return (project?.evidence || []).find((row) => String(row.source_url || '').trim() === sourceUrl
+    && hash
+    && String(row.media_metadata?.sha256 || row.provenance?.content_sha256 || '').trim() === hash) || null;
+}
+
+export function p22ItemFromEvidence(evidence) {
+  const provenance = evidence?.provenance;
+  if (provenance?.schema_version !== 'p22_apify_evidence_provenance_v1' || provenance.manual !== false) return null;
+  return {
+    id: provenance.source_id,
+    source_url: evidence.source_url,
+    label: evidence.label,
+    platform: 'x',
+    content_text: evidence.content_text,
+    external_id: provenance.external_id ?? null,
+    content_sha256: provenance.content_sha256,
+    collection_proof: provenance.collection_proof,
+    provenance: {
+      schema_version: 'p22_collected_source_v1',
+      provider: provenance.provider,
+      run_id: provenance.run_id,
+      collected_at: provenance.collected_at,
+      usage_total_usd: provenance.usage_total_usd,
+      budget_reservation_id: provenance.budget_reservation_id,
+    },
+  };
 }
 
 function requireText(value, field, max) {

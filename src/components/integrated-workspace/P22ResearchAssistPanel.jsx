@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createP22ResearchAssistClient, isP22Duplicate } from '../../services/p22-research-assist.js';
+import { createP22ResearchAssistClient, findP22Evidence, isP22Duplicate, looksLikePublicUrl, p22ItemFromEvidence } from '../../services/p22-research-assist.js';
 
 export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
   const client = useMemo(() => createP22ResearchAssistClient(), []);
   const [status, setStatus] = useState(null);
   const [topic, setTopic] = useState(project.topic || '');
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState(() => (project.evidence || []).map(p22ItemFromEvidence).filter(Boolean));
   const [selected, setSelected] = useState([]);
   const [analyses, setAnalyses] = useState([]);
   const [working, setWorking] = useState(false);
@@ -14,12 +14,12 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
 
   useEffect(() => {
     setTopic(project.topic || '');
-    setItems([]);
+    setItems((project.evidence || []).map(p22ItemFromEvidence).filter(Boolean));
     setSelected([]);
     setAnalyses([]);
     setMessage('');
     setError('');
-  }, [project.id, project.topic]);
+  }, [project.id, project.topic, project.evidence]);
 
   useEffect(() => {
     let mounted = true;
@@ -28,6 +28,7 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
   }, [client]);
 
   const analysisById = useMemo(() => new Map(analyses.map((row) => [row.source_id, row])), [analyses]);
+  const isUrlQuery = looksLikePublicUrl(topic);
   const canCollect = status?.role && ['operator', 'admin'].includes(status.role) && status.capabilities?.apify_configured;
   const canAnalyze = selected.length > 0 && selected.length <= 2 && status?.capabilities?.qwen_configured;
   const act = async (callback) => {
@@ -36,7 +37,9 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
     finally { setWorking(false); }
   };
   const collect = () => act(async () => {
-    const response = await client.collect(topic.trim(), 5);
+    const response = isUrlQuery
+      ? await client.collectUrl(topic.trim())
+      : await client.collect(topic.trim(), 5);
     setItems(response.items || []); setSelected([]); setAnalyses([]);
     setMessage(`已找到 ${response.items?.length || 0} 条公开来源；尚未保存。Apify 本次预留 ¥${response.cost?.reserved_cny ?? 0}。`);
   });
@@ -48,9 +51,8 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
   });
   const toggle = (id) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : current.length < 2 ? [...current, id] : current);
   const save = async (item) => act(async () => {
-    if (isP22Duplicate(project, item)) throw new Error('该 URL 或内容哈希已存在，未重复保存。');
     const ok = await onSaveEvidence(item);
-    if (ok) setMessage('来源已通过现有 P20 命令边界保存。需要进入知识链时，请运行卡片上的确定性分析。');
+    if (ok) setMessage('已完成保存：Evidence、确定性分析和 Knowledge Card 均已绑定到当前项目。');
   });
 
   return (
@@ -71,8 +73,8 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
       )}
       {status && !['operator', 'admin'].includes(status.role) && <p className="p22-missing-note">当前账号为只读角色；智能采集和分析需要 operator。</p>}
       <div className="p22-query-row">
-        <input value={topic} maxLength={240} onChange={(event) => setTopic(event.target.value)} placeholder="输入研究主题" aria-label="研究主题" />
-        <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || !canCollect || !topic.trim()} onClick={collect}>查找公开来源</button>
+        <input value={topic} maxLength={1000} onChange={(event) => setTopic(event.target.value)} placeholder="粘贴 X 帖子链接，或输入研究主题" aria-label="帖子链接或研究主题" />
+        <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || !canCollect || !topic.trim()} onClick={collect}>{isUrlQuery ? '读取这条帖子' : '查找公开来源'}</button>
       </div>
       {status && !status.capabilities.apify_configured && <p className="p22-missing-note">真实采集暂不可用：staging 尚未配置 APIFY_TOKEN。</p>}
       {error && <p className="p19-error-text" role="alert">{error}</p>}
@@ -82,14 +84,18 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
           <div className="p22-result-toolbar"><b>来源预览（未保存）</b><button className="p19-btn p19-btn-ghost" type="button" disabled={working || !canAnalyze} onClick={analyze}>分析已选（{selected.length}/2）</button></div>
           {!status?.capabilities?.qwen_configured && <p className="p22-missing-note">Qwen 尚未配置；仍可审核并保存公开来源。</p>}
           {items.map((item) => {
-            const duplicate = isP22Duplicate(project, item); const analysis = analysisById.get(item.id);
+            const duplicate = isP22Duplicate(project, item);
+            const existingEvidence = findP22Evidence(project, item);
+            const existingAnalysis = existingEvidence && (project.analyses || []).find((row) => row.evidence_id === existingEvidence.id);
+            const pipelineComplete = Boolean(existingAnalysis && (project.knowledge_cards || []).some((row) => row.analysis_id === existingAnalysis.id));
+            const analysis = analysisById.get(item.id);
             return <article className="p22-source-card" key={item.id}>
               <label className="p22-select"><input type="checkbox" checked={selected.includes(item.id)} disabled={working || (!selected.includes(item.id) && selected.length >= 2)} onChange={() => toggle(item.id)} />选择分析</label>
               <strong>{item.label}</strong><a href={item.source_url} target="_blank" rel="noreferrer">查看原始来源</a>
               <p>{item.content_text.slice(0, 360)}</p>
               <small>内容 SHA-256：{item.content_sha256.slice(0, 16)}… · Run：{String(item.provenance?.run_id || '未提供').slice(0, 48)}</small>
               {analysis && <div className="p22-analysis-preview"><b>Qwen 辅助分析（仅预览）</b><p>{analysis.summary}</p><small>信号：{analysis.signals.join('；') || '无'} · 风险：{analysis.risks.join('；') || '无'}</small></div>}
-              <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || duplicate} onClick={() => save(item)}>{duplicate ? '已存在' : '保存此来源'}</button>
+              <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || pipelineComplete} onClick={() => save(item)}>{pipelineComplete ? '已进入知识库' : duplicate ? '继续生成知识卡' : '保存并生成知识卡'}</button>
             </article>;
           })}
         </div>

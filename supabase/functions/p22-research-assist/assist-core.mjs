@@ -23,6 +23,7 @@ export const P22_CNY_PER_USD = 7.5;
 const ACTION_FIELDS = Object.freeze({
   status: new Set(['action']),
   collect: new Set(['action', 'topic', 'count']),
+  collect_url: new Set(['action', 'url']),
   analyze: new Set(['action', 'items']),
 });
 const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof']);
@@ -114,6 +115,13 @@ export function parseP22Request(raw) {
     }
     return { action, topic: text(input.topic, 'topic', 240), count };
   }
+  if (action === 'collect_url') {
+    const identity = identifyPublicPostUrl(text(input.url, 'url', 1000));
+    if (!identity.supported) {
+      throw new P22Error('UNSUPPORTED_PLATFORM', `${identity.platform} 链接已识别，但当前采集器尚未接入该平台。`, 422, { field: 'url' });
+    }
+    return { action, url: identity.canonical_url, platform: identity.platform, external_id: identity.external_id, count: 1 };
+  }
   if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > P22_LIMITS.analyze) {
     throw new P22Error('ITEM_COUNT_OUT_OF_RANGE', '分析项目必须为 1–2 条。', 400, { field: 'items' });
   }
@@ -153,6 +161,39 @@ export function normalizeXUrl(value) {
   url.search = '';
   url.hash = '';
   return url.toString().replace(/\/$/, '');
+}
+
+/**
+ * Identify a public post URL without fetching it. Only an exact X status URL is
+ * currently executable; other well-known platforms are identified explicitly
+ * so the UI can fail closed instead of silently treating a URL as a topic.
+ */
+export function identifyPublicPostUrl(value) {
+  let url;
+  try { url = new globalThis.URL(String(value).trim()); }
+  catch { throw new P22Error('INVALID_SOURCE_URL', '请输入有效的公开帖子链接。', 400, { field: 'url' }); }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
+    throw new P22Error('INVALID_SOURCE_URL', '帖子链接必须使用 HTTPS，且不能包含凭据或自定义端口。', 400, { field: 'url' });
+  }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  const known = host === 'x.com' || host === 'twitter.com' ? 'x'
+    : host === 'instagram.com' ? 'instagram'
+      : host === 'tiktok.com' || host.endsWith('.tiktok.com') ? 'tiktok'
+        : host === 'youtube.com' || host === 'youtu.be' ? 'youtube'
+          : host === 'reddit.com' || host.endsWith('.reddit.com') ? 'reddit'
+            : host === 'linkedin.com' ? 'linkedin'
+              : null;
+  if (!known) throw new P22Error('UNSUPPORTED_SOURCE', '当前仅识别受支持的公开社交帖子链接。', 422, { field: 'url' });
+  if (known !== 'x') {
+    url.search = '';
+    url.hash = '';
+    return { platform: known, supported: false, canonical_url: url.toString().replace(/\/$/, ''), external_id: null };
+  }
+  const match = /^\/(?:i\/web\/status|[^/]+\/status)\/(\d+)(?:\/.*)?$/i.exec(url.pathname);
+  if (!match) throw new P22Error('INVALID_POST_URL', 'X 链接必须指向一条具体帖子，而不是主页、搜索或列表。', 422, { field: 'url' });
+  const canonical = new globalThis.URL(normalizeXUrl(value));
+  canonical.pathname = `/i/web/status/${match[1]}`;
+  return { platform: 'x', supported: true, canonical_url: canonical.toString().replace(/\/$/, ''), external_id: match[1] };
 }
 
 function first(...values) { return values.find((value) => value !== undefined && value !== null && value !== ''); }
@@ -281,6 +322,56 @@ export async function normalizeCollectedItems(rawItems, context, digest) {
   }
   if (!output.length) throw new P22Error('EMPTY_PROVIDER_RESULT', '没有返回可验证的公开内容。', 422);
   return output;
+}
+
+/**
+ * Exact-URL collection is a one-post contract. Validate the provider's raw
+ * response before normalization can remove duplicate rows.
+ */
+export function assertUniqueRawCollectedPost(rawItems, requested) {
+  if (!Array.isArray(rawItems)) throw new P22Error('PROVIDER_RESPONSE_INVALID', '采集响应不是数组。', 502);
+  const expected = identifyPublicPostUrl(requested?.canonical_url || requested?.url || '');
+  if (rawItems.length > P22_LIMITS.collect) {
+    throw new P22Error('PROVIDER_RESULT_LIMIT_EXCEEDED', '采集返回条目超过单次上限。', 422, { field: 'items' });
+  }
+  const rows = rawItems.filter((raw) => (
+    object(raw) && raw.demo !== true && raw.noResults !== true && raw.resultType !== 'diagnostic'
+  ));
+  if (rows.length !== 1) {
+    throw new P22Error(rows.length ? 'AMBIGUOUS_POST_RESULT' : 'POST_NOT_FOUND', '采集结果无法唯一绑定到请求的帖子。', 422, { field: 'source_url' });
+  }
+  const raw = rows[0];
+  const externalId = String(first(raw.external_content_id, raw.tweet_id, raw.tweetId, raw.rest_id, raw.id_str, raw.id, '')).trim();
+  const candidateUrl = first(raw.url, raw.content_url, raw.webpage_url, raw.tweet_url, externalId ? `https://x.com/i/web/status/${encodeURIComponent(externalId)}` : '');
+  try {
+    const actual = identifyPublicPostUrl(candidateUrl || '');
+    if (actual.platform !== expected.platform || actual.external_id !== expected.external_id
+      || String(externalId || actual.external_id) !== expected.external_id) {
+      throw new Error('identity mismatch');
+    }
+  } catch {
+    throw new P22Error('POST_NOT_FOUND', '采集结果无法绑定到请求的帖子。', 422, { field: 'source_url' });
+  }
+  return true;
+}
+
+/** Bind a provider response to exactly one requested post identity. */
+export function bindExactCollectedPost(items, requested) {
+  if (!Array.isArray(items)) throw new P22Error('PROVIDER_RESPONSE_INVALID', '采集响应不是数组。', 502);
+  const expected = identifyPublicPostUrl(requested?.canonical_url || requested?.url || '');
+  const matches = items.filter((item) => {
+    try {
+      const actual = identifyPublicPostUrl(item?.source_url || '');
+      return actual.platform === expected.platform && actual.external_id === expected.external_id
+        && String(item?.external_id || actual.external_id) === expected.external_id;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length !== 1) {
+    throw new P22Error(matches.length ? 'AMBIGUOUS_POST_RESULT' : 'POST_NOT_FOUND', '采集结果无法唯一绑定到请求的帖子。', 422, { field: 'source_url' });
+  }
+  return [matches[0]];
 }
 
 export function buildQwenPrompt(items) {
@@ -462,6 +553,7 @@ export async function runApifyCollectionSequence({
   token,
   actorId,
   topic,
+  sourceUrl,
   count,
   maxItems = P22_LIMITS.collect,
   maxTotalChargeUsd,
@@ -477,18 +569,23 @@ export async function runApifyCollectionSequence({
   const boundedMaxItems = Math.max(1, Math.min(P22_LIMITS.collect, Number(maxItems) || P22_LIMITS.collect));
   const boundedCount = Math.max(1, Math.min(boundedMaxItems, Number(count) || 1));
   const boundedTopic = String(topic || '').trim().slice(0, 240);
+  const boundedSourceUrl = sourceUrl ? identifyPublicPostUrl(sourceUrl).canonical_url : '';
   const boundedCharge = Math.max(0, Math.min(Number(maxTotalChargeUsd) || P22_LIMITS.apify_reservation_cny / P22_CNY_PER_USD, P22_LIMITS.apify_reservation_cny / P22_CNY_PER_USD));
   const actorPath = String(actorId || '').trim().replace('/', '~');
   if (typeof token !== 'string' || !token) throw providerError('APIFY_UPSTREAM_REJECTED', 'start', { reason: 'not_configured' });
-  if (!boundedTopic || !PROVIDER_ACTOR_PATTERN.test(actorPath)) throw providerError('APIFY_RUN_ID_INVALID', 'start', { reason: 'malformed' });
+  if ((!boundedTopic && !boundedSourceUrl) || (boundedTopic && boundedSourceUrl) || !PROVIDER_ACTOR_PATTERN.test(actorPath)) {
+    throw providerError('APIFY_RUN_ID_INVALID', 'start', { reason: 'malformed' });
+  }
 
   const startUrl = new globalThis.URL(`https://api.apify.com/v2/acts/${encodeURIComponent(actorPath)}/runs`);
   startUrl.searchParams.set('maxTotalChargeUsd', String(boundedCharge));
+  const topicBody = JSON.stringify({ maxItems: boundedCount, sort: 'Latest', searchTerms: [boundedTopic] });
+  const urlBody = JSON.stringify({ maxItems: 1, startUrls: [{ url: boundedSourceUrl }] });
+  const actorBody = boundedSourceUrl ? urlBody : topicBody;
   const startResponse = await providerFetch(fetchImpl, startUrl, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    // Apify Run Actor：POST 请求体本身即 Actor 输入，必须发送顶层字段，不包裹 input。
-    body: JSON.stringify({ maxItems: boundedCount, sort: 'Latest', searchTerms: [boundedTopic] }),
+    body: actorBody,
     signal,
   }, 'start');
   const { runId, datasetId } = startRunIdentity(await readJson(startResponse, 'APIFY_RUN_ID_INVALID', 'start'));

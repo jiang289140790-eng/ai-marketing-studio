@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 import {
   P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, P22_SCHEMA_VERSION, P22Error, buildQwenPrompt,
-  issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, publicError,
+  assertUniqueRawCollectedPost, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, publicError,
   runApifyCollectionSequence, verifyAnalyzeSources,
 } from './assist-core.mjs';
 
@@ -52,19 +52,26 @@ async function budgetStatus(db) {
   return {budget_date_utc:today,apify:{reserved_cny:Number(totals.apify.toFixed(4)),remaining_cny:Number((P22_LIMITS.daily_cny-totals.apify).toFixed(4))},qwen:{reserved_cny:Number(totals.qwen.toFixed(4)),remaining_cny:Number((P22_LIMITS.daily_cny-totals.qwen).toFixed(4))}};
 }
 
-async function collect(db, userId: string, topic: string, count: number, proofSecret: string) {
+async function collect(db, userId: string, input, proofSecret: string) {
   const token=Deno.env.get('APIFY_TOKEN');
   if (!token) throw new P22Error('APIFY_NOT_CONFIGURED','Apify 尚未配置。',503);
   const budget=await reserve(db,userId,'apify',P22_LIMITS.apify_reservation_cny);
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),P22_LIMITS.apify_sequence_ms);
   try {
     const sequence=await runApifyCollectionSequence({
-      token, actorId:ACTOR, topic, count,
+      token, actorId:ACTOR,
+      topic:input.action==='collect'?input.topic:undefined,
+      sourceUrl:input.action==='collect_url'?input.url:undefined,
+      count:input.action==='collect'?input.count:1,
       maxItems:P22_LIMITS.collect,
       maxTotalChargeUsd:P22_LIMITS.apify_reservation_cny/P22_CNY_PER_USD,
       signal:controller.signal,
     });
-    const normalized=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:new Date().toISOString(),usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:budget.reservation_id},sha256);
+    if (input.action==='collect_url') assertUniqueRawCollectedPost(sequence.items,{canonical_url:input.url,external_id:input.external_id});
+    const normalizedAll=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:new Date().toISOString(),usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:budget.reservation_id},sha256);
+    const normalized=input.action==='collect_url'
+      ? bindExactCollectedPost(normalizedAll,{canonical_url:input.url,external_id:input.external_id})
+      : normalizedAll;
     const items=await Promise.all(normalized.map(async (item)=>({...item,collection_proof:await issueCollectionProof(proofSecret,userId,item)})));
     return {items,cost:{reserved_cny:P22_LIMITS.apify_reservation_cny,actual_cny:Number((sequence.usageTotalUsd*P22_CNY_PER_USD).toFixed(4)),budget}};
   } catch (error) { if (error?.name==='AbortError') throw new P22Error('APIFY_TIMEOUT','采集超时。',504); throw error; }
@@ -95,7 +102,9 @@ Deno.serve(async (request)=>{
     const capabilities={apify_configured:configured('APIFY_TOKEN'),qwen_configured:configured('DASHSCOPE_API_KEY')};
     if(input.action==='status') return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,role,capabilities,limits:P22_LIMITS,budget:await budgetStatus(db),execution_flags:P22_EXECUTION_FLAGS});
     if(!['operator','admin'].includes(role)) throw new P22Error('OPERATOR_REQUIRED','智能研究仅向 operator 开放。',403);
-    const result=input.action==='collect'?await collect(db,userId,input.topic,input.count,proofSecret):await analyze(db,userId,input.items,proofSecret);
+    const result=(input.action==='collect'||input.action==='collect_url')
+      ? await collect(db,userId,input,proofSecret)
+      : await analyze(db,userId,input.items,proofSecret);
     return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,action:input.action,...result,execution_flags:P22_EXECUTION_FLAGS});
   } catch(error) {
     const safe=publicError(error);

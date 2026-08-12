@@ -54,7 +54,7 @@ import {
   P21_VIEW_MODES,
 } from '../services/p21-guided-workspace.js';
 import { P22ResearchAssistPanel } from '../components/integrated-workspace/P22ResearchAssistPanel.jsx';
-import { toP19EvidenceInput } from '../services/p22-research-assist.js';
+import { findP22Evidence, toP19EvidenceInput } from '../services/p22-research-assist.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
@@ -408,8 +408,85 @@ export function ResearchWorkspacePage() {
   }, [run, project]);
 
   const handleSaveAssistedEvidence = useCallback(async (item) => {
-    return handleAddEvidence(await toP19EvidenceInput(item));
-  }, [handleAddEvidence]);
+    if (!project || project.status === 'archived') {
+      setError({ code: 'PROJECT_ARCHIVED', message: '项目已归档，不能保存新的研究来源。' });
+      return false;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const input = await toP19EvidenceInput(item);
+      let persistedEvidence = project;
+      let evidence = findP22Evidence(project, item);
+      if (!evidence) {
+        const afterEvidence = await addEvidence(project, input);
+        evidence = findP22Evidence(afterEvidence, item);
+        if (!evidence) throw workbenchError('EVIDENCE_IDENTITY_MISSING', '无法绑定新证据身份，已拒绝继续分析。');
+        persistedEvidence = afterEvidence;
+        if (onlineMode) {
+          const spec = buildOnlineCommand(project, afterEvidence);
+          persistedEvidence = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+          evidence = findP22Evidence(persistedEvidence, item);
+          setProject(persistedEvidence);
+        }
+      }
+      if (!evidence) throw workbenchError('EVIDENCE_IDENTITY_MISSING', '保存后无法重新读取准确证据，已停止。');
+
+      let persistedAnalysis = persistedEvidence;
+      let analysis = (persistedEvidence.analyses || []).find((row) => row.evidence_id === evidence.id
+        && row.evidence_fingerprint === evidence.fingerprint && row.evidence_version === evidence.version);
+      if (!analysis) {
+        const afterAnalysis = await runAnalysis(persistedEvidence, evidence.id);
+        analysis = afterAnalysis.analyses.find((row) => row.evidence_id === evidence.id);
+        if (!analysis) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '分析没有准确绑定到新证据，已停止。');
+        persistedAnalysis = afterAnalysis;
+        if (onlineMode) {
+          const spec = buildOnlineCommand(persistedEvidence, afterAnalysis);
+          persistedAnalysis = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+          analysis = persistedAnalysis.analyses.find((row) => row.evidence_id === evidence.id
+            && row.evidence_fingerprint === evidence.fingerprint && row.evidence_version === evidence.version);
+          setProject(persistedAnalysis);
+        }
+      }
+      if (!analysis) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '保存后无法重新读取准确分析，已停止。');
+
+      let completed = persistedAnalysis;
+      const card = (persistedAnalysis.knowledge_cards || []).find((row) => row.analysis_id === analysis.id
+        && row.analysis_fingerprint === analysis.fingerprint && row.analysis_version === analysis.version);
+      if (!card) {
+        const afterCard = await buildKnowledgeCard(persistedAnalysis, analysis.id);
+        completed = afterCard;
+        if (onlineMode) {
+          const spec = buildOnlineCommand(persistedAnalysis, afterCard);
+          completed = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+        }
+      }
+      if (!onlineMode) {
+        const saved = storeRef.current.putProject(completed);
+        if (!saved.ok) throw workbenchError(saved.code, saved.message);
+      }
+
+      setProject(completed);
+      await reloadProjects();
+      setNotice('来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card。');
+      return true;
+    } catch (cause) {
+      if (onlineMode && project?.id) {
+        try {
+          const recovered = await onlineStoreRef.current.getProject(project.id);
+          setProject(recovered);
+        } catch {
+          // Keep the original bounded pipeline error; a later explicit reload remains available.
+        }
+      }
+      const message = cause && cause.bounded ? cause.message : String((cause && cause.message) || cause).slice(0, 300);
+      setError({ code: (cause && cause.code) || 'P23_PIPELINE_FAILED', message });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [onlineMode, project, reloadProjects]);
 
   const handleUpdateEvidence = useCallback((evidenceId, patch) => {
     return run('编辑证据', () => updateEvidence(project, evidenceId, patch), { notice: '证据已更新；下游分析/知识卡/Brief 已标记为过时。' });

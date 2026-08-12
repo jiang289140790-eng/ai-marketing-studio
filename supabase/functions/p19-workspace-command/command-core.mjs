@@ -649,8 +649,8 @@ async function applyEvidenceCreate(ctx) {
     media_metadata: isPlainObject(raw.media_metadata) ? clonePlain(raw.media_metadata) : null,
     version: 1,
     fingerprint: '',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: p22Source ? recordedAt : new Date().toISOString(),
+    updated_at: p22Source ? recordedAt : new Date().toISOString(),
   };
   if (p22Source) {
     if (await sha256Hex(record.content_text) !== record.provenance.content_sha256) {
@@ -669,10 +669,41 @@ async function applyEvidenceCreate(ctx) {
   }
   const { valid, issues } = validateEvidenceShape(record);
   if (!valid) return fail('EVIDENCE_INVALID', '证据记录未通过 P19 证据契约校验。', { entity: { type: 'project', id: owned.projectId }, diagnostics: boundedDiagnostics(issues) });
-  record.id = `ev-${(await hasher(record)).slice(0, 24)}`;
+  record.id = p22Source
+    ? `ev-${(await hasher({
+      project_id: owned.projectId,
+      provider: record.provenance.provider,
+      source_url: record.source_url,
+      external_id: record.provenance.external_id || null,
+      content_sha256: record.provenance.content_sha256,
+    })).slice(0, 24)}`
+    : `ev-${(await hasher(record)).slice(0, 24)}`;
   record.fingerprint = await hasher(record);
   const hashCheck = await requireHash(record, ctx.payloadSha256, hasher);
   if (!hashCheck.ok) return hashCheck;
+  if (p22Source) {
+    const entities = await db.listProjectEntities(ctx.userId, owned.projectId);
+    const existing = (entities.evidence || []).find((item) => item.id === record.id);
+    if (existing) {
+      const comparable = clonePlain(existing);
+      comparable.fingerprint = '';
+      if (await hasher(comparable) !== record.fingerprint) {
+        return fail('P22_EVIDENCE_IDENTITY_CONFLICT', '同一 P22 证据身份已绑定不同的规范内容，已失败关闭。', {
+          entity: { type: 'evidence', id: record.id },
+        });
+      }
+      return {
+        ok: true,
+        replayed: true,
+        replay_of: {
+          status: 'applied', command: 'evidence.create', entity_type: 'evidence', entity_id: record.id,
+          diagnostics: { issues: [] },
+        },
+        entity: { type: 'evidence', id: record.id },
+        diagnostics: { issues: [] },
+      };
+    }
+  }
   const write = await boundaryWrite(ctx, {
     table: 'p19_evidence_records_v1',
     entityType: 'evidence',

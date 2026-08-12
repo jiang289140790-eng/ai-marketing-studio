@@ -62,15 +62,25 @@ async function p22EvidenceFixture() {
 }
 
 function p22CommandDb(projectId) {
-  const state = { writes: [] };
+  const state = { writes: [], evidence: new Map() };
   return {
     state,
     async getProject(userId, requestedProjectId) {
       if (userId !== USER_ID || requestedProjectId !== projectId) return null;
       return { id: projectId, version: 1, status: 'active' };
     },
+    async listProjectEntities(userId, requestedProjectId) {
+      if (userId !== USER_ID || requestedProjectId !== projectId) return { evidence: [], analyses: [], cards: [], brief: null, handoff: null };
+      return { evidence: [...state.evidence.values()].map(clonePlain), analyses: [], cards: [], brief: null, handoff: null };
+    },
     async writeEntity(userId, meta) {
+      if (meta.entity_type === 'evidence' && state.evidence.has(meta.entity_id)) {
+        const stale = new Error('P19_ENTITY_REVISION_STALE');
+        stale.code = 'ENTITY_REVISION_STALE';
+        throw stale;
+      }
       state.writes.push({ userId, meta: clonePlain(meta) });
+      if (meta.entity_type === 'evidence') state.evidence.set(meta.entity_id, clonePlain(meta.payload));
       return { outcome: 'applied', entity: { type: meta.entity_type, id: meta.entity_id } };
     },
   };
@@ -184,8 +194,9 @@ test('P22 saves collected content only through a valid P19 evidence input and re
   assert.equal(input.provenance.source_url, item.source_url);
   assert.equal(input.provenance.collection_proof, item.collection_proof);
   assert.equal(isP22Duplicate({ evidence: [] }, item), false);
-  assert.equal(isP22Duplicate({ evidence: [{ source_url: item.source_url, media_metadata: null }] }, item), true);
-  assert.equal(isP22Duplicate({ evidence: [{ source_url: 'https://x.com/other/status/2', media_metadata: { sha256: await hash('正文') } }] }, item), true);
+  assert.equal(isP22Duplicate({ evidence: [{ source_url: item.source_url, media_metadata: null }] }, item), false);
+  assert.equal(isP22Duplicate({ evidence: [{ source_url: 'https://x.com/other/status/2', media_metadata: { sha256: await hash('正文') } }] }, item), false);
+  assert.equal(isP22Duplicate({ evidence: [{ source_url: item.source_url, media_metadata: { sha256: await hash('正文') } }] }, item), true);
 });
 
 test('P22 evidence is server-verified before P19 persistence and retains exact provenance', async () => {
@@ -212,6 +223,25 @@ test('P22 evidence is server-verified before P19 persistence and retains exact p
   assert.equal(db.state.writes.length, 1);
   assert.deepEqual(db.state.writes[0].meta.payload.provenance, evidence.provenance);
   assert.deepEqual(db.state.writes[0].meta.payload.provenance, verifiedRecord.provenance);
+
+  const replayedWithAnotherKey = await executeCommand(evidenceCommand(projectId, evidence, 'p22-accepted-after-lost-response'), {
+    db,
+    verifyP22Evidence: async () => true,
+  });
+  assert.equal(replayedWithAnotherKey.ok, true);
+  assert.equal(replayedWithAnotherKey.applied, false);
+  assert.equal(replayedWithAnotherKey.replayed, undefined);
+  assert.equal(replayedWithAnotherKey.entity.id, accepted.entity.id, 'P22 identity must not depend on request time or idempotency key');
+  assert.equal(db.state.evidence.size, 1, 'a lost response followed by retry must not create duplicate Evidence');
+  assert.equal(db.state.writes.length, 1, 'exact replay must short-circuit before the SQL create boundary');
+
+  const conflictingIdentity = { ...clonePlain(evidence), label: 'Conflicting label for the same immutable identity' };
+  const conflict = await executeCommand(evidenceCommand(projectId, conflictingIdentity, 'p22-conflicting-identity'), {
+    db,
+    verifyP22Evidence: async () => true,
+  });
+  assert.equal(conflict.code, 'P22_EVIDENCE_IDENTITY_CONFLICT');
+  assert.equal(db.state.writes.length, 1);
 
   const tampered = { ...clonePlain(evidence), content_text: `${evidence.content_text} tampered` };
   let verifierCalled = false;
@@ -378,12 +408,12 @@ test('P22 production UI contains capability gates, explicit preview and save wor
   assert.match(component, /Apify：.*尚未配置/s);
   assert.match(component, /Qwen：.*尚未配置/s);
   assert.match(component, /来源预览（未保存）/);
-  assert.match(component, /保存此来源/);
+  assert.match(component, /保存并生成知识卡/);
   assert.match(component, /仅预览/);
   assert.match(page, /onlineMode && <P22ResearchAssistPanel/);
   assert.match(page, /P22ResearchAssistPanel key=\{project\.id\}/);
   assert.match(page, /toP19EvidenceInput/);
-  assert.match(component, /setItems\(\[\]\)[\s\S]+setSelected\(\[\]\)[\s\S]+setAnalyses\(\[\]\)/);
+  assert.match(component, /setItems\(\(project\.evidence \|\| \[\]\)\.map\(p22ItemFromEvidence\)\.filter\(Boolean\)\)[\s\S]+setSelected\(\[\]\)[\s\S]+setAnalyses\(\[\]\)/);
   const analyzeBody = edge.slice(edge.indexOf('async function analyze'), edge.indexOf('Deno.serve'));
   assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') >= 0);
   assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("Deno.env.get('DASHSCOPE_API_KEY')"));
@@ -977,6 +1007,8 @@ function browserProject(raw, id) {
 
 function p22BrowserBoundary() {
   let project = null;
+  let evidenceAttempts = 0;
+  let failNextProjectRead = false;
   let created = 0;
   const p22Requests = [];
   const server = createServer(async (request, response) => {
@@ -1007,23 +1039,72 @@ function p22BrowserBoundary() {
           collection_proof: `1999999999.${'b'.repeat(64)}`, provenance: { run_id: 'p22-browser-run-a' },
         }],
       }, origin);
+      if (body.action === 'collect_url') {
+        const content = 'Exact URL evidence enters the knowledge chain.';
+        const contentSha = createHash('sha256').update(content).digest('hex');
+        return browserJson(response, 200, {
+          ...base, action: 'collect_url', cost: { reserved_cny: 0.1 },
+          items: [{
+            id: `p22-${contentSha.slice(0, 24)}`, external_id: '1900000000000000002',
+            source_url: 'https://x.com/example/status/1900000000000000002', label: 'Exact URL source',
+            platform: 'x', content_text: content, content_sha256: contentSha,
+            collection_proof: `1999999999.${'c'.repeat(64)}`,
+            provenance: {
+              schema_version: 'p22_collected_source_v1', provider: 'apify:xquik/x-tweet-scraper',
+              run_id: 'p22-browser-url-run', collected_at: '2026-08-12T00:00:00.000Z', usage_total_usd: 0.01,
+              budget_reservation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
+            },
+          }],
+        }, origin);
+      }
       return browserJson(response, 400, { ok: false, code: 'UNKNOWN_ACTION', message: 'Unsupported action.' }, origin);
     }
     if (request.url === '/functions/v1/p19-workspace-command' && request.method === 'POST') {
       const body = await browserBody(request);
       const envelope = { ok: true, schema_version: 'p19_command_contract_v1', command: body.command, applied: false };
       if (body.command === 'project.list') return browserJson(response, 200, { ...envelope, read_only: true, data: { projects: project ? [{ id: project.id, topic: project.topic, status: project.status }] : [] } }, origin);
-      if (body.command === 'project.read') return browserJson(response, 200, { ...envelope, read_only: true, data: { project } }, origin);
+      if (body.command === 'project.read') {
+        if (failNextProjectRead) { failNextProjectRead = false; return browserJson(response, 503, { ok: false, code: 'SYNTHETIC_RECOVERY_READ_FAILURE', message: 'Synthetic recovery read failure.' }, origin); }
+        return browserJson(response, 200, { ...envelope, read_only: true, data: { project } }, origin);
+      }
       if (body.command === 'project.create') {
         created += 1;
         project = browserProject(body.payload.project, created === 1 ? 'prj-0123456789abcdef01234567' : 'prj-1123456789abcdef01234567');
         return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'project', id: project.id } }, origin);
       }
+      if (body.command === 'evidence.create') {
+        evidenceAttempts += 1;
+        const canonical = {
+          ...body.payload.evidence,
+          id: `ev-${createHash('sha256').update(`${body.payload.evidence.source_url}|${body.payload.evidence.content_text}`).digest('hex').slice(0, 24)}`,
+          fingerprint: 'e'.repeat(64),
+        };
+        const existing = project.evidence.find((row) => row.id === canonical.id);
+        if (existing && (existing.source_url !== canonical.source_url || existing.provenance?.content_sha256 !== canonical.provenance?.content_sha256)) {
+          return browserJson(response, 409, { ok: false, code: 'P22_EVIDENCE_IDENTITY_CONFLICT', message: 'Synthetic identity conflict.' }, origin);
+        }
+        if (!existing) project = { ...project, evidence: [...project.evidence, canonical], version: project.version + 1, fingerprint: 'b'.repeat(64) };
+        if (evidenceAttempts === 1) {
+          failNextProjectRead = true;
+          return browserJson(response, 503, { ok: false, code: 'SYNTHETIC_RESPONSE_LOST', message: 'Synthetic response lost after apply.' }, origin);
+        }
+        return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'evidence', id: canonical.id } }, origin);
+      }
+      if (body.command === 'analysis.create') {
+        const canonical = { ...body.payload.analysis, id: `an-${'1'.repeat(24)}`, fingerprint: 'f'.repeat(64) };
+        project = { ...project, analyses: [...project.analyses.filter((row) => row.id !== canonical.id), canonical], version: project.version + 1, fingerprint: 'c'.repeat(64) };
+        return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'analysis', id: canonical.id } }, origin);
+      }
+      if (body.command === 'card.create') {
+        const canonical = { ...body.payload.card, id: `kc-${'2'.repeat(24)}`, fingerprint: '9'.repeat(64) };
+        project = { ...project, knowledge_cards: [...project.knowledge_cards.filter((row) => row.id !== canonical.id), canonical], version: project.version + 1, fingerprint: 'd'.repeat(64) };
+        return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'card', id: canonical.id } }, origin);
+      }
       return browserJson(response, 400, { ok: false, code: 'UNKNOWN_COMMAND', message: 'Unsupported command.' }, origin);
     }
     return browserJson(response, 404, { code: 'NOT_FOUND' }, origin);
   });
-  return { server, p22Requests };
+  return { server, p22Requests, getProject: () => project };
 }
 
 class BrowserCdp {
@@ -1098,11 +1179,29 @@ test('P22 real production page clears preview state when switching projects', { 
     await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p22-query-row input')) && !document.querySelector('.p22-query-row button').disabled`), 'P22 capability');
     await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
     await browserWait(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length===1 && document.body.innerText.includes('Project A source preview')`), 'A preview');
+    await cdp.evaluate(`(() => { const input=document.querySelector('.p22-query-row input'); const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'https://x.com/example/status/1900000000000000002'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'exact URL mode');
+    await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
+    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Exact URL source')`), 'exact URL preview');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button) => button.textContent.includes('保存并生成知识卡')).click()`);
+    await browserWait(() => boundary.getProject()?.evidence.length === 1 && boundary.getProject()?.analyses.length === 0, 'partial Evidence persistence');
+    await sleep(750);
+    const retryState = await cdp.evaluate(`(() => { const button=document.querySelector('.p22-source-card button'); return { exists:Boolean(button), disabled:button?.disabled, cards:document.querySelectorAll('.p22-source-card').length, busy:document.body.innerText.includes('正在执行'), text:button?.textContent || '', alert:document.querySelector('[role="alert"]')?.textContent || '' }; })()`);
+    assert.equal(retryState.exists, true, `partial-success source card disappeared: ${JSON.stringify(retryState)}`);
+    assert.equal(retryState.disabled, false, `partial-success retry stayed disabled: ${JSON.stringify(retryState)}`);
+    await cdp.evaluate(`document.querySelector('.p22-source-card button').click()`);
+    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Evidence → 确定性分析 → Knowledge Card')`), 'knowledge chain completion');
+    assert.equal(boundary.getProject().evidence.length, 1);
+    assert.equal(boundary.getProject().analyses.length, 1);
+    assert.equal(boundary.getProject().knowledge_cards.length, 1);
+    assert.equal(boundary.getProject().analyses[0].evidence_id, boundary.getProject().evidence[0].id);
+    assert.equal(boundary.getProject().knowledge_cards[0].analysis_id, boundary.getProject().analyses[0].id);
     await createProject(['Project B', 'Clean scope', 'Team B', 'Research', 'No A state']);
     await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Project B') && document.querySelectorAll('.p22-source-card').length===0`), 'B clean state');
     assert.equal(await cdp.evaluate(`document.querySelector('.p22-query-row input').value`), 'Project B');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('Project A source preview')`), false);
     assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect').length, 1);
+    assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect_url').length, 1);
   } finally {
     cdp?.close(); await stopProcess(edge); await stopProcess(vite);
     await new Promise((resolve) => boundary.server.close(resolve));

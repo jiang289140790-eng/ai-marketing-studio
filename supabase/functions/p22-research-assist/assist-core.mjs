@@ -413,7 +413,25 @@ function collectMediaCandidates(raw) {
     if (typeof value === 'string') {
       url = value.trim();
     } else if (object(value)) {
-      url = first(value.url, value.src, value.mediaUrl, value.contentUrl, value.previewUrl, value.thumbnailUrl);
+      // Rich xquik rows carry both a generic post/link URL (`url`, commonly
+      // t.co) and the actual CDN binary URL (`mediaUrl`).  Only the latter is
+      // suitable for content hashing and multimodal input.  Keep generic URL
+      // as a last-resort compatibility field for providers that expose no
+      // media-specific URL at all.
+      url = first(
+        value.mediaUrl,
+        value.media_url,
+        value.contentUrl,
+        value.content_url,
+        value.src,
+        value.previewUrl,
+        value.preview_url,
+        value.preview,
+        value.thumbnailUrl,
+        value.thumbnail_url,
+        value.thumbnail,
+        value.url,
+      );
       const mediaTypeValue = value.mediaType;
       const contentTypeValue = value.contentType;
       const mediaTypeIsMime = typeof mediaTypeValue === 'string' && mediaTypeValue.includes('/');

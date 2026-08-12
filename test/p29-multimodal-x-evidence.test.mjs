@@ -35,6 +35,7 @@ const IMAGE_4 = 'https://pbs.twimg.com/media/photo-d.jpg?format=jpg&name=large';
 const VIDEO_1 = 'https://video.twimg.com/ext_tw_video/123/pu/vid/avc1/720x1280.mp4';
 const GIF_1 = 'https://video.twimg.com/tweet_video/example.mp4';
 const FOREIGN_HOST = 'https://cdn.example.com/evil.jpg';
+const X_SHORT_LINK = 'https://t.co/UTBGnHanx3';
 
 /** 注入的媒体抓取边界：按 URL 路由，支持重定向/MIME/大小/超时失败。 */
 function mediaHarness(routes = {}) {
@@ -188,6 +189,72 @@ test('P29 maps official X Actor media type aliases without weakening unknown-typ
   }], CONTEXT, hash, { fetchImpl: mediaHarness(routes).fetchImpl }), (error) => (
     error.code === 'MEDIA_KIND_INVALID' && error.details?.field === 'media'
   ));
+});
+
+test('P29 uses the real Actor mediaUrl instead of the accompanying t.co post link', async () => {
+  const harness = mediaHarness({
+    [IMAGE_1]: { contentType: 'image/jpeg', bytes: routeBytesFor(0) },
+  });
+  const [item] = await normalizeCollectedItems([{
+    id: '2087265515500924947',
+    url: 'https://x.com/lose2aurora/status/2087265515500924947',
+    text: 'go dumb for Aurora',
+    media: [{
+      mediaUrl: IMAGE_1,
+      url: X_SHORT_LINK,
+      type: 'photo',
+      width: 2346,
+      height: 3128,
+      expandedUrl: 'https://x.com/lose2aurora/status/2087265515500924947/photo/1',
+    }],
+  }], CONTEXT, hash, { fetchImpl: harness.fetchImpl });
+
+  assert.equal(item.media_assets.length, 1);
+  assert.equal(item.media_assets[0].media_url, IMAGE_1);
+  assert.equal(item.media_assets[0].kind, 'image');
+  assert.deepEqual(item.media_assets[0].dimensions, { width: 2346, height: 3128 });
+  assert.deepEqual(harness.calls.map((call) => call.url), [IMAGE_1]);
+  assert.equal(harness.calls.some((call) => call.url === X_SHORT_LINK), false);
+
+  await assert.rejects(() => normalizeCollectedItems([{
+    id: '2087265515500924948',
+    url: 'https://x.com/lose2aurora/status/2087265515500924948',
+    text: 'authoritative media URL must not fall back to a safer-looking generic URL',
+    media: [{ mediaUrl: FOREIGN_HOST, url: IMAGE_1, type: 'photo' }],
+  }], CONTEXT, hash, { fetchImpl: harness.fetchImpl }), (error) => (
+    error.code === 'MEDIA_HOST_UNSUPPORTED' && error.details?.field === 'media_url'
+  ));
+});
+
+test('P29 prioritizes every supported media-specific URL alias over a generic t.co link', async () => {
+  for (const field of [
+    'mediaUrl', 'media_url', 'contentUrl', 'content_url', 'src',
+    'previewUrl', 'preview_url', 'preview',
+    'thumbnailUrl', 'thumbnail_url', 'thumbnail',
+  ]) {
+    const harness = mediaHarness({
+      [IMAGE_1]: { contentType: 'image/jpeg', bytes: routeBytesFor(0) },
+    });
+    const [item] = await normalizeCollectedItems([{
+      id: `alias-${field}`,
+      url: 'https://x.com/a/status/1007',
+      text: `media alias ${field}`,
+      media: [{ [field]: IMAGE_1, url: X_SHORT_LINK, type: 'photo' }],
+    }], CONTEXT, hash, { fetchImpl: harness.fetchImpl });
+    assert.equal(item.media_assets[0].media_url, IMAGE_1, field);
+    assert.deepEqual(harness.calls.map((call) => call.url), [IMAGE_1], field);
+  }
+
+  for (const field of ['preview', 'thumbnail', 'preview_url', 'thumbnail_url']) {
+    await assert.rejects(() => normalizeCollectedItems([{
+      id: `unsafe-${field}`,
+      url: 'https://x.com/a/status/1008',
+      text: `unsafe authoritative alias ${field}`,
+      media: [{ [field]: FOREIGN_HOST, url: IMAGE_1, type: 'photo' }],
+    }], CONTEXT, hash, { fetchImpl: mediaHarness().fetchImpl }), (error) => (
+      error.code === 'MEDIA_HOST_UNSUPPORTED' && error.details?.field === 'media_url'
+    ));
+  }
 });
 
 test('P29 rejects MIME content that contradicts the normalized media kind', async () => {

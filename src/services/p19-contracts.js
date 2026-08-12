@@ -931,6 +931,60 @@ export function validateBrief(brief) {
     const findings = brief.multimodal_findings;
     if (!Array.isArray(findings) || findings.length > 10 || !findings.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 240)) { issue(issues, 'Brief 多模态发现必须是最多 10 条非空且每条不超过 240 字符的数组。'); }
   }
+  if (brief.p32_synthesis !== undefined && brief.p32_synthesis !== null) {
+    const synthesis = brief.p32_synthesis;
+    const allowed = ['schema_version', 'synthesis_id', 'fingerprint', 'selected_evidence_ids', 'source_snapshot', 'summary', 'engagement_basis', 'generated_at'];
+    if (!isPlainObject(synthesis)) issue(issues, 'Brief 多帖综合快照必须是对象。');
+    else {
+      const unknown = Object.keys(synthesis).filter((key) => !allowed.includes(key));
+      if (unknown.length) issue(issues, 'Brief 多帖综合快照包含未知字段。');
+      if (synthesis.schema_version !== 'p32_multipost_synthesis_v1') issue(issues, 'Brief 多帖综合 schema_version 无效。');
+      if (!isNonEmptyString(synthesis.synthesis_id) || !/^syn-[0-9a-f]{24}$/.test(synthesis.synthesis_id)) issue(issues, 'Brief 多帖综合 identity 无效。');
+      if (!isNonEmptyString(synthesis.fingerprint) || !/^[0-9a-f]{64}$/.test(synthesis.fingerprint)) issue(issues, 'Brief 多帖综合 fingerprint 无效。');
+      const selected = synthesis.selected_evidence_ids;
+      if (!Array.isArray(selected) || selected.length < 2 || selected.length > 5 || !selected.every((id) => isNonEmptyString(id) && EVIDENCE_ID_PATTERN.test(id)) || new Set(selected).size !== selected.length) {
+        issue(issues, 'Brief 多帖综合必须绑定 2..5 个互异的准确 Evidence identity。');
+      }
+      const snapshots = synthesis.source_snapshot;
+      if (!Array.isArray(snapshots) || snapshots.length !== selected?.length) issue(issues, 'Brief 多帖综合来源快照数量与选择不一致。');
+      else {
+        const snapshotAllowed = ['evidence_id', 'evidence_fingerprint', 'analysis_id', 'analysis_fingerprint', 'analysis_version', 'model_schema_version'];
+        snapshots.forEach((snapshot, index) => {
+          if (!isPlainObject(snapshot) || Object.keys(snapshot).some((key) => !snapshotAllowed.includes(key))) issue(issues, 'Brief 多帖综合来源快照结构无效。');
+          if (snapshot?.evidence_id !== selected[index]) issue(issues, 'Brief 多帖综合来源快照顺序或 Evidence 绑定无效。');
+          if (!/^[0-9a-f]{64}$/.test(snapshot?.evidence_fingerprint || '') || !ANALYSIS_ID_PATTERN.test(snapshot?.analysis_id || '') || !/^[0-9a-f]{64}$/.test(snapshot?.analysis_fingerprint || '') || !Number.isInteger(snapshot?.analysis_version) || snapshot.analysis_version < 1) issue(issues, 'Brief 多帖综合来源快照 identity/fingerprint/version 无效。');
+          if (![MODEL_ANALYSIS_SCHEMA_VERSION, P32_MODEL_ANALYSIS_SCHEMA_VERSION].includes(snapshot?.model_schema_version)) issue(issues, 'Brief 多帖综合来源模型 schema 无效。');
+        });
+      }
+      const summaryKeys = ['common_topics', 'high_performance_structures', 'visual_styles', 'audience_sentiment', 'reusable_formula', 'risks_do_not_copy'];
+      if (!isPlainObject(synthesis.summary) || Object.keys(synthesis.summary).some((key) => !summaryKeys.includes(key)) || !summaryKeys.every((key) => Array.isArray(synthesis.summary[key]) && synthesis.summary[key].length >= 1 && synthesis.summary[key].length <= 5 && synthesis.summary[key].every((item) => isNonEmptyString(item) && item.length <= 200))) {
+        issue(issues, 'Brief 多帖综合六项摘要结构无效。');
+      }
+      const basis = synthesis.engagement_basis;
+      const basisAllowed = ['evidence_id', 'evidence_label', 'views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'total_engagement', 'engagement_rate'];
+      const countKeys = ['views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks', 'total_engagement'];
+      if (!Array.isArray(basis) || basis.length !== selected?.length || new Set(basis.map((row) => row?.evidence_id)).size !== selected?.length || !basis.every((row) => {
+        if (!isPlainObject(row) || Object.keys(row).some((key) => !basisAllowed.includes(key)) || !selected.includes(row.evidence_id) || !isNonEmptyString(row.evidence_label) || row.evidence_label.length > 60) return false;
+        if (!countKeys.every((key) => row[key] === null || (Number.isInteger(row[key]) && row[key] >= 0 && row[key] <= Number.MAX_SAFE_INTEGER))) return false;
+        return row.engagement_rate === null || (Number.isFinite(row.engagement_rate) && row.engagement_rate >= 0);
+      })) issue(issues, 'Brief 多帖综合互动依据与选择不一致或指标结构无效。');
+      if (!isNonEmptyString(synthesis.generated_at) || synthesis.generated_at.length > 80 || Number.isNaN(Date.parse(synthesis.generated_at))) issue(issues, 'Brief 多帖综合生成时间无效。');
+      if (Array.isArray(selected) && Array.isArray(snapshots)) {
+        const expectedId = `syn-${fingerprintOfSync({ project_id: brief.project_id, selected_evidence_ids: selected, source_snapshot: snapshots }).slice(0, 24)}`;
+        if (synthesis.synthesis_id !== expectedId) issue(issues, 'Brief 多帖综合 identity 与来源快照不一致。');
+        const expectedFingerprint = fingerprintOfSync({
+          schema_version: synthesis.schema_version,
+          id: synthesis.synthesis_id,
+          project_id: brief.project_id,
+          selected_evidence_ids: selected,
+          source_snapshot: snapshots,
+          sections: synthesis.summary,
+          engagement_basis: basis,
+        });
+        if (synthesis.fingerprint !== expectedFingerprint) issue(issues, 'Brief 多帖综合 fingerprint 与完整派生快照不一致。');
+      }
+    }
+  }
   checkGlobalBounds(brief, issues);
   return { valid: issues.length === 0, issues };
 }

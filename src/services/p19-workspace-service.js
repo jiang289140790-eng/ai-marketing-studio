@@ -35,6 +35,7 @@ import {
   clonePlain,
   evidenceProofFingerprint,
   fingerprintOf,
+  fingerprintOfSync,
   isNonEmptyString,
   resolveBriefEvidenceBindings,
   sha256Hex,
@@ -810,7 +811,470 @@ export function generateEvidenceComparison(project, selectedEvidenceIds) {
   return { valid: true, rows, summary };
 }
 
-/** 从分析构建校验过的 content_knowledge_card_v1 知识卡（确定性）。 */
+// ---- P32-C 多帖综合洞察 → 精确知识卡 → 待人工审核 Brief ------------------------
+
+export const P32_SYNTHESIS_SCHEMA_VERSION = 'p32_multipost_synthesis_v1';
+export const P32_SYNTHESIS_MIN = 2;
+export const P32_SYNTHESIS_MAX = 5;
+const P32_SYNTHESIS_MAX_ITEMS = 5;
+const P32_SYNTHESIS_ITEM_MAX = 160;
+const P32_SYNTHESIS_LABEL_MAX = 60;
+
+/**
+ * 精确选择校验（P32-C 范围 A）：只接受当前项目中 2–5 个互异完整 evidence_id。
+ * 每条证据必须存在最新、有效、未过时的 Qwen 多模态分析（model_analysis）；
+ * 重复、跨项目、缺失、过时、错绑、无模型分析一律整体失败关闭。
+ * 返回的 bindings 按项目 evidence 顺序规范化（有序不可变来源快照的权威顺序），
+ * 绝不使用标题、数组位置或 substring 代理身份。
+ */
+export function validateSynthesisSelection(project, selectedEvidenceIds) {
+  const ids = Array.isArray(selectedEvidenceIds) ? selectedEvidenceIds : [];
+  const uniqueIds = [...new Set(ids)];
+  if (project && project.status === 'archived') {
+    return { valid: false, reason: '项目已归档（只读）：不能生成综合知识与 Brief。', bindings: [], issues: [] };
+  }
+  if (uniqueIds.length !== ids.length) {
+    return { valid: false, reason: '选择包含重复的 evidence_id：综合必须绑定 2–5 个互异身份，已失败关闭。', bindings: [], issues: [] };
+  }
+  if (uniqueIds.length < P32_SYNTHESIS_MIN || uniqueIds.length > P32_SYNTHESIS_MAX) {
+    return { valid: false, reason: `综合需要 2–5 条互异证据，当前选择了 ${uniqueIds.length} 条。`, bindings: [], issues: [] };
+  }
+  const evidenceById = new Map((project?.evidence || []).map((item) => [item.id, item]));
+  const issues = [];
+  for (const evidenceId of uniqueIds) {
+    if (typeof evidenceId !== 'string' || !evidenceId.trim()) {
+      issues.push('选择包含空身份：必须绑定完整 Evidence ID，不能用标题或位置代理。');
+      continue;
+    }
+    const evidence = evidenceById.get(evidenceId);
+    if (!evidence) {
+      issues.push(`所选证据 ${evidenceId.slice(0, 16)}… 不存在于当前项目中（选择已失效，请重新选择）。`);
+      continue;
+    }
+    if (evidence.project_id !== project?.id) {
+      issues.push(`所选证据 ${evidenceId.slice(0, 16)}… 属于其他项目（跨项目选择已拒绝）。`);
+      continue;
+    }
+    const analysis = getLatestAnalysisForEvidence(project, evidenceId);
+    if (!analysis) {
+      issues.push(`证据「${boundedSlice(evidence.label, 40)}」缺少 Qwen 多模态分析：请先在证据库点击「用 Qwen 重新分析」。`);
+      continue;
+    }
+    if (analysis.project_id !== project?.id || analysis.evidence_id !== evidenceId) {
+      issues.push(`证据「${boundedSlice(evidence.label, 40)}」的分析身份错绑（跨项目或错绑已拒绝）。`);
+      continue;
+    }
+    if (analysis.evidence_fingerprint !== evidence.fingerprint || analysis.evidence_version !== evidence.version) {
+      issues.push(`证据「${boundedSlice(evidence.label, 40)}」的分析已过时：请先点击「用 Qwen 重新分析」获得最新有效版本。`);
+      continue;
+    }
+    if (!analysis.model_analysis) {
+      issues.push(`证据「${boundedSlice(evidence.label, 40)}」缺少 Qwen 多模态分析（只有确定性本地分析）：请先点击「用 Qwen 重新分析」。`);
+    }
+  }
+  if (issues.length > 0) {
+    return { valid: false, reason: `当前选择未通过综合前置校验（${issues.length} 项问题）：综合整体失败关闭，项目不变。`, bindings: [], issues: issues.slice(0, 6) };
+  }
+  // 规范顺序必须来自当前项目的 Evidence 顺序，而不是调用方勾选顺序；
+  // 这样同一集合无论用户点击先后都得到同一 identity/fingerprint。
+  const selectedSet = new Set(uniqueIds);
+  const bindings = [];
+  for (const evidence of (project?.evidence || []).filter((item) => selectedSet.has(item.id))) {
+    const evidenceId = evidence.id;
+    const analysis = getLatestAnalysisForEvidence(project, evidenceId);
+    bindings.push({ evidenceId, evidence, analysis, extension: analysis.model_analysis });
+  }
+  return { valid: true, reason: '', bindings, issues: [] };
+}
+
+const P32_ENGAGEMENT_TOTAL_KEYS = ['likes', 'retweets', 'replies', 'quotes', 'bookmarks'];
+const P32_ENGAGEMENT_DISPLAY_KEYS = ['views', 'likes', 'retweets', 'replies', 'quotes', 'bookmarks'];
+
+function synthesisRowFor(binding) {
+  const { evidence, analysis, extension } = binding;
+  const result = extension?.result || {};
+  const isV2 = extension?.schema_version === P32_MODEL_ANALYSIS_SCHEMA_VERSION;
+  const engagement = evidence?.source_metadata?.engagement;
+  const present = {};
+  let total = 0;
+  let anyPresent = false;
+  for (const key of P32_ENGAGEMENT_TOTAL_KEYS) {
+    const value = engagement?.[key];
+    present[key] = Number.isInteger(value) ? value : null;
+    if (present[key] !== null) {
+      total += present[key];
+      anyPresent = true;
+    }
+  }
+  const views = Number.isInteger(engagement?.views) ? engagement.views : null;
+  const totalEngagement = anyPresent ? total : null;
+  const rate = views !== null && views > 0 && totalEngagement !== null ? totalEngagement / views : null;
+  const mediaRows = Array.isArray(result.media_analysis) ? result.media_analysis : [];
+  const styles = mediaRows
+    .map((row) => (isV2 ? String(row?.style_pattern || '') : String(row?.visual_content || '')))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return {
+    evidenceId: evidence.id,
+    evidenceLabel: evidence.label,
+    analysis,
+    isV2,
+    hook: isV2 ? String(result.hook || '') : '',
+    textExpression: String(result.text_expression || ''),
+    copyPattern: isV2 ? String(result.copy_pattern || '') : '',
+    targetAudience: isV2 ? String(result.target_audience || '') : '',
+    audienceNeedEmotion: isV2 ? String(result.audience_need_emotion || '') : '',
+    drivers: (result.virality_drivers || []).map(String).map((value) => value.trim()).filter(Boolean),
+    methods: (result.reusable_methods || []).map(String).map((value) => value.trim()).filter(Boolean),
+    signals: (result.signals || []).map(String).map((value) => value.trim()).filter(Boolean),
+    risks: (result.risks || []).map(String).map((value) => value.trim()).filter(Boolean),
+    styles,
+    views,
+    engagement: present,
+    totalEngagement,
+    rate,
+  };
+}
+
+/** 跨行词条按出现行数聚合（确定性：行内去重、按频次降序、同频按首次出现顺序）。 */
+function rankByRowFrequency(rows, pick, { minCount = 1 } = {}) {
+  const frequency = new Map();
+  const firstIndex = new Map();
+  rows.forEach((row, index) => {
+    const seen = new Set();
+    for (const value of pick(row)) {
+      const key = String(value).trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      frequency.set(key, (frequency.get(key) || 0) + 1);
+      if (!firstIndex.has(key)) firstIndex.set(key, index);
+    }
+  });
+  return [...frequency.entries()]
+    .filter(([, count]) => count >= minCount)
+    .sort((a, b) => b[1] - a[1] || firstIndex.get(a[0]) - firstIndex.get(b[0]))
+    .map(([key]) => boundedSlice(key, P32_SYNTHESIS_ITEM_MAX));
+}
+
+function boundedList(items, max = P32_SYNTHESIS_MAX_ITEMS) {
+  return items.map((item) => boundedSlice(item, P32_SYNTHESIS_ITEM_MAX)).slice(0, max);
+}
+
+function rankRowsByRealEngagement(rows) {
+  const available = rows.filter((row) => row.totalEngagement !== null);
+  const unavailable = rows.filter((row) => row.totalEngagement === null);
+  available.sort((a, b) => {
+    if (b.totalEngagement !== a.totalEngagement) return b.totalEngagement - a.totalEngagement;
+    if ((a.views ?? -1) !== (b.views ?? -1)) return (b.views ?? -1) - (a.views ?? -1);
+    return 0;
+  });
+  return { available, unavailable, ranked: [...available, ...unavailable] };
+}
+
+/**
+ * P32-C 范围 B：多帖综合洞察（纯确定性派生，绝不调用模型、绝不联网）。
+ * - 高表现判断只使用真实存在的浏览/点赞/转发/回复/引用/收藏指标；
+ *   缺失显示为 null（界面「—」），绝不伪造为 0。
+ * - 综合结果携带稳定 identity/fingerprint 与选中 Evidence/Analysis 的有序
+ *   不可变来源快照；identity 只由来源快照决定（与生成时间无关），同一选择
+ *   与同一批分析反复计算得到完全相同的 id 与 fingerprint。
+ * - 选择顺序无关：bindings 按项目 evidence 顺序规范化。
+ */
+export function generateSynthesisInsight(project, selectedEvidenceIds, { now = () => new Date().toISOString() } = {}) {
+  const verdict = validateSynthesisSelection(project, selectedEvidenceIds);
+  if (!verdict.valid) {
+    const error = workbenchError('P32_SYNTHESIS_INVALID_SELECTION', verdict.reason);
+    error.selectionIssues = verdict.issues.slice();
+    throw error;
+  }
+  const rows = verdict.bindings.map(synthesisRowFor);
+  const { available, ranked } = rankRowsByRealEngagement(rows);
+  const topTotal = available.length > 0 ? available[0].totalEngagement : null;
+  const topRows = topTotal !== null ? available.filter((row) => row.totalEngagement === topTotal) : [];
+  const bottomRow = available.length >= 2 ? available[available.length - 1] : null;
+
+  const commonTopics = rankByRowFrequency(rows, (row) => [...row.drivers, ...row.signals], { minCount: 2 });
+  const highPerformance = [];
+  for (const row of topRows.slice(0, 2)) {
+    const hook = row.hook || row.copyPattern || row.textExpression;
+    if (hook) highPerformance.push(`「${boundedSlice(row.evidenceLabel, P32_SYNTHESIS_LABEL_MAX)}」高表现结构：${boundedSlice(hook, P32_SYNTHESIS_ITEM_MAX)}`);
+  }
+  const visualStyles = boundedList(rankByRowFrequency(rows, (row) => row.styles));
+  const audienceSentiment = boundedList(rankByRowFrequency(rows, (row) => [row.audienceNeedEmotion, row.targetAudience, ...row.signals]));
+  const reusableFormula = boundedList(rankByRowFrequency(rows, (row) => [row.copyPattern, ...row.methods]));
+  const riskItems = boundedList(rankByRowFrequency(rows, (row) => row.risks));
+  if (bottomRow && topRows.length > 0 && bottomRow.evidenceId !== topRows[0].evidenceId) {
+    const bottomHook = bottomRow.hook || bottomRow.textExpression;
+    riskItems.push(`低互动参考（「${boundedSlice(bottomRow.evidenceLabel, P32_SYNTHESIS_LABEL_MAX)}」总互动 ${bottomRow.totalEngagement}）：建议不复刻其钩子「${boundedSlice(bottomHook, 80)}」。`);
+  }
+
+  const sections = {
+    common_topics: commonTopics.length > 0 ? boundedList(commonTopics) : ['未发现跨帖重复的传播主题（各帖主题差异较大）。'],
+    high_performance_structures: highPerformance.length > 0 ? highPerformance.slice(0, P32_SYNTHESIS_MAX_ITEMS) : ['互动数据不可用：无法确定性判定高表现内容（缺失指标按不可用显示，绝不伪造为 0）。'],
+    visual_styles: visualStyles.length > 0 ? visualStyles : ['媒体分析未提供可聚合的视觉风格。'],
+    audience_sentiment: audienceSentiment.length > 0 ? audienceSentiment : ['分析未提供受众情绪字段。'],
+    reusable_formula: reusableFormula.length > 0 ? reusableFormula : ['未发现可复用的内容公式。'],
+    risks_do_not_copy: riskItems.length > 0 ? riskItems : ['未发现明确风险信号。'],
+  };
+  const orderedEvidenceIds = verdict.bindings.map((binding) => binding.evidenceId);
+  const sourceSnapshot = verdict.bindings.map((binding) => ({
+    evidence_id: binding.evidenceId,
+    evidence_fingerprint: binding.evidence.fingerprint,
+    analysis_id: binding.analysis.id,
+    analysis_fingerprint: binding.analysis.fingerprint,
+    analysis_version: binding.analysis.version,
+    model_schema_version: binding.extension.schema_version,
+  }));
+  const engagementBasis = ranked.map((row) => {
+    const basis = { evidence_id: row.evidenceId, evidence_label: boundedSlice(row.evidenceLabel, P32_SYNTHESIS_LABEL_MAX) };
+    for (const key of P32_ENGAGEMENT_DISPLAY_KEYS) basis[key] = row.engagement[key] ?? null;
+    basis.views = row.views;
+    basis.total_engagement = row.totalEngagement;
+    basis.engagement_rate = row.rate;
+    return basis;
+  });
+  const identityInput = { project_id: project.id, selected_evidence_ids: orderedEvidenceIds, source_snapshot: sourceSnapshot };
+  const id = `syn-${fingerprintOfSync(identityInput).slice(0, 24)}`;
+  const synthesis = {
+    schema_version: P32_SYNTHESIS_SCHEMA_VERSION,
+    id,
+    project_id: project.id,
+    selected_evidence_ids: orderedEvidenceIds,
+    source_snapshot: sourceSnapshot,
+    sections,
+    engagement_basis: engagementBasis,
+    generated_at: now(),
+    fingerprint: '',
+  };
+  synthesis.fingerprint = fingerprintOfSync({
+    schema_version: synthesis.schema_version,
+    id: synthesis.id,
+    project_id: synthesis.project_id,
+    selected_evidence_ids: synthesis.selected_evidence_ids,
+    source_snapshot: synthesis.source_snapshot,
+    sections: synthesis.sections,
+    engagement_basis: synthesis.engagement_basis,
+  });
+  return synthesis;
+}
+
+/**
+ * P32-C 范围 C：对每条选中 Evidence 的最新分析生成或复用当前有效知识卡。
+ * 幂等：同一分析（相同 id + fingerprint + version）重试绝不产生重复知识卡
+ * （复用计数增加、项目指纹不变）；缺失/过时/错绑整体失败关闭，项目不变。
+ */
+export async function buildKnowledgeCardsForSelection(project, selectedEvidenceIds, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
+  assertNotArchived(project);
+  const verdict = validateSynthesisSelection(project, selectedEvidenceIds);
+  if (!verdict.valid) {
+    const error = workbenchError('P32_SYNTHESIS_INVALID_SELECTION', verdict.reason);
+    error.selectionIssues = verdict.issues.slice();
+    throw error;
+  }
+  let current = clonePlain(project);
+  const cards = [];
+  let createdCount = 0;
+  let reusedCount = 0;
+  for (const binding of verdict.bindings) {
+    const before = current;
+    const next = await buildKnowledgeCard(current, binding.analysis.id, { now, hasher });
+    const card = (next.knowledge_cards || []).find((item) => item.analysis_id === binding.analysis.id
+      && item.analysis_fingerprint === binding.analysis.fingerprint
+      && item.analysis_version === binding.analysis.version);
+    if (!card) throw workbenchError('P32_SYNTHESIS_CARDS_MISSING', '知识卡生成后无法精确绑定本次选择的分析版本，已失败关闭。');
+    if (next.fingerprint !== before.fingerprint) createdCount += 1;
+    else reusedCount += 1;
+    cards.push(card);
+    current = next;
+  }
+  return { project: current, cards, bindings: verdict.bindings, createdCount, reusedCount };
+}
+
+/**
+ * P32-C 范围 C：新增「精确选中知识卡范围」Brief 组装入口。
+ * - 只引用本次选择派生/复用的知识卡；项目中未选中的其他卡绝不混入。
+ * - Brief 包含本次综合洞察的可读摘要（p32_synthesis）与准确 citation IDs；
+ *   其余结构保持 P24/P25/P29/P32-A 合同兼容（schema/status/review/provenance 不变）。
+ * - 新 Brief 状态恒为 pending_review，任何旧人工决定重置；绝不自动批准、
+ *   绝不创建交接包（handoff 清空）。
+ * - 前置条件：所选知识卡必须已存在且未过时（在线模式先走 card.create 命令）。
+ */
+export async function assembleSynthesisBrief(project, { selectedEvidenceIds, now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
+  assertNotArchived(project);
+  const verdict = validateSynthesisSelection(project, selectedEvidenceIds);
+  if (!verdict.valid) {
+    const error = workbenchError('P32_SYNTHESIS_INVALID_SELECTION', verdict.reason);
+    error.selectionIssues = verdict.issues.slice();
+    throw error;
+  }
+  const cards = [];
+  for (const binding of verdict.bindings) {
+    const cardForAnalysis = (project.knowledge_cards || []).find((item) => item.analysis_id === binding.analysis.id);
+    if (!cardForAnalysis) {
+      throw workbenchError('P32_SYNTHESIS_CARDS_MISSING', `证据「${boundedSlice(binding.evidence.label, 40)}」的知识卡尚未生成：请先生成知识卡（幂等，可安全续传）。`);
+    }
+    if (cardForAnalysis.analysis_fingerprint !== binding.analysis.fingerprint
+      || cardForAnalysis.analysis_version !== binding.analysis.version) {
+      throw workbenchError('P32_SYNTHESIS_CARDS_STALE', `证据「${boundedSlice(binding.evidence.label, 40)}」的知识卡绑定了旧分析快照：请重建知识卡后再生成 Brief。`);
+    }
+    cards.push(cardForAnalysis);
+  }
+  const staleness = await computeStaleness(project, { hasher });
+  for (const card of cards) {
+    if (staleness.card_stale_ids.includes(card.id)) {
+      throw workbenchError('P32_SYNTHESIS_CARDS_STALE', '所选知识卡已过时：请先重跑对应分析并重建知识卡（幂等续传不会产生重复卡）。');
+    }
+  }
+  const synthesis = generateSynthesisInsight(project, selectedEvidenceIds, { now });
+  const timestamp = now();
+  const cardFingerprints = {};
+  for (const card of cards) cardFingerprints[card.id] = card.fingerprint;
+  const citationIds = cards.map((card) => card.id);
+  const evidenceBinding = resolveBriefEvidenceBindings(project, citationIds);
+  if (!evidenceBinding.valid) {
+    throw workbenchError('BRIEF_EVIDENCE_BINDING_INVALID', evidenceBinding.issues[0] || 'Brief cited Evidence binding is invalid.');
+  }
+  const citedEvidence = evidenceBinding.evidence;
+  const hasCollectedEvidence = citedEvidence.some((item) => item.provenance?.manual === false);
+  const evidenceProvenanceFingerprint = evidenceProofFingerprint(citedEvidence);
+  const projectFingerprint = await hasher(clonePlain({
+    topic: project.topic,
+    objective: project.objective,
+    audience: project.audience,
+    channel: project.channel,
+    constraints: project.constraints,
+  }));
+  const previous = project.brief || null;
+  const id = previous && previous.id ? previous.id : await stableId('brief-', { project_id: project.id, timestamp });
+  const version = previous ? previous.version + 1 : 1;
+  const multimodalCards = cards.filter((card) => card.analysis_provenance && card.analysis_provenance.method === MULTIMODAL_METHOD);
+  const analysisById = new Map((project.analyses || []).map((row) => [row.id, row]));
+  const evidenceById = new Map(citedEvidence.map((row) => [row.id, row]));
+  const brief = {
+    schema_version: BRIEF_SCHEMA_VERSION,
+    id,
+    project_id: project.id,
+    version,
+    status: 'pending_review',
+    topic: project.topic,
+    objective: project.objective,
+    audience: project.audience,
+    channel: project.channel,
+    constraints: clonePlain(project.constraints || []),
+    knowledge_citation_ids: citationIds,
+    structural_guidance: cards.flatMap((card) => (card.generation_guidance ? card.generation_guidance.must_preserve || [] : []).slice(0, 3)).slice(0, MAX_ARRAY_LENGTH),
+    evidence_provenance: {
+      local_only: !hasCollectedEvidence,
+      store: hasCollectedEvidence ? 'p19_workspace_v1' : 'p19_local_store_v1',
+      created_from: 'selected_knowledge_cards',
+      statement: hasCollectedEvidence
+        ? '证据包含经服务端来源证明绑定的公开采集记录；Brief 保留对应知识卡与证据快照。'
+        : '证据全部来自本地手工录入，未经过任何平台采集或验证。',
+    },
+    card_fingerprints: cardFingerprints,
+    evidence_provenance_fingerprint: evidenceProvenanceFingerprint,
+    project_fingerprint: projectFingerprint,
+    analysis_provenance: multimodalCards.length > 0 ? {
+      method: MULTIMODAL_METHOD,
+      provider: MULTIMODAL_PROVIDER,
+      model: multimodalCards[0].analysis_provenance.model,
+      executed_at: multimodalCards[0].analysis_provenance.executed_at,
+      analysis_ids: multimodalCards.map((card) => card.analysis_id),
+      media_count: multimodalCards.reduce((sum, card) => sum + (card.analysis_provenance.media_ids || []).length, 0),
+      statement: 'Brief 包含 P29 服务端多模态 Qwen 分析的绑定发现；模型/执行身份随分析与知识卡保留。',
+    } : null,
+    multimodal_findings: multimodalCards.length > 0 ? buildMultimodalFindings(multimodalCards, analysisById, evidenceById) : null,
+    p32_synthesis: {
+      schema_version: synthesis.schema_version,
+      synthesis_id: synthesis.id,
+      fingerprint: synthesis.fingerprint,
+      selected_evidence_ids: clonePlain(synthesis.selected_evidence_ids),
+      source_snapshot: clonePlain(synthesis.source_snapshot),
+      summary: clonePlain(synthesis.sections),
+      engagement_basis: clonePlain(synthesis.engagement_basis),
+      generated_at: synthesis.generated_at,
+    },
+    review: {
+      schema_version: BRIEF_REVIEW_SCHEMA_VERSION,
+      brief_id: id,
+      decision: null,
+      comments: previous && Array.isArray(previous.review?.comments) ? previous.review.comments.slice() : [],
+    },
+    version_note: previous ? `基于第 ${previous.version} 版重建（精确选中知识卡范围 + 多帖综合洞察）。` : '首次组装（精确选中知识卡范围 + 多帖综合洞察）。',
+    fingerprint: '',
+    created_at: previous ? previous.created_at : timestamp,
+    updated_at: timestamp,
+  };
+  brief.fingerprint = await hasher(brief);
+  const briefVerdict = validateBrief(brief);
+  if (!briefVerdict.valid) throw workbenchError('BRIEF_BUILD_FAILED', briefVerdict.issues[0] || 'Brief 组装未通过校验。');
+  const next = clonePlain(project);
+  next.brief = brief;
+  next.handoff = null; // Brief 重建后旧交接包作废
+  next.handoffs = [];
+  return bumpProject(next, { now, hasher });
+}
+
+/**
+ * 在线多命令部分失败后的权威对账（纯函数，供页面结构化错误与幂等续传使用）：
+ * 对每条选中 Evidence 检查其最新有效分析是否已有当前知识卡；并检查权威
+ * Brief 是否已携带本次综合 identity。绝不把部分完成谎报为完整成功。
+ */
+export function computeSynthesisPartialState(project, selectedEvidenceIds) {
+  const ids = Array.isArray(selectedEvidenceIds) ? [...new Set(selectedEvidenceIds)] : [];
+  const evidenceById = new Map((project?.evidence || []).map((item) => [item.id, item]));
+  const bindings = [];
+  const unresolvedIds = [];
+  for (const evidenceId of ids) {
+    const evidence = evidenceById.get(evidenceId);
+    if (!evidence) {
+      unresolvedIds.push(evidenceId);
+      continue;
+    }
+    const analysis = getLatestAnalysisForEvidence(project, evidenceId);
+    if (!analysis || !analysis.model_analysis
+      || analysis.project_id !== project?.id
+      || analysis.evidence_fingerprint !== evidence.fingerprint
+      || analysis.evidence_version !== evidence.version) {
+      unresolvedIds.push(evidenceId);
+      continue;
+    }
+    const card = (project?.knowledge_cards || []).find((item) => item.analysis_id === analysis.id
+      && item.analysis_fingerprint === analysis.fingerprint
+      && item.analysis_version === analysis.version) || null;
+    bindings.push({ evidenceId, analysis, card });
+  }
+  const cardsConfirmed = bindings.filter((binding) => binding.card).length;
+  const cardsPending = bindings.length - cardsConfirmed;
+  const pendingEvidenceIds = [...bindings.filter((binding) => !binding.card).map((binding) => binding.evidenceId), ...unresolvedIds];
+  const brief = project?.brief || null;
+  let briefAssembled = false;
+  if (brief && cardsPending === 0 && unresolvedIds.length === 0 && bindings.length === ids.length) {
+    try {
+      const expected = generateSynthesisInsight(project, ids);
+      const actual = brief.p32_synthesis;
+      const expectedCardIds = bindings.map((binding) => binding.card.id);
+      briefAssembled = Boolean(actual
+        && actual.synthesis_id === expected.id
+        && actual.fingerprint === expected.fingerprint
+        && JSON.stringify(actual.selected_evidence_ids) === JSON.stringify(expected.selected_evidence_ids)
+        && JSON.stringify(actual.source_snapshot) === JSON.stringify(expected.source_snapshot)
+        && JSON.stringify(brief.knowledge_citation_ids || []) === JSON.stringify(expectedCardIds));
+    } catch {
+      briefAssembled = false;
+    }
+  }
+  const briefCitationIds = brief ? (brief.knowledge_citation_ids || []).slice() : [];
+  return {
+    cards_confirmed: cardsConfirmed,
+    cards_pending: cardsPending,
+    pending_evidence_ids: pendingEvidenceIds,
+    brief_assembled: briefAssembled,
+    brief_citation_ids: briefCitationIds,
+  };
+}
+
+
 export async function buildKnowledgeCard(project, analysisId, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
   assertNotArchived(project);
   const analysis = (project.analyses || []).find((item) => item.id === analysisId);

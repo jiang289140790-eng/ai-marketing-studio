@@ -18,10 +18,14 @@ import {
   addEvidence,
   archiveProject,
   assembleBrief,
+  assembleSynthesisBrief,
   buildKnowledgeCard,
+  buildKnowledgeCardsForSelection,
   buildProjectWorkflowState,
+  computeSynthesisPartialState,
   createProject,
   deriveHandoffPackage,
+  generateSynthesisInsight,
   recordAssistedAnalysis,
   recordVersionedReanalysis,
   removeEvidence,
@@ -29,6 +33,7 @@ import {
   runAnalysis,
   updateEvidence,
   updateProjectProfile,
+  validateSynthesisSelection,
   workbenchError,
 } from '../services/p19-workspace-service.js';
 import { buildLineageAudit, buildProjectLineageGraph } from '../services/p19-lineage.js';
@@ -200,6 +205,9 @@ export function ResearchWorkspacePage() {
   const [viewMode, setViewMode] = useState(readP21ViewMode);
   const [selectedStep, setSelectedStep] = useState(null);
   const [comparedEvidenceIds, setComparedEvidenceIds] = useState([]);
+  // P32-C 综合成功结果（选中条数/卡复用新建数/Brief 版本与状态）。切换项目、
+  // 归档、刷新或证据变化后严格重新验证；绝不跨项目复用旧结论。
+  const [synthesisOutcome, setSynthesisOutcome] = useState(null);
   // P32-B 热门主题搜索瞬态状态：{ batch, selectedIds }。切换项目、重新搜索或刷新后
   // 立即失效，绝不把旧选择导入其他项目（见 activeId 清理 effect）。
   const [hotSearchState, setHotSearchState] = useState(null);
@@ -323,6 +331,8 @@ export function ResearchWorkspacePage() {
     setPendingImport(null);
     setSelectedStep(null);
     setComparedEvidenceIds([]);
+    // P32-C：切换项目必须清空综合结果（旧结论绝不跨项目复用）。
+    setSynthesisOutcome(null);
     // P32-B：切换项目必须清空瞬态搜索结果与选择，防止旧选择导入其他项目。
     setHotSearchState(null);
   }, [activeId]);
@@ -774,6 +784,117 @@ export function ResearchWorkspacePage() {
     return run('组装 Brief', () => assembleBrief(project), { notice: 'Brief 已组装（版本递增，审核重置为待审核）。' });
   }, [run, project]);
 
+  /**
+   * P32-C 综合生成：从当前多帖比较选择确定性派生综合洞察（绝不调用模型），
+   * 为每条选中 Evidence 的最新有效 Qwen 分析生成/复用知识卡，再用「精确选中
+   * 知识卡范围」入口组装一份新的待人工审核 Brief（任何旧人工决定重置；绝不
+   * 自动批准、绝不创建交接包）。
+   *
+   * 在线模式不具备远端跨命令事务原子性：知识卡与 Brief 通过既有
+   * card.create / brief.assemble 命令边界逐条保存；任一步失败立即重载权威
+   * 项目，按最新有效分析绑定对账并返回结构化 P32_ONLINE_SYNTHESIS_PARTIAL
+   * （已确认知识卡数 + Brief 是否已组装），绝不把部分结果展示为全成功；
+   * 同一选择重试完全幂等（已存在的卡复用、已组装的 Brief 版本递增），
+   * 绝不产生重复知识卡，最终完整完成。
+   */
+  const handleSynthesizeBrief = useCallback(async () => {
+    if (!project || project.status === 'archived') {
+      setError({ code: 'PROJECT_ARCHIVED', message: '项目已归档，不能生成综合知识与 Brief。' });
+      return false;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    setSynthesisOutcome(null);
+    const nowIso = () => new Date().toISOString();
+    try {
+      const verdict = validateSynthesisSelection(project, comparedEvidenceIds);
+      if (!verdict.valid) {
+        throw workbenchError('P32_SYNTHESIS_INVALID_SELECTION', verdict.reason);
+      }
+      // 综合洞察只由已保存的 Qwen 分析确定性派生：无模型调用、无额外费用。
+      const synthesis = generateSynthesisInsight(project, comparedEvidenceIds, { now: nowIso });
+      const selectedIds = synthesis.selected_evidence_ids;
+      let current = project;
+      let reusedCount = 0;
+      let createdCount = 0;
+      if (onlineMode) {
+        for (const binding of verdict.bindings) {
+          const afterCard = await buildKnowledgeCard(current, binding.analysis.id, { now: nowIso });
+          if (afterCard.fingerprint !== current.fingerprint) {
+            const spec = buildOnlineCommand(current, afterCard);
+            current = await onlineStore.execute(spec.command, spec.payload, spec.options);
+            createdCount += 1;
+          } else {
+            current = afterCard;
+            reusedCount += 1;
+          }
+        }
+        const afterBrief = await assembleSynthesisBrief(current, { selectedEvidenceIds: selectedIds, now: nowIso });
+        const spec = buildOnlineCommand(current, afterBrief);
+        current = await onlineStore.execute(spec.command, spec.payload, spec.options);
+        setProject(current);
+      } else {
+        const cardsResult = await buildKnowledgeCardsForSelection(project, selectedIds, { now: nowIso });
+        current = cardsResult.project;
+        reusedCount = cardsResult.reusedCount;
+        createdCount = cardsResult.createdCount;
+        const afterBrief = await assembleSynthesisBrief(current, { selectedEvidenceIds: selectedIds, now: nowIso });
+        const saved = store.putProject(afterBrief);
+        if (!saved.ok) throw workbenchError(saved.code, saved.message);
+        current = afterBrief;
+        setProject(current);
+      }
+      await reloadProjects();
+      const brief = current.brief;
+      const outcome = {
+        selected: selectedIds.length,
+        reused: reusedCount,
+        created: createdCount,
+        briefVersion: brief ? brief.version : 0,
+        briefStatus: brief ? brief.status : null,
+        synthesisId: synthesis.id,
+      };
+      setSynthesisOutcome(outcome);
+      setNotice(`综合完成：选中 ${outcome.selected} 条 · 知识卡复用 ${outcome.reused} / 新建或重建 ${outcome.created} · Brief 第 ${outcome.briefVersion} 版（待人工审核 pending）。无模型调用、无额外费用；不会自动批准或生成交接包。`);
+      // 成功后滚动/聚焦到 Brief。
+      globalThis.setTimeout(() => {
+        const section = globalThis.document?.getElementById('p21-step-brief');
+        if (section) {
+          section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          section.setAttribute('tabindex', '-1');
+          section.focus({ preventScroll: true });
+        }
+      }, 120);
+      return true;
+    } catch (cause) {
+      if (onlineMode && project?.id) {
+        try {
+          const recovered = await onlineStore.getProject(project.id);
+          setProject(recovered);
+          // 结构化部分完成对账（绝不谎报完整成功）。
+          const partial = computeSynthesisPartialState(recovered, comparedEvidenceIds);
+          if (partial.cards_pending > 0 || !partial.brief_assembled) {
+            const partialError = workbenchError(
+              'P32_ONLINE_SYNTHESIS_PARTIAL',
+              `在线综合未全部完成（已确认 ${partial.cards_confirmed} 张知识卡 / Brief ${partial.brief_assembled ? '已组装' : '未组装'}）：剩余 ${partial.cards_pending} 张知识卡待续传。已重载服务端权威状态；可直接重试同一选择（幂等：已存在卡复用、绝不产生重复卡）。`,
+            );
+            partialError.details = partial;
+            setError({ code: partialError.code, message: partialError.message, details: partialError.details });
+            return false;
+          }
+        } catch {
+          // 保留原始有界错误；后续显式刷新仍然可用。
+        }
+      }
+      const message = cause && cause.bounded ? cause.message : String((cause && cause.message) || cause).slice(0, 300);
+      setError({ code: (cause && cause.code) || 'P32_SYNTHESIS_FAILED', message });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [comparedEvidenceIds, onlineMode, onlineStore, project, reloadProjects, store]);
+
   const handleDecide = useCallback((value, rationale, comment) => {
     return run('记录审核决定', () => reviewBrief(project, { decision: value, rationale, comment }), {
       notice: value === 'approved' ? 'Brief 已人工批准（approved + local_manual）。' : 'Brief 已退回修改（return_for_revision）。',
@@ -1206,6 +1327,9 @@ export function ResearchWorkspacePage() {
                 project={project}
                 selectedIds={comparedEvidenceIds}
                 onSelectionChange={setComparedEvidenceIds}
+                onSynthesize={handleSynthesizeBrief}
+                busy={busy}
+                outcome={synthesisOutcome}
               />
             </section>
             <section className="p21-step-panel" id="p21-step-analysis" data-p21-step="analysis" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'analysis'}>

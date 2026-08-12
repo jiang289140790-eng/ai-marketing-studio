@@ -113,6 +113,7 @@ const STORED_ENTITY_FIELDS = Object.freeze({
     'constraints','knowledge_citation_ids','structural_guidance','evidence_provenance',
     'card_fingerprints','evidence_provenance_fingerprint','project_fingerprint','review','version_note',
     'analysis_provenance','multimodal_findings','fingerprint','created_at','updated_at',
+    'p32_synthesis',
   ]),
 });
 
@@ -497,22 +498,31 @@ function unknownPackageFields(pkg) {
 function checkBindings(pkg) {
   const projectId = pkg.project.id;
   const evidenceIds = new Set();
+  const evidenceById = new Map();
   const analysisIds = new Set();
+  const analysesByEvidence = new Map();
+  const analysisById = new Map();
   for (const record of pkg.evidence) {
     if (evidenceIds.has(record.id)) return bindingFail('证据 id 重复。');
     if (record.project_id !== projectId) return bindingFail('证据绑定到其他项目。');
     evidenceIds.add(record.id);
+    evidenceById.set(record.id, record);
   }
   for (const record of pkg.analyses) {
     if (analysisIds.has(record.id)) return bindingFail('分析 id 重复。');
     if (record.project_id !== projectId) return bindingFail('分析绑定到其他项目。');
     if (!evidenceIds.has(record.evidence_id)) return bindingFail('分析绑定的证据不存在。');
     analysisIds.add(record.id);
+    analysisById.set(record.id, record);
+    if (!analysesByEvidence.has(record.evidence_id)) analysesByEvidence.set(record.evidence_id, []);
+    analysesByEvidence.get(record.evidence_id).push(record);
   }
   const cardIds = new Set();
+  const cardById = new Map();
   for (const card of pkg.knowledge_cards) {
     if (cardIds.has(card.id)) return bindingFail('知识卡 id 重复。');
     cardIds.add(card.id);
+    cardById.set(card.id, card);
     if (card.project_id !== projectId) return bindingFail('知识卡绑定到其他项目。');
     if (!analysisIds.has(card.analysis_id)) return bindingFail('知识卡绑定的分析不存在。');
     if (typeof card.analysis_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(card.analysis_fingerprint)) {
@@ -523,6 +533,41 @@ function checkBindings(pkg) {
     if (pkg.brief.project_id !== projectId) return bindingFail('Brief 绑定到其他项目。');
     for (const cardId of pkg.brief.knowledge_citation_ids) {
       if (!pkg.knowledge_cards.some((card) => card.id === cardId)) return bindingFail(`Brief 引用不存在的知识卡 ${String(cardId).slice(0, 40)}。`);
+    }
+    const synthesis = pkg.brief.p32_synthesis;
+    if (synthesis) {
+      const selected = synthesis.selected_evidence_ids || [];
+      const snapshots = synthesis.source_snapshot || [];
+      const citations = pkg.brief.knowledge_citation_ids || [];
+      if (selected.length !== snapshots.length || selected.length !== citations.length) return bindingFail('多帖综合选择、来源快照与知识引用数量不一致。');
+      for (let index = 0; index < selected.length; index += 1) {
+        const evidenceId = selected[index];
+        const snapshot = snapshots[index];
+        const evidence = evidenceById.get(evidenceId);
+        if (!evidence || snapshot.evidence_id !== evidenceId || snapshot.evidence_fingerprint !== evidence.fingerprint) return bindingFail('多帖综合来源快照未绑定当前 Evidence 指纹。');
+        const versions = analysesByEvidence.get(evidenceId) || [];
+        const maxVersion = Math.max(...versions.map((analysis) => analysis.version), 0);
+        const latest = versions.filter((analysis) => analysis.version === maxVersion);
+        if (latest.length !== 1) return bindingFail('多帖综合 Evidence 的最新分析版本不唯一。');
+        const analysis = analysisById.get(snapshot.analysis_id);
+        if (!analysis || analysis !== latest[0]
+          || analysis.evidence_id !== evidenceId
+          || analysis.project_id !== projectId
+          || analysis.fingerprint !== snapshot.analysis_fingerprint
+          || analysis.version !== snapshot.analysis_version
+          || analysis.evidence_fingerprint !== evidence.fingerprint
+          || analysis.evidence_version !== evidence.version
+          || analysis.model_analysis?.schema_version !== snapshot.model_schema_version) {
+          return bindingFail('多帖综合来源快照未绑定当前最新有效 Qwen 分析。');
+        }
+        const citedCard = cardById.get(citations[index]);
+        if (!citedCard
+          || citedCard.analysis_id !== analysis.id
+          || citedCard.analysis_fingerprint !== analysis.fingerprint
+          || citedCard.analysis_version !== analysis.version) {
+          return bindingFail('多帖综合知识引用未与来源分析一对一绑定。');
+        }
+      }
     }
   }
   if (pkg.handoff) {

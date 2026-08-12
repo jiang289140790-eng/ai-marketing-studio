@@ -10,8 +10,10 @@ import {
 } from '../../services/p19-contracts.js';
 import {
   generateEvidenceComparison,
+  generateSynthesisInsight,
   getAllAnalysisVersionsForEvidence,
   getLatestAnalysisForEvidence,
+  validateSynthesisSelection,
 } from '../../services/p19-workspace-service.js';
 import {
   P32_BATCH_IMPORT_MAX,
@@ -525,6 +527,24 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
               </ul>
             </div>
           )}
+          {brief.p32_synthesis && (
+            <div className="p32-synthesis-brief-summary" aria-label="多帖综合洞察摘要">
+              <b>多帖综合洞察摘要（精确选中 {brief.p32_synthesis.selected_evidence_ids.length} 条证据，不调用模型）：</b>
+              {P32_SYNTHESIS_SECTION_META.map((meta) => (
+                <div className="p32-synthesis-brief-item" key={meta.key}>
+                  <span className="p32-synthesis-brief-label">{meta.label}：</span>
+                  <span className="p32-synthesis-brief-text">
+                    {(brief.p32_synthesis.summary[meta.key] || []).map((item) => boundedText(item, 140)).join(' · ') || '—'}
+                  </span>
+                </div>
+              ))}
+              <p className="p32-synthesis-brief-meta">
+                综合 identity：{brief.p32_synthesis.synthesis_id}
+                {' · '}指纹 {String(brief.p32_synthesis.fingerprint).slice(0, 12)}…
+                {' · '}引用知识卡（精确选中范围，未选中卡绝不混入）：{(brief.knowledge_citation_ids || []).map((cardId) => cardId.slice(0, 16)).join('、')}
+              </p>
+            </div>
+          )}
           <p className="p19-meta-line">
             批准本草案后即可派生 P5 交接包；本页不会生成内容、选择工作流、路由、创建任务或发布，四项执行标志恒为 false。
           </p>
@@ -886,8 +906,12 @@ function P32AnalysisHistory({ versions }) {
 /**
  * P32-A 多选比较：允许选择 2-5 条已保存证据，进行确定性逐条比较。
  * 选择在项目切换时重置；不跨项目污染。
+ *
+ * P32-C：面板底部新增「生成综合知识与待审核 Brief」主按钮与确定性综合洞察
+ * 预览（不调用模型、无额外费用、不自动批准/交接/发布）；选择每次渲染都
+ * 重新严格验证（缺失/过时/跨项目/重复/错绑时给出原位置可操作提示）。
  */
-export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
+export function P32ComparisonView({ project, selectedIds, onSelectionChange, onSynthesize, busy, outcome }) {
   const evidence = project.evidence || [];
   const hasAnalyzable = evidence.some((record) => {
     const latest = getLatestAnalysisForEvidence(project, record.id);
@@ -907,6 +931,20 @@ export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
     return generateEvidenceComparison(project, selectedIds);
   }, [project, selectedIds]);
 
+  // P32-C：精确选择前置校验（每次渲染重算：证据变化/项目切换/刷新后绝不沿用旧结论）。
+  const synthesisVerdict = useMemo(
+    () => validateSynthesisSelection(project, selectedIds),
+    [project, selectedIds],
+  );
+  const synthesisPreview = useMemo(() => {
+    if (!synthesisVerdict.valid) return null;
+    try {
+      return generateSynthesisInsight(project, selectedIds);
+    } catch {
+      return null;
+    }
+  }, [project, selectedIds, synthesisVerdict.valid]);
+
   return (
     <div className="p19-panel p32-compare" aria-label="多帖比较">
       <div className="p19-panel-head">
@@ -925,20 +963,21 @@ export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
         {evidence.map((record) => {
           const latest = getLatestAnalysisForEvidence(project, record.id);
           const hasAnalysis = Boolean(latest && latest.model_analysis);
+          const analysisStale = Boolean(hasAnalysis && (latest.evidence_fingerprint !== record.fingerprint || latest.evidence_version !== record.version));
           const isSelected = selectedIds.includes(record.id);
           const sourceMeta = record.source_metadata || {};
           const author = sourceMeta.author || {};
           return (
             <label
-              className={`p32-compare-chip ${isSelected ? 'selected' : ''} ${!hasAnalysis ? 'no-analysis' : ''}`}
+              className={`p32-compare-chip ${isSelected ? 'selected' : ''} ${!hasAnalysis || analysisStale ? 'no-analysis' : ''}`}
               key={record.id}
-              title={!hasAnalysis ? '该证据缺少多模态分析，比较时将显示缺失警告' : `选择此证据进行多帖比较`}
+              title={!hasAnalysis ? '该证据缺少多模态分析，比较/综合时将显示缺失警告' : analysisStale ? '该证据的分析已过时：请先在证据库点击「用 Qwen 重新分析」' : `选择此证据进行多帖比较`}
             >
               <input
                 type="checkbox"
                 checked={isSelected}
                 onChange={() => toggleSelect(record.id)}
-                disabled={!hasAnalysis && selectedIds.length >= 5}
+                disabled={(analysisStale || !hasAnalysis) && selectedIds.length >= 5 && !isSelected}
                 aria-label={`选择 ${boundedText(record.label, 40)} 进行比较`}
               />
               <span className="p32-chip-label">
@@ -947,7 +986,8 @@ export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
                   {author.name || author.handle || '未知作者'}
                   {sourceMeta.published_at ? ` · ${formatPublishedShort(sourceMeta.published_at)}` : ''}
                 </small>
-                {!hasAnalysis && <small className="p32-chip-warn">无多模态分析</small>}
+                {!hasAnalysis && <small className="p32-chip-warn">无多模态分析：先点「用 Qwen 重新分析」</small>}
+                {hasAnalysis && analysisStale && <small className="p32-chip-warn">分析已过时：先点「用 Qwen 重新分析」</small>}
               </span>
             </label>
           );
@@ -1051,6 +1091,140 @@ export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
       {comparison && !comparison.valid && (
         <p className="p19-blocking-note">{comparison.reason}</p>
       )}
+
+      {/* P32-C 综合知识与待审核 Brief 入口（确定性派生，绝不调用模型） */}
+      <div className="p32-synthesis-zone" aria-label="多帖综合洞察与待审核 Brief">
+        <div className="p32-synthesis-actions">
+          <button
+            className="p19-btn p19-btn-primary"
+            type="button"
+            disabled={Boolean(busy) || selectedIds.length < 2 || !synthesisVerdict.valid}
+            title={selectedIds.length < 2
+              ? '请先选择 2–5 条已保存证据'
+              : !synthesisVerdict.valid
+                ? synthesisVerdict.reason
+                : '从每条最新有效 Qwen 分析确定性派生综合洞察，并为本次选择生成/复用知识卡、组装新的待审核 Brief'}
+            onClick={onSynthesize}
+          >
+            {busy ? '综合生成中…' : '生成综合知识与待审核 Brief'}
+          </button>
+          <span className="p32-synthesis-note">
+            使用已保存分析 · 无额外模型费用 · 不会自动批准 / 不生成交接包 / 不发布
+          </span>
+        </div>
+        {selectedIds.length >= 2 && !synthesisVerdict.valid && (
+          <>
+            <p className="p19-blocking-note">⛔ {synthesisVerdict.reason}</p>
+            {synthesisVerdict.issues.length > 0 && (
+              <ul className="p32-synthesis-issues">
+                {synthesisVerdict.issues.map((issueText, index) => <li key={index}>{issueText}</li>)}
+              </ul>
+            )}
+          </>
+        )}
+        {outcome && (
+          <p className="p32-synthesis-outcome" role="status">
+            综合完成：选中 {outcome.selected} 条 · 知识卡复用 {outcome.reused} / 新建或重建 {outcome.created}
+            {' · '}Brief 第 {outcome.briefVersion} 版（{outcome.briefStatus === 'pending_review' ? '待人工审核 pending' : outcome.briefStatus}）
+            {' · '}无模型调用、无额外费用
+          </p>
+        )}
+        {synthesisPreview && (
+          <P32SynthesisPreview project={project} synthesis={synthesisPreview} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 有界计数展示：缺失指标显示「—」，绝不伪造为 0。 */
+function formatSynthesisCount(value) {
+  return value === null || value === undefined ? '—' : String(value);
+}
+
+function formatSynthesisRate(value) {
+  return value === null || value === undefined ? '—' : `${(value * 100).toFixed(2)}%`;
+}
+
+const P32_SYNTHESIS_SECTION_META = [
+  { key: 'common_topics', label: '共同主题' },
+  { key: 'high_performance_structures', label: '高表现内容结构 / 钩子' },
+  { key: 'visual_styles', label: '图片或视频风格' },
+  { key: 'audience_sentiment', label: '受众情绪与传播驱动' },
+  { key: 'reusable_formula', label: '可复用内容公式' },
+  { key: 'risks_do_not_copy', label: '风险与不应复制的部分' },
+];
+
+/**
+ * P32-C 综合洞察预览：确定性派生（不调用模型），展示六项洞察、真实指标
+ * 依据（缺失显示「—」）与 Evidence → Analysis 版本 → 知识卡 → Brief 的
+ * 精确来源链。
+ */
+function P32SynthesisPreview({ project, synthesis }) {
+  const cards = project.knowledge_cards || [];
+  const brief = project.brief || null;
+  const evidenceById = new Map((project.evidence || []).map((item) => [item.id, item]));
+  const chainRows = (synthesis.source_snapshot || []).map((snap) => {
+    const evidence = evidenceById.get(snap.evidence_id) || null;
+    const card = cards.find((item) => item.analysis_id === snap.analysis_id
+      && item.analysis_fingerprint === snap.analysis_fingerprint
+      && item.analysis_version === snap.analysis_version) || null;
+    const briefLinked = Boolean(card && brief && (brief.knowledge_citation_ids || []).includes(card.id));
+    return { snap, evidence, card, briefLinked };
+  });
+  const briefBound = Boolean(brief && brief.p32_synthesis && brief.p32_synthesis.synthesis_id === synthesis.id);
+  return (
+    <div className="p32-synthesis-preview">
+      <div className="p32-synthesis-preview-head">
+        <h4>多帖综合洞察预览（派生自 {synthesis.selected_evidence_ids.length} 条选定记录的最新有效 Qwen 分析，不调用模型）</h4>
+        <span className="p32-synthesis-id" title={synthesis.id}>综合 ID：{synthesis.id.slice(0, 16)}… · 指纹 {synthesis.fingerprint.slice(0, 12)}…</span>
+      </div>
+      <div className="p32-synthesis-sections">
+        {P32_SYNTHESIS_SECTION_META.map((meta) => (
+          <div className="p32-synthesis-section" key={meta.key}>
+            <b>{meta.label}：</b>
+            <ul className="p32-synthesis-list">
+              {(synthesis.sections[meta.key] || []).map((item, index) => <li key={index}>{boundedText(item, 200)}</li>)}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <div className="p32-synthesis-metrics" aria-label="真实互动指标依据">
+        <b>高表现判断的真实指标依据（缺失显示「—」，绝不伪造为 0）：</b>
+        <div className="p32-synthesis-metrics-table">
+          <div className="p32-synthesis-metrics-row p32-synthesis-metrics-head">
+            <span>证据</span>
+            {['浏览', '点赞', '转发', '回复', '引用', '收藏', '总互动', '互动率'].map((label) => <span key={label}>{label}</span>)}
+          </div>
+          {(synthesis.engagement_basis || []).map((basis) => (
+            <div className="p32-synthesis-metrics-row" key={basis.evidence_id}>
+              <span title={basis.evidence_id}>{boundedText(basis.evidence_label, 24)}</span>
+              <span>{formatSynthesisCount(basis.views)}</span>
+              <span>{formatSynthesisCount(basis.likes)}</span>
+              <span>{formatSynthesisCount(basis.retweets)}</span>
+              <span>{formatSynthesisCount(basis.replies)}</span>
+              <span>{formatSynthesisCount(basis.quotes)}</span>
+              <span>{formatSynthesisCount(basis.bookmarks)}</span>
+              <span>{formatSynthesisCount(basis.total_engagement)}</span>
+              <span>{formatSynthesisRate(basis.engagement_rate)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="p32-synthesis-chain" aria-label="精确来源链">
+        <b>精确来源链（Evidence → 分析版本 → 知识卡 → Brief）：</b>
+        <ol className="p32-synthesis-chain-list">
+          {chainRows.map((row) => (
+            <li key={row.snap.evidence_id}>
+              证据 {row.snap.evidence_id.slice(0, 16)}…
+              （{boundedText(row.evidence?.label || '已不在项目', 28)}）
+              → 分析 {row.snap.analysis_id.slice(0, 16)}… v{row.snap.analysis_version}（{row.snap.model_schema_version}）
+              → 知识卡 {row.card ? `${row.card.id.slice(0, 16)}…` : '待生成（点击上方主按钮）'}
+              → Brief {row.briefLinked ? '已引用 ✓' : briefBound ? '综合已入草案' : '未入草案'}
+            </li>
+          ))}
+        </ol>
+      </div>
     </div>
   );
 }

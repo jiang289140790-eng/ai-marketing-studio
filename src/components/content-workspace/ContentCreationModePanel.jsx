@@ -17,6 +17,7 @@ const MAX_REVISE_LENGTH = 500;
 const MAX_REVISE_ROUNDS = 5;
 const MAX_REFERENCE_TEXT_LENGTH = 2000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MiB per spec
+const MAX_IMAGE_DIMENSION = 4096;
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 // MIME file signature (magic bytes) for strict validation
@@ -94,6 +95,12 @@ async function fileToImageDataUrl(file) {
   // Verify the Data URL decodes as a valid image
   const decodeCheck = await decodeImageFromDataUrl(dataUrl);
   if (!decodeCheck.ok) return decodeCheck;
+  if (decodeCheck.width > MAX_IMAGE_DIMENSION || decodeCheck.height > MAX_IMAGE_DIMENSION) {
+    return {
+      ok: false,
+      reason: `图片宽高均不能超过 ${MAX_IMAGE_DIMENSION}px。`,
+    };
+  }
 
   return { ok: true, dataUrl, width: decodeCheck.width, height: decodeCheck.height };
 }
@@ -302,6 +309,7 @@ export function ContentCreationModePanel({ mode, brief, userId, onNavigate: _onN
       const options = {};
       if (referenceUrl && collectedUrlData) {
         options.referenceUrl = referenceUrl;
+        options.referenceUrlData = collectedUrlData;
       }
       if (referenceText.trim()) {
         options.referenceText = referenceText.trim();
@@ -642,6 +650,7 @@ export function ContentCreationModePanel({ mode, brief, userId, onNavigate: _onN
                       value={referenceUrl}
                       onChange={(e) => {
                         setReferenceUrl(e.target.value);
+                        setCollectedUrlData(null);
                         setCollectUrlError('');
                       }}
                       placeholder="https://x.com/用户名/status/推文ID"

@@ -302,6 +302,12 @@ export function parseRequest(body) {
     if (body.reference_url) {
       result.reference_url = validateReferenceUrl(body.reference_url);
     }
+    if (body.reference_url_data !== undefined && body.reference_url_data !== null) {
+      result.reference_url_data = validateReferenceUrlData(body.reference_url_data);
+      if (!result.reference_url_data?.url || result.reference_url_data.url !== result.reference_url) {
+        throw new P30Error('REFERENCE_URL_DATA_MISMATCH', '采集结果与当前参考链接不匹配，请重新采集。', 400);
+      }
+    }
 
     // 验证参考文本（如果提供）
     if (body.reference_text !== undefined && body.reference_text !== null) {
@@ -978,7 +984,7 @@ export function validateV2GeneratedContent(raw, intent) {
   // 根据标签策略验证 hashtags
   const hashtagPolicy = intent?.hashtag_policy || 'required_3_5';
   if (hashtagPolicy === 'required_3_5') {
-    if (!Array.isArray(raw.hashtags) || raw.hashtags.length < 1 || raw.hashtags.length > 5) {
+    if (!Array.isArray(raw.hashtags) || raw.hashtags.length < 3 || raw.hashtags.length > 5) {
       throw new P30Error('MODEL_SCHEMA_VIOLATION', '标签策略为 required_3_5，但 AI 未返回 1-5 个标签。', 502);
     }
     if (raw.hashtags.some((tag) => typeof tag !== 'string' || !tag.trim() || tag.length > 50)) {

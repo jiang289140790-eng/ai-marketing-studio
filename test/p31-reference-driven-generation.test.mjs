@@ -12,6 +12,7 @@
 // - v2 save 格式
 
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import test from 'node:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,6 +55,40 @@ test('P31: parseRequest accepts resolve_intent with valid input', () => {
   assert.equal(result.input_text, '为创业者写一篇 X 贴文');
   assert.equal(result.reference_url, 'https://x.com/user/status/123456');
   assert.equal(result.reference_text, '参考文本');
+});
+
+test('P31: parseRequest binds collected URL content to the exact current URL', () => {
+  const referenceUrl = 'https://x.com/user/status/123456';
+  const result = core.parseRequest({
+    action: 'resolve_intent',
+    input_text: '参考这条帖子生成一条内容',
+    reference_url: referenceUrl,
+    reference_url_data: {
+      url: referenceUrl,
+      content_text: '真实采集正文',
+      content_sha256: 'a'.repeat(64),
+      collected_at: '2026-08-12T00:00:00.000Z',
+      source_id: 'source-1',
+    },
+    schema_version: 'p31_reference_driven_v2',
+  });
+  assert.equal(result.reference_url_data.content_text, '真实采集正文');
+  assert.equal(result.reference_url_data.url, referenceUrl);
+});
+
+test('P31: parseRequest rejects collected URL content bound to another URL', () => {
+  assert.throws(
+    () => core.parseRequest({
+      action: 'resolve_intent',
+      input_text: '参考这条帖子生成一条内容',
+      reference_url: 'https://x.com/user/status/123456',
+      reference_url_data: {
+        url: 'https://x.com/user/status/999999',
+        content_text: '旧采集正文',
+      },
+    }),
+    { code: 'REFERENCE_URL_DATA_MISMATCH' },
+  );
 });
 
 test('P31: parseRequest rejects resolve_intent without input_text', () => {
@@ -428,6 +463,19 @@ test('P31: validateV2GeneratedContent rejects missing required hashtags', () => 
   );
 });
 
+test('P31: validateV2GeneratedContent requires three to five hashtags for required_3_5', () => {
+  const intent = { platform: 'x', content_format: 'long_post', cta_policy: 'required', hashtag_policy: 'required_3_5' };
+  for (const hashtags of [['#one'], ['#one', '#two']]) {
+    assert.throws(
+      () => core.validateV2GeneratedContent({
+        title: 'test', main_copy: 'test', visual_description: 'test',
+        platform: 'x', content_format: 'long_post', cta: 'click here', hashtags,
+      }, intent),
+      { code: 'MODEL_SCHEMA_VIOLATION' },
+    );
+  }
+});
+
 test('P31: validateV2GeneratedContent rejects platform mismatch', () => {
   const intent = { platform: 'x', content_format: 'image_caption', cta_policy: 'optional', hashtag_policy: 'optional_0_5' };
   assert.throws(
@@ -776,6 +824,18 @@ test('P31: index.ts constructs real multimodal content array for DashScope', () 
   // 不包含布尔占位（说明不再是 has_image_reference 标志）
   // 含真实图片时选多模态模型
   assert.match(source, /modelToUse.*MULTIMODAL_MODEL/);
+});
+
+test('P31: frontend binds collected URL data, clears it on URL edit, and rejects oversized dimensions', () => {
+  const panel = readFileSync(join(REPO_ROOT, 'src', 'components', 'content-workspace', 'ContentCreationModePanel.jsx'), 'utf8');
+  const service = readFileSync(join(REPO_ROOT, 'src', 'services', 'content-creation-service.js'), 'utf8');
+  const handler = readFileSync(join(REPO_ROOT, 'supabase', 'functions', 'p30-content-create', 'index.ts'), 'utf8');
+  assert.match(panel, /options\.referenceUrlData\s*=\s*collectedUrlData/);
+  assert.match(panel, /setReferenceUrl\(e\.target\.value\);\s*setCollectedUrlData\(null\)/);
+  assert.match(panel, /decodeCheck\.width\s*>\s*MAX_IMAGE_DIMENSION/);
+  assert.match(panel, /decodeCheck\.height\s*>\s*MAX_IMAGE_DIMENSION/);
+  assert.match(service, /body\.reference_url_data\s*=\s*options\.referenceUrlData/);
+  assert.match(handler, /parsed\.reference_url_data/);
 });
 
 // ---- 辅助函数 ----

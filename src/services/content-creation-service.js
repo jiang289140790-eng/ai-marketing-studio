@@ -83,7 +83,7 @@ export async function generateQuickContent(inputText, previousVersion = null) {
  * P31 v2：解析意图（resolve_intent）。
  *
  * @param {string} inputText - 用户输入的需求
- * @param {object} options - 参考输入 { referenceUrl, referenceText, image_data_url, intentOverrides }
+ * @param {object} options - 参考输入 { referenceUrl, referenceUrlData, referenceText, image_data_url, intentOverrides }
  * @returns {{ ok, data: { intent, summary }, meta }}
  */
 export async function resolveIntent(inputText, options = {}) {
@@ -98,6 +98,7 @@ export async function resolveIntent(inputText, options = {}) {
   };
 
   if (options.referenceUrl) body.reference_url = options.referenceUrl;
+  if (options.referenceUrlData) body.reference_url_data = options.referenceUrlData;
   if (options.referenceText) body.reference_text = options.referenceText;
   if (options.image_data_url) {
     body.image_data_url = options.image_data_url;

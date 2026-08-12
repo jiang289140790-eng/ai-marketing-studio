@@ -568,7 +568,9 @@ export async function runApifyCollectionSequence({
   const boundedMaxItems = Math.max(1, Math.min(P22_LIMITS.collect, Number(maxItems) || P22_LIMITS.collect));
   const boundedCount = Math.max(1, Math.min(boundedMaxItems, Number(count) || 1));
   const boundedTopic = String(topic || '').trim().slice(0, 240);
-  const boundedSourceUrl = sourceUrl ? identifyPublicPostUrl(sourceUrl).canonical_url : '';
+  const boundedSource = sourceUrl ? identifyPublicPostUrl(sourceUrl) : null;
+  const boundedSourceUrl = boundedSource?.canonical_url || '';
+  const boundedSourceId = boundedSource?.external_id || '';
   const boundedCharge = Math.max(0, Math.min(Number(maxTotalChargeUsd) || P22_LIMITS.apify_reservation_cny / P22_CNY_PER_USD, P22_LIMITS.apify_reservation_cny / P22_CNY_PER_USD));
   const actorPath = String(actorId || '').trim().replace('/', '~');
   if (typeof token !== 'string' || !token) throw providerError('APIFY_UPSTREAM_REJECTED', 'start', { reason: 'not_configured' });
@@ -579,7 +581,10 @@ export async function runApifyCollectionSequence({
   const startUrl = new globalThis.URL(`https://api.apify.com/v2/acts/${encodeURIComponent(actorPath)}/runs`);
   startUrl.searchParams.set('maxTotalChargeUsd', String(boundedCharge));
   const topicBody = JSON.stringify({ maxItems: boundedCount, sort: 'Latest', searchTerms: [boundedTopic] });
-  const urlBody = JSON.stringify({ maxItems: 1, startUrls: [{ url: boundedSourceUrl }] });
+  // Exact-post reads use the Actor's dedicated tweetIds contract. Passing the
+  // canonical /i/web/status URL through startUrls is less deterministic across
+  // Actor router versions and can yield a diagnostic row instead of the tweet.
+  const urlBody = JSON.stringify({ maxItems: 1, tweetIds: [boundedSourceId] });
   const actorBody = boundedSourceUrl ? urlBody : topicBody;
   const startResponse = await providerFetch(fetchImpl, startUrl, {
     method: 'POST',

@@ -44,7 +44,7 @@ test('P23 identifies and canonicalizes one exact X post, never a profile or sear
   assert.throws(() => parseP22Request({ action: 'collect_url', url: 'https://x.com/example/status/123', extra: true }), { code: 'UNKNOWN_FIELD' });
 });
 
-test('P23 sends one exact post through Actor startUrls and keeps the existing bounded cost sequence', async () => {
+test('P23 sends one exact post through Actor tweetIds and keeps the existing bounded cost sequence', async () => {
   const calls = [];
   let costReads = 0;
   const fetchImpl = async (url, init = {}) => {
@@ -62,8 +62,9 @@ test('P23 sends one exact post through Actor startUrls and keeps the existing bo
     maxItems: 5, maxTotalChargeUsd: 0.1, fetchImpl, sleepImpl: async () => {}, nowImpl: () => 0,
   });
   assert.deepEqual(JSON.parse(calls[0].body), {
-    maxItems: 1, startUrls: [{ url: 'https://x.com/i/web/status/1234567890' }],
+    maxItems: 1, tweetIds: ['1234567890'],
   });
+  assert.equal(Object.hasOwn(JSON.parse(calls[0].body), 'startUrls'), false);
   assert.equal(result.runId, 'run_p23');
   assert.equal(result.items.length, 1);
 });

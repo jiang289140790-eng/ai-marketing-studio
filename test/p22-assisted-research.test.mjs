@@ -856,6 +856,18 @@ test('P22 sends the actor exact top-level input and rejects any wrapped input re
   assert.ok(bodyLine, '启动请求体必须以顶层 Actor 输入构造');
   assert.doesNotMatch(bodyLine, /["']input["']/);
   assert.match(bodyLine, /searchTerms:\s*\[boundedTopic\]/);
+
+  const exactBoundary = apifyHarness({ dataset: { status: 200, body: [{ id: '2087047011753467912', text: 'exact', url: 'https://x.com/huihuiyufeifei/status/2087047011753467912' }] } });
+  await runApifyCollectionSequence({
+    token: 'apify-test-token', actorId: 'xquik/x-tweet-scraper',
+    sourceUrl: 'https://x.com/huihuiyufeifei/status/2087047011753467912?s=20', count: 1,
+    maxItems: P22_LIMITS.collect, maxTotalChargeUsd: 0.1,
+    fetchImpl: exactBoundary.fetchImpl, sleepImpl: async () => {}, nowImpl: () => 0,
+  });
+  const exactBody = JSON.parse(exactBoundary.calls[0].body);
+  assert.deepEqual(exactBody, { maxItems: 1, tweetIds: ['2087047011753467912'] });
+  assert.equal(Object.hasOwn(exactBody, 'startUrls'), false);
+  assert.equal(exactBody.tweetIds[0], '2087047011753467912');
 });
 
 test('P22 provider diagnostics never leak tokens, bodies, URLs or raw upstream responses', async () => {

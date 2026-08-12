@@ -378,6 +378,27 @@ function validateMediaMimeType(value) {
   return trimmed;
 }
 
+function normalizeMediaKind(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') {
+    throw new P22Error('MEDIA_KIND_INVALID', '媒体种类必须是字符串。', 422, { field: 'media' });
+  }
+  const normalized = value.trim().toLowerCase();
+  const aliases = {
+    image: 'image',
+    photo: 'image',
+    video: 'video',
+    native_video: 'video',
+    gif: 'gif',
+    animated_gif: 'gif',
+  };
+  const kind = aliases[normalized];
+  if (!kind) {
+    throw new P22Error('MEDIA_KIND_INVALID', '媒体种类必须是 image / video / gif。', 422, { field: 'media' });
+  }
+  return kind;
+}
+
 /** 从 Actor 行的 media/mediaUrls/imageUrls/videoUrls/gifUrls 等官方字段收集候选媒体。 */
 function collectMediaCandidates(raw) {
   const candidates = [];
@@ -393,10 +414,24 @@ function collectMediaCandidates(raw) {
       url = value.trim();
     } else if (object(value)) {
       url = first(value.url, value.src, value.mediaUrl, value.contentUrl, value.previewUrl, value.thumbnailUrl);
-      if (!kind) kind = first(value.type, value.kind, value.mediaType, value.contentType);
+      const mediaTypeValue = value.mediaType;
+      const contentTypeValue = value.contentType;
+      const mediaTypeIsMime = typeof mediaTypeValue === 'string' && mediaTypeValue.includes('/');
+      const contentTypeIsMime = typeof contentTypeValue === 'string' && contentTypeValue.includes('/');
+      if (!kind) kind = first(
+        value.type,
+        value.kind,
+        mediaTypeIsMime ? null : mediaTypeValue,
+        contentTypeIsMime ? null : contentTypeValue,
+      );
       // Actor-provided MIME / dimensions: strict validation. When present but
       // malformed or out-of-bounds, fail closed instead of silently dropping.
-      mimeType = validateMediaMimeType(first(value.mimeType, value.mime_type, value.contentType, value.mediaType));
+      mimeType = validateMediaMimeType(first(
+        value.mimeType,
+        value.mime_type,
+        contentTypeIsMime ? contentTypeValue : null,
+        mediaTypeIsMime ? mediaTypeValue : null,
+      ));
       width = validateDimensionField(value.width, 'width');
       height = validateDimensionField(value.height, 'height');
       // 也接受嵌套 dimensions/size 形状（某些 Actor 版本使用）。
@@ -419,6 +454,7 @@ function collectMediaCandidates(raw) {
       else if (ext === 'mp4' || ext === 'mov' || ext === 'm4v' || ext === 'webm') kind = 'video';
       else kind = 'image';
     }
+    kind = normalizeMediaKind(kind);
     if (!P29_MEDIA_KINDS.includes(kind)) throw new P22Error('MEDIA_KIND_INVALID', '媒体种类必须是 image / video / gif。', 422, { field: 'media' });
     if (seen.has(url)) return; // 同一精确 URL 去重（保持首次出现顺序）
     seen.add(url);
@@ -612,6 +648,22 @@ function concatBytes(chunks) {
   return merged;
 }
 
+function assertMediaKindMatchesContentType(kind, contentType) {
+  const matches = (
+    (kind === 'image' && /^image\//.test(contentType))
+    || (kind === 'video' && /^video\//.test(contentType))
+    || (kind === 'gif' && (contentType === 'image/gif' || /^video\//.test(contentType)))
+  );
+  if (!matches) {
+    throw new P22Error(
+      'MEDIA_KIND_MIME_MISMATCH',
+      '媒体种类与实际内容类型不一致，已失败关闭。',
+      422,
+      { field: 'media_url' },
+    );
+  }
+}
+
 /**
  * 从 Actor 行生成有序媒体资产数组（内容哈希可选抓取）。所有实际媒体保留；
  * 超出声明上限、URL 畸形、抓取失配/溢出一律硬失败。
@@ -623,11 +675,12 @@ export async function normalizeMediaAssets(raw, externalId, canonicalTweetUrl, d
     const candidate = candidates[index];
     const asset = await normalizeMediaAsset(candidate, index, externalId, canonicalTweetUrl, digest);
     const fetched = await fetchMediaContentHash(asset, options);
+    assertMediaKindMatchesContentType(asset.kind, fetched.contentType);
     // fetchMediaContentHash now throws MEDIA_HOST_UNSUPPORTED for non-CDN hosts
     // instead of returning null; any successful return is a verified content hash.
     asset.hash = { algorithm: 'sha256', kind: 'content', value: fetched.hashValue };
     asset.byte_size = fetched.byteSize;
-    if (/^(image|video|audio)\//.test(fetched.contentType)) asset.mime_type = fetched.contentType.slice(0, 100);
+    asset.mime_type = fetched.contentType.slice(0, 100);
     assets.push(asset);
   }
   return assets;

@@ -33,6 +33,7 @@ const IMAGE_2 = 'https://pbs.twimg.com/media/photo-b.jpg?format=jpg&name=large';
 const IMAGE_3 = 'https://pbs.twimg.com/media/photo-c.jpg?format=jpg&name=large';
 const IMAGE_4 = 'https://pbs.twimg.com/media/photo-d.jpg?format=jpg&name=large';
 const VIDEO_1 = 'https://video.twimg.com/ext_tw_video/123/pu/vid/avc1/720x1280.mp4';
+const GIF_1 = 'https://video.twimg.com/tweet_video/example.mp4';
 const FOREIGN_HOST = 'https://cdn.example.com/evil.jpg';
 
 /** 注入的媒体抓取边界：按 URL 路由，支持重定向/MIME/大小/超时失败。 */
@@ -158,6 +159,54 @@ test('P29 preserves an ordered four-photo post and a video post through mixed pr
     id: '1003', url: 'https://x.com/a/status/1003', text: 'dedupe', imageUrls: [IMAGE_1, IMAGE_1],
   }], CONTEXT, hash, { fetchImpl: mediaHarness().fetchImpl });
   assert.equal(deduped[0].media_assets.length, 1);
+});
+
+test('P29 maps official X Actor media type aliases without weakening unknown-type failure', async () => {
+  const routes = {
+    [IMAGE_1]: { contentType: 'image/jpeg', bytes: routeBytesFor(0) },
+    [VIDEO_1]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 24]) },
+    [GIF_1]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 25]) },
+  };
+  const [item] = await normalizeCollectedItems([{
+    id: '1004', url: 'https://x.com/a/status/1004', text: 'official actor media aliases',
+    media: [
+      { url: IMAGE_1, type: 'photo', width: 1200, height: 800 },
+      { url: VIDEO_1, mediaType: 'native_video', contentType: 'video/mp4', width: 720, height: 1280 },
+      { url: GIF_1, contentType: 'animated_gif', mimeType: 'video/mp4', width: 640, height: 360 },
+    ],
+  }], CONTEXT, hash, { fetchImpl: mediaHarness(routes).fetchImpl });
+  assert.deepEqual(item.media_assets.map((asset) => asset.kind), ['image', 'video', 'gif']);
+  assert.deepEqual(item.media_assets.map((asset) => asset.dimensions), [
+    { width: 1200, height: 800 },
+    { width: 720, height: 1280 },
+    { width: 640, height: 360 },
+  ]);
+
+  await assert.rejects(() => normalizeCollectedItems([{
+    id: '1005', url: 'https://x.com/a/status/1005', text: 'unknown media kind',
+    media: [{ url: IMAGE_1, type: 'card_preview' }],
+  }], CONTEXT, hash, { fetchImpl: mediaHarness(routes).fetchImpl }), (error) => (
+    error.code === 'MEDIA_KIND_INVALID' && error.details?.field === 'media'
+  ));
+});
+
+test('P29 rejects MIME content that contradicts the normalized media kind', async () => {
+  for (const mismatch of [
+    { type: 'photo', contentType: 'video/mp4' },
+    { type: 'native_video', contentType: 'image/jpeg' },
+    { type: 'photo', contentType: 'audio/mpeg' },
+  ]) {
+    await assert.rejects(() => normalizeCollectedItems([{
+      id: `mismatch-${mismatch.type}-${mismatch.contentType}`,
+      url: 'https://x.com/a/status/1006',
+      text: 'mismatched media content',
+      media: [{ url: IMAGE_1, type: mismatch.type }],
+    }], CONTEXT, hash, {
+      fetchImpl: mediaHarness({
+        [IMAGE_1]: { contentType: mismatch.contentType, bytes: routeBytesFor(0) },
+      }).fetchImpl,
+    }), (error) => error.code === 'MEDIA_KIND_MIME_MISMATCH' && error.details?.field === 'media_url');
+  }
 });
 
 test('P29 text-only posts normalize to empty media assets without fetching anything', async () => {

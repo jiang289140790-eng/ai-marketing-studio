@@ -23,6 +23,7 @@ import {
   createProject,
   deriveHandoffPackage,
   recordAssistedAnalysis,
+  recordVersionedReanalysis,
   removeEvidence,
   reviewBrief,
   runAnalysis,
@@ -42,6 +43,8 @@ import {
   P19HandoffSection,
   P19LineageSection,
   P19ProjectForm,
+  P32EvidenceLibrary,
+  P32ComparisonView,
 } from '../components/integrated-workspace/P19WorkbenchPanels.jsx';
 import { getStagingRuntimeStatus } from '../services/staging-preview-service.js';
 import { useAuth } from '../contexts/auth-context.js';
@@ -195,6 +198,7 @@ export function ResearchWorkspacePage() {
   const [pendingImport, setPendingImport] = useState(null);
   const [viewMode, setViewMode] = useState(readP21ViewMode);
   const [selectedStep, setSelectedStep] = useState(null);
+  const [comparedEvidenceIds, setComparedEvidenceIds] = useState([]);
   const importInputRef = useRef(null);
 
   const stagingStatus = useMemo(() => getStagingRuntimeStatus(), []);
@@ -314,6 +318,7 @@ export function ResearchWorkspacePage() {
   useEffect(() => {
     setPendingImport(null);
     setSelectedStep(null);
+    setComparedEvidenceIds([]);
   }, [activeId]);
 
   const selectProject = useCallback(async (id) => {
@@ -550,6 +555,88 @@ export function ResearchWorkspacePage() {
   const handleMakeCard = useCallback((analysisId) => {
     return run('生成知识卡', () => buildKnowledgeCard(project, analysisId), { notice: '知识卡已构建并通过 content_knowledge_card_v1 校验。' });
   }, [run, project]);
+
+  const handleVersionedReanalyze = useCallback(async (evidenceId) => {
+    if (!project || project.status === 'archived') {
+      setError({ code: 'PROJECT_ARCHIVED', message: '项目已归档，不能重新分析。' });
+      return false;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
+      if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要重新分析的证据不存在。');
+      if (!evidence.media_assets || evidence.media_assets.length === 0) {
+        throw workbenchError('REANALYSIS_MEDIA_MISSING', '证据没有已验证的媒体资产，无法进行多模态重新分析。');
+      }
+      const item = {
+        id: evidence.provenance?.source_id || evidence.id,
+        source_url: evidence.source_url,
+        label: evidence.label,
+        platform: evidence.platform,
+        content_text: evidence.content_text,
+        external_id: evidence.provenance?.external_id || null,
+        content_sha256: evidence.media_metadata?.sha256 || evidence.provenance?.content_sha256 || '',
+        source_metadata: evidence.source_metadata,
+        media_assets: evidence.media_assets,
+        provenance: {
+          schema_version: 'p22_collected_source_v1',
+          provider: evidence.provenance?.provider || '',
+          run_id: evidence.provenance?.run_id || '',
+          collected_at: evidence.provenance?.collected_at || evidence.recorded_at,
+          usage_total_usd: evidence.provenance?.usage_total_usd || 0,
+          budget_reservation_id: evidence.provenance?.budget_reservation_id || '',
+        },
+        collection_proof: evidence.provenance?.collection_proof || '',
+      };
+      const response = await assistClientRef.current.analyze([item]);
+      const modelResult = (response.analyses || []).find((row) => row.source_id === evidence.provenance?.source_id);
+      if (!modelResult) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '模型分析没有精确绑定来源身份，已停止。');
+      const afterAnalysis = await recordVersionedReanalysis(project, evidenceId, {
+        source_id: modelResult.source_id,
+        model: modelResult.model,
+        result: {
+          text_expression: modelResult.text_expression || '',
+          hook: modelResult.hook || '',
+          copy_pattern: modelResult.copy_pattern || '',
+          target_audience: modelResult.target_audience || '',
+          audience_need_emotion: modelResult.audience_need_emotion || '',
+          media_analysis: modelResult.media_analysis || [],
+          virality_drivers: modelResult.virality_drivers || [],
+          reusable_methods: modelResult.reusable_methods || [],
+          rewrite_suggestions: modelResult.rewrite_suggestions || [],
+          signals: modelResult.signals || [],
+          risks: modelResult.risks || [],
+        },
+        executed_at: new Date().toISOString(),
+        usage: response.usage || { total_tokens: 0 },
+        _request_identity: `reanalysis:${evidenceId}:${Date.now()}`,
+      });
+      setProject(afterAnalysis);
+      if (onlineMode) {
+        const spec = buildOnlineCommand(project, afterAnalysis);
+        const persisted = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+        if (persisted) setProject(persisted);
+      } else {
+        const saved = storeRef.current.putProject(afterAnalysis);
+        if (!saved.ok) throw workbenchError(saved.code, saved.message);
+      }
+      await reloadProjects();
+      const versions = (afterAnalysis.analyses || []).filter((item) => item.evidence_id === evidenceId);
+      setNotice(`Qwen 重新分析完成（第 ${versions.length} 个版本已追加，旧版本保留不变）。`);
+      return true;
+    } catch (cause) {
+      if (onlineMode && project?.id) {
+        try { const recovered = await onlineStoreRef.current.getProject(project.id); setProject(recovered); } catch { /* keep pipeline error */ }
+      }
+      const message = cause && cause.bounded ? cause.message : String((cause && cause.message) || cause).slice(0, 300);
+      setError({ code: (cause && cause.code) || 'REANALYSIS_FAILED', message });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [onlineMode, project, reloadProjects]);
 
   const handleAssembleBrief = useCallback(() => {
     return run('组装 Brief', () => assembleBrief(project), { notice: 'Brief 已组装（版本递增，审核重置为待审核）。' });
@@ -954,6 +1041,13 @@ export function ResearchWorkspacePage() {
             </section>
             <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
               {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}
+              <P32EvidenceLibrary
+                project={project}
+                workflow={workflow}
+                onReanalyze={handleVersionedReanalyze}
+                onMakeCard={handleMakeCard}
+                busy={busy}
+              />
               <P19EvidenceList
                 project={project}
                 onAdd={handleAddEvidence}
@@ -961,6 +1055,13 @@ export function ResearchWorkspacePage() {
                 onRemove={handleRemoveEvidence}
                 onAnalyze={handleRunAnalysis}
                 busy={busy}
+              />
+            </section>
+            <section className="p21-step-panel" id="p21-step-compare" data-p21-step="compare" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'compare'}>
+              <P32ComparisonView
+                project={project}
+                selectedIds={comparedEvidenceIds}
+                onSelectionChange={setComparedEvidenceIds}
               />
             </section>
             <section className="p21-step-panel" id="p21-step-analysis" data-p21-step="analysis" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'analysis'}>

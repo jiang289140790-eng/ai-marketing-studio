@@ -2,12 +2,17 @@
 // 暗色视觉体系沿用 P18 词汇；中文文案 UTF-8；状态不只靠颜色（文字 + 图标）。
 // 本组件不发起任何网络请求。
 
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   EXECUTION_FLAG_LABELS,
   MAX_STRING_LENGTH,
   boundedText,
 } from '../../services/p19-contracts.js';
+import {
+  generateEvidenceComparison,
+  getAllAnalysisVersionsForEvidence,
+  getLatestAnalysisForEvidence,
+} from '../../services/p19-workspace-service.js';
 
 const STATE_TEXT = {
   INVALID_SOURCE: { label: '无效来源', tone: 'danger', icon: '⛔' },
@@ -674,6 +679,368 @@ export function P19LineageSection({ row, graph, projects }) {
         </div>
       )}
       <p className="p19-provenance-line">共 {projects ? projects.length : 0} 个项目参与审计（行上限 100、原因上限 8，全部为有界固定文案）。</p>
+    </div>
+  );
+}
+
+// ---- P32-A 多帖证据库与版本化重新分析 -------------------------------------------
+
+function formatPublishedShort(value) {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return '';
+  return text.slice(0, 16).replace('T', ' ');
+}
+
+function engagementSummary(engagement) {
+  if (!engagement || typeof engagement !== 'object') return null;
+  const parts = [];
+  for (const [key, label] of [['likes', '赞'], ['retweets', '转'], ['replies', '评']]) {
+    if (Number.isInteger(engagement[key])) parts.push(`${label}${engagement[key]}`);
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/**
+ * P32-A 同一项目多帖证据库：显示所有已保存证据（含作者/时间/媒体数/互动/
+ * Evidence ID/分析状态/版本计数/Knowledge/Brief 链接状态），并提供
+ * 「用 Qwen 重新分析」操作与版本历史查看。
+ */
+export function P32EvidenceLibrary({ project, onReanalyze, onMakeCard, busy }) {
+  const evidence = project.evidence || [];
+  const [historyEvidenceId, setHistoryEvidenceId] = useState(null);
+
+  if (evidence.length === 0) {
+    return (
+      <div className="p19-panel p32-library">
+        <div className="p19-panel-head">
+          <h3>证据库（已保存）</h3>
+          <span className="p19-panel-note">尚无已保存证据</span>
+        </div>
+        <p className="p19-empty-note">保存来自「智能找资料」的帖子后，可从证据库中进行 Qwen 重新分析和多帖比较。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p19-panel p32-library" aria-label="证据库">
+      <div className="p19-panel-head">
+        <h3>证据库（已保存 {evidence.length} 条）</h3>
+        <span className="p19-panel-note">来源/分析状态/版本 — 可重新分析、比较</span>
+      </div>
+      <ul className="p32-evidence-cards">
+        {evidence.map((record) => {
+          const latestAnalysis = getLatestAnalysisForEvidence(project, record.id);
+          const allVersions = getAllAnalysisVersionsForEvidence(project, record.id);
+          const modelAnalysis = latestAnalysis && latestAnalysis.model_analysis;
+          const isV2 = modelAnalysis && modelAnalysis.schema_version === 'p32_multimodal_model_v2';
+          const hasQwenAnalysis = Boolean(modelAnalysis);
+          const isDeterministic = latestAnalysis && !modelAnalysis;
+          const card = latestAnalysis && (project.knowledge_cards || []).find((c) => c.analysis_id === latestAnalysis.id);
+          const briefLinked = card && project.brief && (project.brief.knowledge_citation_ids || []).includes(card.id);
+          const sourceMeta = record.source_metadata || {};
+          const author = sourceMeta.author || {};
+          const hasMedia = Array.isArray(record.media_assets) && record.media_assets.length > 0;
+          const canReanalyze = hasMedia && record.provenance?.manual === false;
+
+          return (
+            <li className="p32-evidence-card" key={record.id}>
+              <div className="p32-evidence-card-top">
+                <div className="p32-evidence-card-id">
+                  <strong>{boundedText(record.label, 60)}</strong>
+                  <span className="p32-evidence-id" title={record.id}>ID: {record.id.slice(0, 16)}…</span>
+                </div>
+                <div className="p32-evidence-card-badges">
+                  {record.provenance?.manual === false
+                    ? <span className="p32-badge p32-badge-source">P22 采集</span>
+                    : <span className="p32-badge p32-badge-manual">手工录入</span>}
+                  {hasQwenAnalysis
+                    ? <span className={`p32-badge ${isV2 ? 'p32-badge-v2' : 'p32-badge-v1'}`} title={`模型 ${modelAnalysis.model} · ${modelAnalysis.executed_at}`}>Qwen {isV2 ? 'v2' : 'v1'}</span>
+                    : isDeterministic
+                      ? <span className="p32-badge p32-badge-det">确定性分析</span>
+                      : <span className="p32-badge p32-badge-none">未分析</span>}
+                  {allVersions.length > 1 && <span className="p32-badge p32-badge-versions">{allVersions.length} 个版本</span>}
+                </div>
+              </div>
+              <div className="p32-evidence-card-meta">
+                {author.name && <span>作者：{boundedText(author.name, 30)}</span>}
+                {author.handle && <span>@{boundedText(author.handle, 20)}</span>}
+                {sourceMeta.published_at && <span>发布时间：{formatPublishedShort(sourceMeta.published_at)}</span>}
+                {hasMedia && <span>媒体 {record.media_assets.length} 项</span>}
+              </div>
+              {sourceMeta.engagement && (
+                <div className="p32-evidence-card-engagement">
+                  互动：{engagementSummary(sourceMeta.engagement) || '—'}
+                </div>
+              )}
+              <p className="p19-meta-line">
+                {boundedText(record.source_url, 60)}
+              </p>
+              {modelAnalysis && (
+                <div className="p32-analysis-quick">
+                  <span className="p32-analysis-model">{boundedText(modelAnalysis.model, 30)} · v{latestAnalysis.version}</span>
+                  <span className="p32-analysis-summary">{boundedText(modelAnalysis.result.text_expression || '', 120)}</span>
+                </div>
+              )}
+              <div className="p32-evidence-card-actions">
+                {canReanalyze && (
+                  <button
+                    className="p19-btn p19-btn-primary"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onReanalyze(record.id)}
+                    title="使用当前 Qwen 多模态模型重新分析此证据（追加新版本，不覆写旧分析）"
+                  >
+                    用 Qwen 重新分析
+                  </button>
+                )}
+                {latestAnalysis && !card && (
+                  <button
+                    className="p19-btn p19-btn-ghost"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onMakeCard(latestAnalysis.id)}
+                    title="将最新分析转为知识卡"
+                  >
+                    生成知识卡
+                  </button>
+                )}
+                {card && (
+                  <span className={`p32-linkage ${briefLinked ? 'linked' : ''}`}>
+                    知识卡{briefLinked ? ' ✓ 已入草案' : ' 已生成'}
+                  </span>
+                )}
+                {allVersions.length > 1 && (
+                  <button
+                    className="p19-btn p19-btn-ghost"
+                    type="button"
+                    onClick={() => setHistoryEvidenceId(historyEvidenceId === record.id ? null : record.id)}
+                  >
+                    {historyEvidenceId === record.id ? '收起版本历史' : `查看 ${allVersions.length} 个版本`}
+                  </button>
+                )}
+              </div>
+              {historyEvidenceId === record.id && allVersions.length > 1 && (
+                <P32AnalysisHistory versions={allVersions} />
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * P32-A 分析版本历史：按时间倒序显示该证据的所有分析版本，
+ * 每个版本显示模型/时间/文本摘要/逐媒体发现。旧版本只读，不可修改。
+ */
+function P32AnalysisHistory({ versions }) {
+  return (
+    <div className="p32-history" aria-label="分析版本历史">
+      <h4>分析版本历史</h4>
+      {versions.map((analysis) => {
+        const ext = analysis.model_analysis;
+        if (!ext) {
+          return (
+            <div className="p32-history-item" key={analysis.id}>
+              <div className="p32-history-head">
+                <span className="p32-history-version">v{analysis.version}</span>
+                <span className="p32-history-kind">确定性本地分析（无模型）</span>
+                <span className="p32-history-time">{analysis.provenance.executed_at}</span>
+              </div>
+            </div>
+          );
+        }
+        const isV2 = ext.schema_version === 'p32_multimodal_model_v2';
+        return (
+          <div className="p32-history-item" key={analysis.id}>
+            <div className="p32-history-head">
+              <span className="p32-history-version">v{analysis.version}</span>
+              <span className="p32-history-kind">{boundedText(ext.model, 30)} {isV2 ? '(v2)' : '(v1)'}</span>
+              <span className="p32-history-time">{ext.executed_at}</span>
+            </div>
+            <p className="p32-history-text">{boundedText(ext.result.text_expression || '', 200)}</p>
+            {isV2 && ext.result.hook && (
+              <p className="p32-history-detail">钩子：{boundedText(ext.result.hook, 160)}</p>
+            )}
+            {isV2 && ext.result.target_audience && (
+              <p className="p32-history-detail">受众：{boundedText(ext.result.target_audience, 100)}</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * P32-A 多选比较：允许选择 2-5 条已保存证据，进行确定性逐条比较。
+ * 选择在项目切换时重置；不跨项目污染。
+ */
+export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
+  const evidence = project.evidence || [];
+  const hasAnalyzable = evidence.some((record) => {
+    const latest = getLatestAnalysisForEvidence(project, record.id);
+    return latest && latest.model_analysis;
+  });
+
+  const toggleSelect = useCallback((evidenceId) => {
+    const next = selectedIds.includes(evidenceId)
+      ? selectedIds.filter((id) => id !== evidenceId)
+      : [...selectedIds, evidenceId];
+    if (next.length > 5) return; // 最多 5 条
+    onSelectionChange(next);
+  }, [selectedIds, onSelectionChange]);
+
+  const comparison = useMemo(() => {
+    if (selectedIds.length < 2) return null;
+    return generateEvidenceComparison(project, selectedIds);
+  }, [project, selectedIds]);
+
+  return (
+    <div className="p19-panel p32-compare" aria-label="多帖比较">
+      <div className="p19-panel-head">
+        <h3>多帖比较（选择 2–5 条已保存证据）</h3>
+        <span className="p19-panel-note">已选 {selectedIds.length} / 5</span>
+      </div>
+      {evidence.length === 0 && (
+        <p className="p19-empty-note">还没有已保存证据。在「智能找资料」中保存帖子后即可比较。</p>
+      )}
+      {evidence.length > 0 && !hasAnalyzable && (
+        <p className="p19-empty-note">已保存证据中尚无 Qwen 多模态分析结果。请先保存带媒体的来源或对已有证据运行「用 Qwen 重新分析」。</p>
+      )}
+
+      {/* 选择网格 */}
+      <div className="p32-compare-select-grid">
+        {evidence.map((record) => {
+          const latest = getLatestAnalysisForEvidence(project, record.id);
+          const hasAnalysis = Boolean(latest && latest.model_analysis);
+          const isSelected = selectedIds.includes(record.id);
+          const sourceMeta = record.source_metadata || {};
+          const author = sourceMeta.author || {};
+          return (
+            <label
+              className={`p32-compare-chip ${isSelected ? 'selected' : ''} ${!hasAnalysis ? 'no-analysis' : ''}`}
+              key={record.id}
+              title={!hasAnalysis ? '该证据缺少多模态分析，比较时将显示缺失警告' : `选择此证据进行多帖比较`}
+            >
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => toggleSelect(record.id)}
+                disabled={!hasAnalysis && selectedIds.length >= 5}
+                aria-label={`选择 ${boundedText(record.label, 40)} 进行比较`}
+              />
+              <span className="p32-chip-label">
+                <strong>{boundedText(record.label, 30)}</strong>
+                <small>
+                  {author.name || author.handle || '未知作者'}
+                  {sourceMeta.published_at ? ` · ${formatPublishedShort(sourceMeta.published_at)}` : ''}
+                </small>
+                {!hasAnalysis && <small className="p32-chip-warn">无多模态分析</small>}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      {selectedIds.length > 0 && selectedIds.length < 2 && (
+        <p className="p19-meta-line">请至少再选择 1 条证据以开始比较（共需 2–5 条）。</p>
+      )}
+
+      {/* 比较结果 */}
+      {comparison && comparison.valid && (
+        <div className="p32-compare-results">
+          <div className="p32-compare-summary">
+            <h4>确定性比较摘要（派生自 {comparison.rows.length} 条选定记录，不调用模型）</h4>
+            {comparison.summary.warnings.length > 0 && (
+              <p className="p19-blocking-note">
+                ⚠ 警告：{comparison.summary.warnings.join('；')}
+              </p>
+            )}
+            <div className="p32-summary-grid">
+              {comparison.summary.commonDrivers.length > 0 && (
+                <div className="p32-summary-item">
+                  <b>共同传播驱动力：</b>
+                  <span>{comparison.summary.commonDrivers.join(' · ')}</span>
+                </div>
+              )}
+              {comparison.summary.commonRisks.length > 0 && (
+                <div className="p32-summary-item">
+                  <b>共同风险点：</b>
+                  <span>{comparison.summary.commonRisks.join(' · ')}</span>
+                </div>
+              )}
+              {comparison.summary.highestEngagementSignal && (
+                <div className="p32-summary-item">
+                  <b>最高互动信号：</b>
+                  <span>{boundedText(comparison.summary.highestEngagementSignal.hook, 80)}（互动总计 {comparison.summary.highestEngagementSignal.total}）</span>
+                </div>
+              )}
+              {comparison.summary.diverseHooks.length >= 2 && (
+                <div className="p32-summary-item">
+                  <b>差异化钩子：</b>
+                  <span>{comparison.summary.diverseHooks.map((h) => boundedText(h, 60)).join(' ‖ ')}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="p32-compare-columns">
+            {comparison.rows.map((row) => (
+              <div className={`p32-compare-column ${row.analysisMissing ? 'missing' : ''}`} key={row.evidenceId}>
+                <div className="p32-compare-col-head">
+                  <strong>{boundedText(row.evidence.label, 40)}</strong>
+                  {row.analysisMissing
+                    ? <span className="p32-pill-warn">分析缺失</span>
+                    : <span className="p32-pill-ok">{row.schemaVersion === 'p32_multimodal_model_v2' ? 'Qwen v2' : 'Qwen v1'} · v{row.analysisVersion}</span>}
+                </div>
+                {!row.analysisMissing && (
+                  <>
+                    <div className="p32-compare-field">
+                      <b>钩子：</b>
+                      <p>{boundedText(row.hook, 160)}</p>
+                    </div>
+                    {row.audience && (
+                      <div className="p32-compare-field">
+                        <b>受众：</b>
+                        <p>{boundedText(row.audience, 100)}</p>
+                      </div>
+                    )}
+                    <div className="p32-compare-field">
+                      <b>视觉模式：</b>
+                      <p>{boundedText(row.visualPattern, 140)}</p>
+                    </div>
+                    <div className="p32-compare-field">
+                      <b>传播驱动力：</b>
+                      <ul className="p32-compare-list">
+                        {row.propagationDrivers.map((d, i) => <li key={i}>{boundedText(d, 120)}</li>)}
+                      </ul>
+                    </div>
+                    <div className="p32-compare-field">
+                      <b>可复用公式：</b>
+                      <ul className="p32-compare-list">
+                        {row.reusableFormula.slice(0, 3).map((f, i) => <li key={i}>{boundedText(f, 120)}</li>)}
+                      </ul>
+                    </div>
+                    <div className="p32-compare-field">
+                      <b>风险：</b>
+                      <ul className="p32-compare-list">
+                        {row.risks.map((r, i) => <li key={i}>{boundedText(r, 120)}</li>)}
+                      </ul>
+                    </div>
+                    <p className="p19-meta-line">共 {row.totalVersions} 个分析版本</p>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {comparison && !comparison.valid && (
+        <p className="p19-blocking-note">{comparison.reason}</p>
+      )}
     </div>
   );
 }

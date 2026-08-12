@@ -59,9 +59,21 @@ export const P29_ENGAGEMENT_KEYS = Object.freeze(['likes', 'retweets', 'replies'
 export const P29_MAX_ENGAGEMENT = 1000000000000; // 互动计数上界（1e12）
 export const P29_MAX_MEDIA_BYTES = 536870912; // 512 MiB，与媒体元数据字节边界一致
 export const MODEL_ANALYSIS_SCHEMA_VERSION = 'p29_multimodal_model_v1';
+export const P32_MODEL_ANALYSIS_SCHEMA_VERSION = 'p32_multimodal_model_v2';
 export const MULTIMODAL_MODEL = 'qwen3.5-omni-flash';
 export const MULTIMODAL_PROVIDER = 'dashscope';
 export const MULTIMODAL_METHOD = 'multimodal_model';
+
+// P32-A v2 result fields: backward-compatible extension of v1 bounded structured fields.
+export const P32_V2_RESULT_KEYS = Object.freeze([
+  'text_expression', 'hook', 'copy_pattern', 'target_audience', 'audience_need_emotion',
+  'media_analysis', 'virality_drivers', 'reusable_methods', 'rewrite_suggestions',
+  'signals', 'risks',
+]);
+export const P32_V2_MEDIA_ANALYSIS_KEYS = Object.freeze([
+  'media_id', 'visual_content', 'composition', 'people', 'scene', 'emotion',
+  'visual_selling_points', 'style_pattern',
+]);
 
 export const ISO8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
@@ -101,8 +113,10 @@ export function isNonEmptyString(value) {
 /** 有界展示文本：剥离控制字符并截断，绝不把无界原始值回显到页面。 */
 export function boundedText(value, max = MAX_DISPLAY_TEXT) {
   if (typeof value !== 'string') return '';
-  // eslint-disable-next-line no-control-regex -- 与控制字符的剥离是同义的确定性规则（已验收 KE 来源同款）。
-  const clean = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  const clean = Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 0x1f || codePoint === 0x7f ? ' ' : character;
+  }).join('').trim();
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
@@ -365,7 +379,6 @@ export function validateProject(project) {
   if (!Array.isArray(project.constraints) || !project.constraints.every((item) => typeof item === 'string' && item.trim().length <= MAX_STRING_LENGTH)) {
     issue(issues, '约束必须是字符串数组。');
   }
-  // 执行标志允许缺省；若存在则必须为四项严格 false（交接包层强制）。
   if (project.execution_flags !== undefined && project.execution_flags !== null && !validateExecutionFlags(project.execution_flags).valid) {
     issue(issues, '执行标志不是四项严格 false。');
   }
@@ -414,11 +427,6 @@ export function validateMediaMetadata(meta) {
 
 // ---- P29：来源快照（作者/发布时间/互动）与有序媒体资产 ----
 
-/**
- * 有界来源快照：author.name/handle/user_id、published_at（ISO-8601 或 null）、
- * engagement 计数（非负整数或 null）。字段可为 null（文本帖或无字段的旧数据），
- * 但出现即必须格式正确 —— 畸形值 fail closed，绝不静默丢弃。
- */
 export function validateSourceMetadata(meta) {
   const issues = [];
   if (meta === null) return { valid: true, issues };
@@ -463,7 +471,6 @@ export function validateSourceMetadata(meta) {
   return { valid: issues.length === 0, issues };
 }
 
-/** 单条媒体资产校验（含明确的哈希种类：url 字符串哈希 ≠ 内容哈希）。 */
 export function validateMediaAsset(asset) {
   const issues = [];
   if (!isPlainObject(asset)) {
@@ -508,10 +515,6 @@ export function validateMediaAsset(asset) {
   return { valid: issues.length === 0, issues };
 }
 
-/**
- * 有序媒体资产数组：条目数 <=8、id 与 URL 唯一、order 必须等于零基下标。
- * 缺失/重复/乱序/外来条目一律 fail closed；空数组表示纯文本帖。
- */
 export function validateMediaAssets(assets) {
   const issues = [];
   if (!Array.isArray(assets)) {
@@ -539,7 +542,6 @@ export function validateMediaAssets(assets) {
   return { valid: issues.length === 0, issues };
 }
 
-/** P29 模型分析扩展（p29_multimodal_model_v1）：严格绑定来源媒体 id 的服务端多模态结果。 */
 export function validateModelAnalysis(extension) {
   const issues = [];
   if (!isPlainObject(extension)) {
@@ -603,6 +605,74 @@ export function validateModelAnalysis(extension) {
   return { valid: issues.length === 0, issues };
 }
 
+/** P32-A 版本化模型分析扩展（p32_multimodal_model_v2）：向后兼容 v1 的有界结果字段扩展。 */
+export function validateP32ModelAnalysis(extension) {
+  const issues = [];
+  if (!isPlainObject(extension)) {
+    issue(issues, '模型分析扩展必须是对象。');
+    return { valid: false, issues };
+  }
+  const unknown = Object.keys(extension).filter((key) => ![
+    'schema_version', 'provider', 'model', 'method', 'executed_at', 'media_ids', 'result', 'usage', '_request_identity',
+  ].includes(key));
+  if (unknown.length) issue(issues, '模型分析扩展包含未知字段。');
+  if (extension.schema_version !== P32_MODEL_ANALYSIS_SCHEMA_VERSION) issue(issues, '模型分析扩展 schema_version 不是精确的 p32_multimodal_model_v2。');
+  if (extension.provider !== MULTIMODAL_PROVIDER) issue(issues, '模型提供方不是精确的 dashscope。');
+  if (extension.method !== MULTIMODAL_METHOD) issue(issues, '模型分析方法不是精确的 multimodal_model。');
+  if (!isNonEmptyString(extension.model) || extension.model.length > 80) issue(issues, '模型标识缺失或超长。');
+  if (!isNonEmptyString(extension.executed_at) || extension.executed_at.length > 80 || !ISO8601_PATTERN.test(extension.executed_at)) issue(issues, '模型执行时间必须是 ISO-8601 字符串。');
+  const mediaIds = extension.media_ids;
+  if (!Array.isArray(mediaIds) || mediaIds.length > P29_MAX_MEDIA
+    || !mediaIds.every((id) => isNonEmptyString(id) && P29_MEDIA_ID_PATTERN.test(id))) {
+    issue(issues, '媒体绑定列表必须是有界的 m-<24位十六进制> id 数组。');
+  } else if (new Set(mediaIds).size !== mediaIds.length) {
+    issue(issues, '媒体绑定列表包含重复 id。');
+  }
+  const usage = extension.usage;
+  if (!isPlainObject(usage) || !Number.isInteger(usage.total_tokens) || usage.total_tokens <= 0) {
+    issue(issues, '模型用量必须是含正整数的 total_tokens 对象。');
+  }
+  const result = extension.result;
+  if (!isPlainObject(result)) {
+    issue(issues, '模型结果必须是对象。');
+  } else {
+    const resultUnknown = Object.keys(result).filter((key) => !P32_V2_RESULT_KEYS.includes(key));
+    if (resultUnknown.length) issue(issues, '模型结果包含未知字段。');
+    for (const key of ['text_expression', 'hook', 'copy_pattern', 'target_audience', 'audience_need_emotion']) {
+      if (!isNonEmptyString(result[key]) || result[key].length > 500) issue(issues, `${key} 必须为非空且不超过 500 字符。`);
+    }
+    const mediaAnalysis = result.media_analysis;
+    if (!Array.isArray(mediaAnalysis)) {
+      issue(issues, '缺少逐媒体分析 media_analysis。');
+    } else {
+      if (mediaAnalysis.length !== mediaIds.length) issue(issues, '逐媒体分析数量与媒体绑定数量不一致。');
+      mediaAnalysis.forEach((row, index) => {
+        if (!isPlainObject(row)) {
+          issue(issues, `逐媒体分析 #${index + 1} 不是对象。`);
+          return;
+        }
+        const rowUnknown = Object.keys(row).filter((key) => !P32_V2_MEDIA_ANALYSIS_KEYS.includes(key));
+        if (rowUnknown.length) issue(issues, `逐媒体分析 #${index + 1} 包含未知字段。`);
+        if (row.media_id !== mediaIds[index]) issue(issues, `逐媒体分析 #${index + 1} 未按顺序绑定精确媒体 id（缺失/重复/乱序/外来均失败）。`);
+        for (const key of ['visual_content', 'composition', 'people', 'scene', 'emotion', 'style_pattern']) {
+          if (!isNonEmptyString(row[key]) || row[key].length > 500) issue(issues, `逐媒体分析 ${key} 必须为非空且不超过 500 字符。`);
+        }
+        const sellingPoints = row.visual_selling_points;
+        if (!Array.isArray(sellingPoints) || sellingPoints.length === 0 || sellingPoints.length > 3 || !sellingPoints.every((entry) => typeof entry === 'string' && entry.trim().length > 0 && entry.length <= 240)) {
+          issue(issues, `逐媒体分析 visual_selling_points 必须是最多 3 项非空且每项不超过 240 字符的数组。`);
+        }
+      });
+    }
+    for (const key of ['virality_drivers', 'reusable_methods', 'rewrite_suggestions', 'signals', 'risks']) {
+      const list = result[key];
+      if (!Array.isArray(list) || list.length === 0 || list.length > 5 || !list.every((entry) => typeof entry === 'string' && entry.trim().length > 0 && entry.length <= 240)) {
+        issue(issues, `${key} 必须是最多 5 项非空且每项不超过 240 字符的数组。`);
+      }
+    }
+  }
+  return { valid: issues.length === 0, issues };
+}
+
 export function validateEvidenceRecord(record) {
   const issues = [];
   if (!isPlainObject(record)) {
@@ -652,8 +722,6 @@ export function validateEvidenceRecord(record) {
   if (record.provenance?.manual === false && record.media_metadata?.sha256 !== record.provenance.content_sha256) {
     issue(issues, 'P22 provenance SHA-256 与媒体元数据不一致。');
   }
-  // P29 版本化扩展：source_metadata / media_assets 可选（旧记录缺省即显式接受）；
-  // 存在时按有界契约严格校验，畸形或混版本一律 fail closed。
   if (record.source_metadata !== undefined) {
     const snapshot = validateSourceMetadata(record.source_metadata);
     if (!snapshot.valid) issues.push(...snapshot.issues);
@@ -669,36 +737,12 @@ export function validateEvidenceRecord(record) {
 // ---- 确定性本地分析 ----
 
 export const DETERMINISTIC_RULES = Object.freeze([
-  {
-    rule_id: 'source_url_shape',
-    label: '来源 URL 形状',
-    description: '校验来源 URL 必须为 http(s) 且有界，输出协议与主机名。',
-  },
-  {
-    rule_id: 'text_length_profile',
-    label: '文本长度画像',
-    description: '按字符数、词数与句数统计正文，超长截断到有界上限。',
-  },
-  {
-    rule_id: 'keyword_frequency',
-    label: '关键词频次',
-    description: '去除停用词后按词频降序取前 5 个关键词；同频按首次出现位置决定。',
-  },
-  {
-    rule_id: 'tone_indicators',
-    label: '语气标记',
-    description: '统计感叹号、问号、表情符号与全部大写词，输出确定性标记。',
-  },
-  {
-    rule_id: 'media_metadata_bounds',
-    label: '媒体元数据边界',
-    description: '校验文件名/MIME/字节大小/修改时间/SHA-256 是否均有界且格式正确。',
-  },
-  {
-    rule_id: 'manual_provenance_trust',
-    label: '人工来源可信度',
-    description: '证据为人工录入（manual=true）时输出 trust_status=manual_local。',
-  },
+  { rule_id: 'source_url_shape', label: '来源 URL 形状', description: '校验来源 URL 必须为 http(s) 且有界，输出协议与主机名。' },
+  { rule_id: 'text_length_profile', label: '文本长度画像', description: '按字符数、词数与句数统计正文，超长截断到有界上限。' },
+  { rule_id: 'keyword_frequency', label: '关键词频次', description: '去除停用词后按词频降序取前 5 个关键词；同频按首次出现位置决定。' },
+  { rule_id: 'tone_indicators', label: '语气标记', description: '统计感叹号、问号、表情符号与全部大写词，输出确定性标记。' },
+  { rule_id: 'media_metadata_bounds', label: '媒体元数据边界', description: '校验文件名/MIME/字节大小/修改时间/SHA-256 是否均有界且格式正确。' },
+  { rule_id: 'manual_provenance_trust', label: '人工来源可信度', description: '证据为人工录入（manual=true）时输出 trust_status=manual_local。' },
 ]);
 
 export function validateAnalysis(record) {
@@ -708,22 +752,18 @@ export function validateAnalysis(record) {
     return { valid: false, issues };
   }
   if (record.schema_version !== ANALYSIS_SCHEMA_VERSION) issue(issues, 'schema_version 不是精确的 p19_analysis_v1。');
-  // kind 恒为 deterministic_local（数据库边界只接受该 kind）；P29 多模态模型结果以
-  // 显式版本化 model_analysis 扩展承载，绝不伪装成纯文本确定性分析。
   if (record.kind !== ANALYSIS_KIND) issue(issues, 'kind 不是精确的 deterministic_local。');
   if (!isNonEmptyString(record.id) || !ANALYSIS_ID_PATTERN.test(record.id)) issue(issues, '分析 id 不是稳定的有界 an-<24位十六进制> 格式。');
   if (!isNonEmptyString(record.project_id) || !PROJECT_ID_PATTERN.test(record.project_id)) issue(issues, '分析缺少有效的项目绑定。');
   if (!isNonEmptyString(record.evidence_id) || !EVIDENCE_ID_PATTERN.test(record.evidence_id)) issue(issues, '分析缺少有效的证据绑定。');
   const extension = record.model_analysis;
   if (extension === undefined) {
-    // 纯确定性本地分析（既有契约）：规则来自确定性清单，模型必须为 null。
     if (!Array.isArray(record.rule_ids) || !record.rule_ids.every((item) => typeof item === 'string' && DETERMINISTIC_RULES.some((rule) => rule.rule_id === item))) {
       issue(issues, '分析规则必须来自确定性规则清单。');
     }
   } else if (extension === null) {
-    issue(issues, 'model_analysis 不能为 null：要么缺省（纯确定性分析），要么是 p29_multimodal_model_v1 扩展。');
+    issue(issues, 'model_analysis 不能为 null：要么缺省（纯确定性分析），要么是 model_analysis 扩展。');
   } else {
-    // P29 模型扩展：rule_ids 允许为空数组（确定性规则仅作补充，不是替代）。
     if (!Array.isArray(record.rule_ids) || !record.rule_ids.every((item) => typeof item === 'string' && DETERMINISTIC_RULES.some((rule) => rule.rule_id === item))) {
       issue(issues, '分析规则必须来自确定性规则清单（补充规则；模型结果以 model_analysis 为准）。');
     }
@@ -742,8 +782,13 @@ export function validateAnalysis(record) {
   }
   if (!isPlainObject(record.result)) issue(issues, '分析结果 result 必须是对象。');
   if (extension !== undefined) {
-    const verdict = validateModelAnalysis(extension);
-    if (!verdict.valid) issues.push(...verdict.issues);
+    if (extension.schema_version === P32_MODEL_ANALYSIS_SCHEMA_VERSION) {
+      const verdict = validateP32ModelAnalysis(extension);
+      if (!verdict.valid) issues.push(...verdict.issues);
+    } else {
+      const verdict = validateModelAnalysis(extension);
+      if (!verdict.valid) issues.push(...verdict.issues);
+    }
   }
   checkGlobalBounds(record, issues);
   return { valid: issues.length === 0, issues };
@@ -759,17 +804,13 @@ export function validateKnowledgeCard(card) {
   }
   if (card.schema_version !== KNOWLEDGE_CARD_SCHEMA_VERSION) issue(issues, 'schema_version 不是精确的 content_knowledge_card_v1。');
   const obs = card.source_observations;
-  if (!isPlainObject(obs)) {
-    issue(issues, '缺少 source_observations 对象。');
-  } else {
+  if (!isPlainObject(obs)) { issue(issues, '缺少 source_observations 对象。'); }
+  else {
     if (!isNonEmptyString(obs.post_text)) issue(issues, '缺少来源正文 source_observations.post_text。');
-    if (!Array.isArray(obs.uncertainties) || !obs.uncertainties.every((item) => typeof item === 'string' && item.trim())) {
-      issue(issues, 'uncertainties 必须是非空字符串数组。');
-    }
+    if (!Array.isArray(obs.uncertainties) || !obs.uncertainties.every((item) => typeof item === 'string' && item.trim())) { issue(issues, 'uncertainties 必须是非空字符串数组。'); }
     const media = obs.media;
-    if (!isPlainObject(media)) {
-      issue(issues, '缺少来源媒体 source_observations.media。');
-    } else {
+    if (!isPlainObject(media)) { issue(issues, '缺少来源媒体 source_observations.media。'); }
+    else {
       if (typeof media.duration_seconds !== 'number' || media.duration_seconds < 0) issue(issues, '媒体时长必须是 >=0 的数字。');
       if (!isNonEmptyString(media.resolution)) issue(issues, '媒体分辨率缺失。');
       if (typeof media.audio_track_present !== 'boolean') issue(issues, '音轨存在标记必须是布尔。');
@@ -778,35 +819,27 @@ export function validateKnowledgeCard(card) {
     }
   }
   const analysis = card.creative_analysis;
-  if (!isPlainObject(analysis)) {
-    issue(issues, '缺少 creative_analysis 对象。');
-  } else {
+  if (!isPlainObject(analysis)) { issue(issues, '缺少 creative_analysis 对象。'); }
+  else {
     for (const key of ['hook', 'copy_device', 'visual_impact', 'seductive_tone', 'narrative_arc', 'audio_role']) {
       if (!isNonEmptyString(analysis[key])) issue(issues, `creative_analysis.${key} 缺失。`);
     }
     for (const key of ['semantic_layers', 'audience_response_mechanisms', 'replicable_features']) {
-      if (!Array.isArray(analysis[key]) || !analysis[key].every((item) => typeof item === 'string' && item.trim())) {
-        issue(issues, `creative_analysis.${key} 必须是非空字符串数组。`);
-      }
+      if (!Array.isArray(analysis[key]) || !analysis[key].every((item) => typeof item === 'string' && item.trim())) { issue(issues, `creative_analysis.${key} 必须是非空字符串数组。`); }
     }
     const risks = analysis.risk_labels;
-    if (!isPlainObject(risks)) {
-      issue(issues, '缺少 creative_analysis.risk_labels 对象。');
-    } else {
+    if (!isPlainObject(risks)) { issue(issues, '缺少 creative_analysis.risk_labels 对象。'); }
+    else {
       if (!['none', 'low', 'medium', 'high'].includes(risks.sexual_suggestiveness)) issue(issues, 'sexual_suggestiveness 枚举无效。');
       if (!['low', 'medium', 'high'].includes(risks.platform_moderation)) issue(issues, 'platform_moderation 枚举无效。');
       if (!['broad', 'restricted', 'adult-oriented'].includes(risks.brand_suitability)) issue(issues, 'brand_suitability 枚举无效。');
       if (!Array.isArray(risks.notes) || !risks.notes.every((item) => typeof item === 'string')) issue(issues, 'risk_labels.notes 必须是字符串数组。');
     }
   }
-  if (!Array.isArray(card.evidence_links) || card.evidence_links.length < 3) {
-    issue(issues, 'evidence_links 至少需要 3 条引用。');
-  } else {
+  if (!Array.isArray(card.evidence_links) || card.evidence_links.length < 3) { issue(issues, 'evidence_links 至少需要 3 条引用。'); }
+  else {
     card.evidence_links.forEach((link, index) => {
-      if (!isPlainObject(link)) {
-        issue(issues, `证据引用 #${index + 1} 不是对象。`);
-        return;
-      }
+      if (!isPlainObject(link)) { issue(issues, `证据引用 #${index + 1} 不是对象。`); return; }
       if (!isNonEmptyString(link.claim)) issue(issues, `证据引用 #${index + 1} 缺少 claim。`);
       if (!['post_text', 'video_frame', 'video_sequence', 'audio', 'metadata'].includes(link.evidence_type)) issue(issues, `证据引用 #${index + 1} evidence_type 枚举无效。`);
       if (!isNonEmptyString(link.source_ref)) issue(issues, `证据引用 #${index + 1} 缺少 source_ref。`);
@@ -815,52 +848,35 @@ export function validateKnowledgeCard(card) {
     });
   }
   const guidance = card.generation_guidance;
-  if (!isPlainObject(guidance)) {
-    issue(issues, '缺少 generation_guidance 对象。');
-  } else {
+  if (!isPlainObject(guidance)) { issue(issues, '缺少 generation_guidance 对象。'); }
+  else {
     for (const key of ['reusable_pattern', 'must_preserve', 'must_not_invent', 'prompt_ingredients', 'variation_space']) {
-      if (key === 'reusable_pattern') {
-        if (!isNonEmptyString(guidance[key])) issue(issues, 'generation_guidance.reusable_pattern 缺失。');
-      } else if (!Array.isArray(guidance[key]) || !guidance[key].every((item) => typeof item === 'string' && item.trim())) {
-        issue(issues, `generation_guidance.${key} 必须是非空字符串数组。`);
-      }
+      if (key === 'reusable_pattern') { if (!isNonEmptyString(guidance[key])) issue(issues, 'generation_guidance.reusable_pattern 缺失。'); }
+      else if (!Array.isArray(guidance[key]) || !guidance[key].every((item) => typeof item === 'string' && item.trim())) { issue(issues, `generation_guidance.${key} 必须是非空字符串数组。`); }
     }
   }
   const readiness = card.generation_readiness;
-  if (!isPlainObject(readiness)) {
-    issue(issues, '缺少 generation_readiness 对象。');
-  } else {
+  if (!isPlainObject(readiness)) { issue(issues, '缺少 generation_readiness 对象。'); }
+  else {
     if (typeof readiness.usable !== 'boolean') issue(issues, 'generation_readiness.usable 必须是布尔。');
     if (!Number.isFinite(readiness.score) || readiness.score < 0 || readiness.score > 100) issue(issues, 'generation_readiness.score 必须是 0..100 数字。');
     if (!Array.isArray(readiness.reasons) || !readiness.reasons.every((item) => typeof item === 'string')) issue(issues, 'generation_readiness.reasons 必须是字符串数组。');
     if (!Array.isArray(readiness.blockers) || !readiness.blockers.every((item) => typeof item === 'string')) issue(issues, 'generation_readiness.blockers 必须是字符串数组。');
   }
-  // 已验收禁止词：不确定措辞必须进入 uncertainties，不得出现在卡内断言里。
   const serialized = JSON.stringify(card);
-  for (const forbidden of ['看起来像', '应该是', '大概有']) {
-    if (serialized.includes(forbidden)) {
-      issue(issues, `不确定措辞「${forbidden}」必须移入 uncertainties，不得作为断言出现。`);
-    }
-  }
-  // P29 版本化扩展：分析来源身份（模型/执行时间/绑定媒体）。缺省或 null 为纯确定性卡。
+  for (const forbidden of ['看起来像', '应该是', '大概有']) { if (serialized.includes(forbidden)) { issue(issues, `不确定措辞「${forbidden}」必须移入 uncertainties，不得作为断言出现。`); } }
   if (card.analysis_provenance !== undefined && card.analysis_provenance !== null) {
     const provenance = card.analysis_provenance;
-    if (!isPlainObject(provenance)) {
-      issue(issues, '知识卡分析来源 identity 必须是对象或 null。');
-    } else {
-      const provenanceUnknown = Object.keys(provenance).filter((key) => ![
-        'method', 'provider', 'model', 'executed_at', 'source_analysis_id', 'media_ids', 'statement',
-      ].includes(key));
+    if (!isPlainObject(provenance)) { issue(issues, '知识卡分析来源 identity 必须是对象或 null。'); }
+    else {
+      const provenanceUnknown = Object.keys(provenance).filter((key) => !['method', 'provider', 'model', 'executed_at', 'source_analysis_id', 'media_ids', 'statement'].includes(key));
       if (provenanceUnknown.length) issue(issues, '知识卡分析来源 identity 包含未知字段。');
       if (provenance.method !== MULTIMODAL_METHOD) issue(issues, '知识卡分析来源 method 不是精确的 multimodal_model。');
       if (provenance.provider !== MULTIMODAL_PROVIDER) issue(issues, '知识卡分析来源 provider 不是精确的 dashscope。');
       if (!isNonEmptyString(provenance.model) || provenance.model.length > 80) issue(issues, '知识卡分析来源模型标识缺失或超长。');
       if (!isNonEmptyString(provenance.executed_at) || provenance.executed_at.length > 80) issue(issues, '知识卡分析来源执行时间缺失或超长。');
       if (!isNonEmptyString(provenance.source_analysis_id) || provenance.source_analysis_id.length > 200) issue(issues, '知识卡分析来源 analysis 绑定缺失或超长。');
-      if (!Array.isArray(provenance.media_ids) || provenance.media_ids.length > P29_MAX_MEDIA
-        || !provenance.media_ids.every((id) => isNonEmptyString(id) && P29_MEDIA_ID_PATTERN.test(id))) {
-        issue(issues, '知识卡分析来源媒体绑定必须是有界的 m-<24位十六进制> id 数组。');
-      }
+      if (!Array.isArray(provenance.media_ids) || provenance.media_ids.length > P29_MAX_MEDIA || !provenance.media_ids.every((id) => isNonEmptyString(id) && P29_MEDIA_ID_PATTERN.test(id))) { issue(issues, '知识卡分析来源媒体绑定必须是有界的 m-<24位十六进制> id 数组。'); }
       if (!isNonEmptyString(provenance.statement) || provenance.statement.length > 500) issue(issues, '知识卡分析来源说明缺失或超长。');
     }
   }
@@ -872,10 +888,7 @@ export function validateKnowledgeCard(card) {
 
 export function validateBrief(brief) {
   const issues = [];
-  if (!isPlainObject(brief)) {
-    issue(issues, 'Brief 不是对象，无法按 P19 Brief 契约校验。');
-    return { valid: false, issues };
-  }
+  if (!isPlainObject(brief)) { issue(issues, 'Brief 不是对象，无法按 P19 Brief 契约校验。'); return { valid: false, issues }; }
   if (brief.schema_version !== BRIEF_SCHEMA_VERSION) issue(issues, 'schema_version 不是精确的 ams_content_brief_v1。');
   if (!isNonEmptyString(brief.id) || !BRIEF_ID_PATTERN.test(brief.id)) issue(issues, 'Brief id 不是稳定的有界 brief-<24位十六进制> 格式。');
   if (!isNonEmptyString(brief.project_id) || !PROJECT_ID_PATTERN.test(brief.project_id)) issue(issues, 'Brief 缺少有效的项目绑定。');
@@ -883,60 +896,40 @@ export function validateBrief(brief) {
   if (!BRIEF_STATUSES.includes(brief.status)) issue(issues, 'Brief 状态必须是 pending_review / approved / returned。');
   if (!isNonEmptyString(brief.topic) || brief.topic.length > MAX_STRING_LENGTH) issue(issues, 'Brief 主题缺失或超长。');
   if (!isNonEmptyString(brief.objective) || brief.objective.length > MAX_STRING_LENGTH) issue(issues, 'Brief 目标缺失或超长。');
-  if (!Array.isArray(brief.knowledge_citation_ids) || brief.knowledge_citation_ids.length < 1 || brief.knowledge_citation_ids.length > MAX_ARRAY_LENGTH) {
-    issue(issues, 'Brief 引用知识卡列表必须包含 1..100 项。');
-  }
+  if (!Array.isArray(brief.knowledge_citation_ids) || brief.knowledge_citation_ids.length < 1 || brief.knowledge_citation_ids.length > MAX_ARRAY_LENGTH) { issue(issues, 'Brief 引用知识卡列表必须包含 1..100 项。'); }
   if (!Array.isArray(brief.structural_guidance) || !brief.structural_guidance.every((item) => typeof item === 'string')) issue(issues, '结构建议必须是字符串数组。');
   if (!Array.isArray(brief.constraints) || !brief.constraints.every((item) => typeof item === 'string')) issue(issues, '约束必须是字符串数组。');
   if (!isPlainObject(brief.evidence_provenance)) issue(issues, '证据溯源 evidence_provenance 必须是对象。');
   const review = brief.review;
-  if (!isPlainObject(review)) {
-    issue(issues, 'Brief 缺少 review 对象。');
-  } else {
+  if (!isPlainObject(review)) { issue(issues, 'Brief 缺少 review 对象。'); }
+  else {
     if (review.schema_version !== BRIEF_REVIEW_SCHEMA_VERSION) issue(issues, '审核 schema_version 不是精确的 ams_brief_review_v1。');
     if (!isNonEmptyString(review.brief_id)) issue(issues, '审核缺少 brief_id 绑定。');
-    if (!Array.isArray(review.comments) || !review.comments.every((item) => typeof item === 'string' && item.length <= 1000)) {
-      issue(issues, '审核评论必须是字符串数组且每条不超过 1000 字符。');
-    }
+    if (!Array.isArray(review.comments) || !review.comments.every((item) => typeof item === 'string' && item.length <= 1000)) { issue(issues, '审核评论必须是字符串数组且每条不超过 1000 字符。'); }
     if (review.decision !== null && review.decision !== undefined) {
       const verdict = validateBriefReview(review);
       if (!verdict.valid) issues.push(...verdict.issues);
-      if (verdict.valid) {
-        const value = review.decision.value;
-        const expected = value === 'approved' ? 'approved' : 'returned';
-        if (brief.status !== expected) issue(issues, `Brief 状态与审核决定不一致（应为 ${expected}）。`);
-      }
+      if (verdict.valid) { const value = review.decision.value; const expected = value === 'approved' ? 'approved' : 'returned'; if (brief.status !== expected) issue(issues, `Brief 状态与审核决定不一致（应为 ${expected}）。`); }
     }
   }
-  // P29 版本化扩展：模型分析身份与纯语言发现（缺省 = 纯确定性 Brief，显式接受旧记录）。
   if (brief.analysis_provenance !== undefined && brief.analysis_provenance !== null) {
     const provenance = brief.analysis_provenance;
-    if (!isPlainObject(provenance)) {
-      issue(issues, 'Brief 分析来源 identity 必须是对象或 null。');
-    } else {
-      const provenanceUnknown = Object.keys(provenance).filter((key) => ![
-        'method', 'provider', 'model', 'executed_at', 'analysis_ids', 'media_count', 'statement',
-      ].includes(key));
+    if (!isPlainObject(provenance)) { issue(issues, 'Brief 分析来源 identity 必须是对象或 null。'); }
+    else {
+      const provenanceUnknown = Object.keys(provenance).filter((key) => !['method', 'provider', 'model', 'executed_at', 'analysis_ids', 'media_count', 'statement'].includes(key));
       if (provenanceUnknown.length) issue(issues, 'Brief 分析来源 identity 包含未知字段。');
       if (provenance.method !== MULTIMODAL_METHOD) issue(issues, 'Brief 分析来源 method 不是精确的 multimodal_model。');
       if (provenance.provider !== MULTIMODAL_PROVIDER) issue(issues, 'Brief 分析来源 provider 不是精确的 dashscope。');
       if (!isNonEmptyString(provenance.model) || provenance.model.length > 80) issue(issues, 'Brief 分析来源模型标识缺失或超长。');
       if (!isNonEmptyString(provenance.executed_at) || provenance.executed_at.length > 80) issue(issues, 'Brief 分析来源执行时间缺失或超长。');
-      if (!Array.isArray(provenance.analysis_ids) || provenance.analysis_ids.length < 1 || provenance.analysis_ids.length > MAX_ARRAY_LENGTH
-        || !provenance.analysis_ids.every((id) => isNonEmptyString(id) && id.length <= 200)) {
-        issue(issues, 'Brief 分析来源 analysis 绑定必须是有界的非空 id 数组。');
-      }
-      if (!Number.isInteger(provenance.media_count) || provenance.media_count < 0 || provenance.media_count > P29_MAX_MEDIA * MAX_ARRAY_LENGTH) {
-        issue(issues, 'Brief 分析来源媒体计数必须是 0..800 的整数。');
-      }
+      if (!Array.isArray(provenance.analysis_ids) || provenance.analysis_ids.length < 1 || provenance.analysis_ids.length > MAX_ARRAY_LENGTH || !provenance.analysis_ids.every((id) => isNonEmptyString(id) && id.length <= 200)) { issue(issues, 'Brief 分析来源 analysis 绑定必须是有界的非空 id 数组。'); }
+      if (!Number.isInteger(provenance.media_count) || provenance.media_count < 0 || provenance.media_count > P29_MAX_MEDIA * MAX_ARRAY_LENGTH) { issue(issues, 'Brief 分析来源媒体计数必须是 0..800 的整数。'); }
       if (!isNonEmptyString(provenance.statement) || provenance.statement.length > 500) issue(issues, 'Brief 分析来源说明缺失或超长。');
     }
   }
   if (brief.multimodal_findings !== undefined && brief.multimodal_findings !== null) {
     const findings = brief.multimodal_findings;
-    if (!Array.isArray(findings) || findings.length > 10 || !findings.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 240)) {
-      issue(issues, 'Brief 多模态发现必须是最多 10 条非空且每条不超过 240 字符的数组。');
-    }
+    if (!Array.isArray(findings) || findings.length > 10 || !findings.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 240)) { issue(issues, 'Brief 多模态发现必须是最多 10 条非空且每条不超过 240 字符的数组。'); }
   }
   checkGlobalBounds(brief, issues);
   return { valid: issues.length === 0, issues };
@@ -944,19 +937,14 @@ export function validateBrief(brief) {
 
 export function validateBriefReview(review) {
   const issues = [];
-  if (!isPlainObject(review)) {
-    issue(issues, '审核记录不是对象，无法按 ams_brief_review_v1 校验。');
-    return { valid: false, issues };
-  }
+  if (!isPlainObject(review)) { issue(issues, '审核记录不是对象，无法按 ams_brief_review_v1 校验。'); return { valid: false, issues }; }
   if (review.schema_version !== BRIEF_REVIEW_SCHEMA_VERSION) issue(issues, '审核 schema_version 不是精确的 ams_brief_review_v1。');
   if (!isNonEmptyString(review.brief_id)) issue(issues, '审核缺少 brief_id 绑定。');
   const decision = review.decision;
-  if (decision === null || decision === undefined) {
-    issue(issues, '审核缺少 decision 决定对象。');
-  } else {
-    if (!isPlainObject(decision)) {
-      issue(issues, '审核决定不是对象。');
-    } else {
+  if (decision === null || decision === undefined) { issue(issues, '审核缺少 decision 决定对象。'); }
+  else {
+    if (!isPlainObject(decision)) { issue(issues, '审核决定不是对象。'); }
+    else {
       if (!BRIEF_DECISIONS.includes(decision.value)) issue(issues, '审核决定 value 必须是 approved 或 return_for_revision。');
       if (decision.source !== 'local_manual') issue(issues, '审核决定 source 不是精确的 local_manual。');
       if (!isNonEmptyString(decision.rationale) || decision.rationale.length > 500) issue(issues, '审核理由必须为非空且不超过 500 字符。');
@@ -964,9 +952,7 @@ export function validateBriefReview(review) {
       if (!isNonEmptyString(decision.decided_at) || decision.decided_at.length > MAX_IDENTIFIER_LENGTH) issue(issues, '决定时间缺失或超长。');
     }
   }
-  if (!Array.isArray(review.comments) || !review.comments.every((item) => typeof item === 'string' && item.length <= 1000)) {
-    issue(issues, '审核评论必须是字符串数组且每条不超过 1000 字符。');
-  }
+  if (!Array.isArray(review.comments) || !review.comments.every((item) => typeof item === 'string' && item.length <= 1000)) { issue(issues, '审核评论必须是字符串数组且每条不超过 1000 字符。'); }
   checkGlobalBounds(review, issues);
   return { valid: issues.length === 0, issues };
 }
@@ -975,10 +961,7 @@ export function validateBriefReview(review) {
 
 export function validateHandoffPackageRecord(record) {
   const issues = [];
-  if (!isPlainObject(record)) {
-    issue(issues, '记录不是对象，无法按 P5 交接包边界校验。');
-    return { valid: false, issues };
-  }
+  if (!isPlainObject(record)) { issue(issues, '记录不是对象，无法按 P5 交接包边界校验。'); return { valid: false, issues }; }
   if (record.schema_version !== HANDOFF_SCHEMA_VERSION) issue(issues, 'schema_version 不是精确的 ams_external_handoff_package_v1。');
   if (record.version !== 1) issue(issues, 'version 不是精确的 1。');
   if (record.kind !== HANDOFF_KIND) issue(issues, 'kind 不是精确的 external_generation_handoff_package。');
@@ -988,24 +971,19 @@ export function validateHandoffPackageRecord(record) {
   if (record.submission_pending !== true) issue(issues, 'submission_pending 不是严格布尔 true。');
   if (record.local_only !== true) issue(issues, 'local_only 不是严格布尔 true。');
   if (record.repo_external !== true) issue(issues, 'repo_external 不是严格布尔 true。');
-  if (!isNonEmptyString(record.id)) {
-    issue(issues, '缺少稳定的交接包 id。');
-  } else if (!PACKAGE_ID_PATTERN.test(record.id)) {
-    issue(issues, '交接包 id 不是稳定的有界 handoff-pkg-<24位十六进制> 格式。');
-  }
+  if (!isNonEmptyString(record.id)) { issue(issues, '缺少稳定的交接包 id。'); }
+  else if (!PACKAGE_ID_PATTERN.test(record.id)) { issue(issues, '交接包 id 不是稳定的有界 handoff-pkg-<24位十六进制> 格式。'); }
   const brief = record.brief_provenance;
-  if (!isPlainObject(brief)) {
-    issue(issues, '缺少简报来源 brief_provenance 对象。');
-  } else {
+  if (!isPlainObject(brief)) { issue(issues, '缺少简报来源 brief_provenance 对象。'); }
+  else {
     if (!isNonEmptyString(brief.brief_id) || brief.brief_id.length > MAX_IDENTIFIER_LENGTH) issue(issues, '简报来源 brief_provenance.brief_id 缺失或超长。');
     if (!Number.isInteger(brief.brief_version) || brief.brief_version < 1) issue(issues, '简报版本绑定必须是正整数。');
     if (!isNonEmptyString(brief.brief_schema_version) || brief.brief_schema_version.length > MAX_IDENTIFIER_LENGTH) issue(issues, '简报 schema 绑定缺失或超长。');
     if (!isNonEmptyString(brief.brief_status) || brief.brief_status.length > MAX_IDENTIFIER_LENGTH) issue(issues, '简报状态绑定缺失或超长。');
   }
   const decision = record.human_decision;
-  if (!isPlainObject(decision)) {
-    issue(issues, '缺少人工决定 human_decision 对象。');
-  } else {
+  if (!isPlainObject(decision)) { issue(issues, '缺少人工决定 human_decision 对象。'); }
+  else {
     if (decision.value !== 'approved') issue(issues, '人工决定 value 不是精确的 approved。');
     if (decision.source !== 'local_manual') issue(issues, '人工决定来源 source 不是精确的 local_manual。');
     if (!isNonEmptyString(decision.rationale)) issue(issues, '缺少批准理由 human_decision.rationale。');
@@ -1015,33 +993,25 @@ export function validateHandoffPackageRecord(record) {
   if (!isNonEmptyString(record.topic)) issue(issues, '缺少主题 topic。');
   if (!isNonEmptyString(record.objective)) issue(issues, '缺少目标 objective。');
   const citations = record.knowledge_citations;
-  if (!Array.isArray(citations)) {
-    issue(issues, '缺少知识引用列表 knowledge_citations。');
-  } else if (citations.length === 0) {
-    issue(issues, '知识引用列表 knowledge_citations 为空。');
-  } else {
+  if (!Array.isArray(citations)) { issue(issues, '缺少知识引用列表 knowledge_citations。'); }
+  else if (citations.length === 0) { issue(issues, '知识引用列表 knowledge_citations 为空。'); }
+  else {
     citations.forEach((item, index) => {
       const at = `知识引用 #${index + 1}`;
-      if (!isPlainObject(item)) {
-        issue(issues, `${at} 不是对象。`);
-        return;
-      }
+      if (!isPlainObject(item)) { issue(issues, `${at} 不是对象。`); return; }
       if (!isNonEmptyString(item.knowledge_id) || item.knowledge_id.length > MAX_IDENTIFIER_LENGTH) issue(issues, `${at} 缺少或超长 knowledge_id。`);
       if (!isNonEmptyString(item.type)) issue(issues, `${at} 缺少 type。`);
       if (!isNonEmptyString(item.title)) issue(issues, `${at} 缺少 title。`);
       if (typeof item.excerpt !== 'string') issue(issues, `${at} 的 excerpt 必须是字符串。`);
-      if (!Array.isArray(item.evidence_refs) || item.evidence_refs.length > MAX_ARRAY_LENGTH || !item.evidence_refs.every((ref) => isNonEmptyString(ref) && ref.length <= MAX_IDENTIFIER_LENGTH)) {
-        issue(issues, `${at} 的证据列表必须是有界非空字符串数组。`);
-      }
+      if (!Array.isArray(item.evidence_refs) || item.evidence_refs.length > MAX_ARRAY_LENGTH || !item.evidence_refs.every((ref) => isNonEmptyString(ref) && ref.length <= MAX_IDENTIFIER_LENGTH)) { issue(issues, `${at} 的证据列表必须是有界非空字符串数组。`); }
       if (item.evidence_completeness !== null && !isPlainObject(item.evidence_completeness)) issue(issues, `${at} 的证据完整度必须是对象或 null。`);
       if (!isNonEmptyString(item.trust_status)) issue(issues, `${at} 缺少 trust_status。`);
       if (typeof item.validation_status !== 'string') issue(issues, `${at} 的 validation_status 必须是字符串。`);
     });
   }
   const evidence = record.evidence_provenance;
-  if (!isPlainObject(evidence)) {
-    issue(issues, '缺少证据来源 evidence_provenance。');
-  } else {
+  if (!isPlainObject(evidence)) { issue(issues, '缺少证据来源 evidence_provenance。'); }
+  else {
     if (typeof evidence.local_only !== 'boolean') issue(issues, '证据来源 local_only 必须是严格布尔值。');
     if (!isNonEmptyString(evidence.store) || evidence.store.length > MAX_IDENTIFIER_LENGTH) issue(issues, '证据来源存储标识缺失或超长。');
     if (!isNonEmptyString(evidence.created_from) || evidence.created_from.length > MAX_IDENTIFIER_LENGTH) issue(issues, '证据来源创建来源缺失或超长。');
@@ -1049,44 +1019,22 @@ export function validateHandoffPackageRecord(record) {
     if (typeof evidence.statement !== 'string') issue(issues, '证据来源 statement 必须是字符串。');
   }
   const guidance = record.structural_guidance;
-  if (!isPlainObject(guidance)) {
-    issue(issues, '缺少结构指导 structural_guidance。');
-  } else {
-    for (const key of ['reusable_patterns', 'must_preserve', 'variation_space']) {
-      if (!Array.isArray(guidance[key]) || !guidance[key].every((entry) => typeof entry === 'string')) issue(issues, `结构指导 ${key} 必须是字符串数组。`);
-    }
-  }
+  if (!isPlainObject(guidance)) { issue(issues, '缺少结构指导 structural_guidance。'); }
+  else { for (const key of ['reusable_patterns', 'must_preserve', 'variation_space']) { if (!Array.isArray(guidance[key]) || !guidance[key].every((entry) => typeof entry === 'string')) issue(issues, `结构指导 ${key} 必须是字符串数组。`); } }
   const constraints = record.constraints;
-  if (!isPlainObject(constraints)) {
-    issue(issues, '缺少约束 constraints。');
-  } else {
-    if (!Array.isArray(constraints.must_not_invent) || !constraints.must_not_invent.every((entry) => typeof entry === 'string')) issue(issues, '约束 must_not_invent 必须是字符串数组。');
-    if (!isNonEmptyString(constraints.evidence_boundary)) issue(issues, '缺少约束证据边界 constraints.evidence_boundary。');
-  }
+  if (!isPlainObject(constraints)) { issue(issues, '缺少约束 constraints。'); }
+  else { if (!Array.isArray(constraints.must_not_invent) || !constraints.must_not_invent.every((entry) => typeof entry === 'string')) issue(issues, '约束 must_not_invent 必须是字符串数组。'); if (!isNonEmptyString(constraints.evidence_boundary)) issue(issues, '缺少约束证据边界 constraints.evidence_boundary。'); }
   const boundary = record.external_project_boundary;
-  if (!isPlainObject(boundary)) {
-    issue(issues, '缺少外部项目边界 external_project_boundary。');
-  } else {
-    if (!isNonEmptyString(boundary.destination)) issue(issues, '外部项目边界 destination 不能为空。');
-    if (!isNonEmptyString(boundary.statement)) issue(issues, '外部项目边界 statement 不能为空。');
-  }
+  if (!isPlainObject(boundary)) { issue(issues, '缺少外部项目边界 external_project_boundary。'); }
+  else { if (!isNonEmptyString(boundary.destination)) issue(issues, '外部项目边界 destination 不能为空。'); if (!isNonEmptyString(boundary.statement)) issue(issues, '外部项目边界 statement 不能为空。'); }
   const importOnly = record.import_only;
-  if (!isPlainObject(importOnly)) {
-    issue(issues, '缺少人工导入标记 import_only。');
-  } else if (importOnly.manual_import_required !== true) {
-    issue(issues, 'import_only.manual_import_required 不是严格布尔 true。');
-  }
+  if (!isPlainObject(importOnly)) { issue(issues, '缺少人工导入标记 import_only。'); }
+  else if (importOnly.manual_import_required !== true) { issue(issues, 'import_only.manual_import_required 不是严格布尔 true。'); }
   if (record.manual_feedback !== null && !isPlainObject(record.manual_feedback)) issue(issues, '人工反馈 manual_feedback 必须是对象或 null。');
-  const flags = record.execution_flags;
-  const flagVerdict = validateExecutionFlags(flags);
-  if (!flagVerdict.valid) issues.push(...flagVerdict.issues);
+  const flags = record.execution_flags; const flagVerdict = validateExecutionFlags(flags); if (!flagVerdict.valid) issues.push(...flagVerdict.issues);
   const trace = record.source_trace;
-  if (!isPlainObject(trace)) {
-    issue(issues, '缺少来源轨迹 source_trace。');
-  } else {
-    if (trace.origin !== 'local_bridge') issue(issues, '来源轨迹 origin 不是精确的 local_bridge。');
-    if (trace.created_from !== 'approved_content_brief') issue(issues, '来源轨迹 created_from 不是精确的 approved_content_brief。');
-  }
+  if (!isPlainObject(trace)) { issue(issues, '缺少来源轨迹 source_trace。'); }
+  else { if (trace.origin !== 'local_bridge') issue(issues, '来源轨迹 origin 不是精确的 local_bridge。'); if (trace.created_from !== 'approved_content_brief') issue(issues, '来源轨迹 created_from 不是精确的 approved_content_brief。'); }
   checkGlobalBounds(record, issues);
   return { valid: issues.length === 0, issues };
 }
@@ -1095,47 +1043,22 @@ export function validateHandoffPackageRecord(record) {
 
 export function validateProjectPackage(pkg) {
   const issues = [];
-  if (!isPlainObject(pkg)) {
-    issue(issues, '导入包不是对象，无法按 P19 项目包契约校验。');
-    return { valid: false, issues };
-  }
+  if (!isPlainObject(pkg)) { issue(issues, '导入包不是对象，无法按 P19 项目包契约校验。'); return { valid: false, issues }; }
   if (pkg.schema_version !== PROJECT_PACKAGE_SCHEMA_VERSION) issue(issues, '导入包 schema_version 不是精确的 p19_project_package_v1。');
   if (typeof pkg.exported_at !== 'string' || pkg.exported_at.length > 80) issue(issues, '导出时间缺失或超长。');
   if (typeof pkg.fingerprint !== 'string' || !SHA256_PATTERN.test(pkg.fingerprint)) issue(issues, '导入包指纹必须是 64 位十六进制。');
-  const project = pkg.project;
-  const projectVerdict = validateProject(project);
-  if (!projectVerdict.valid) issues.push(...projectVerdict.issues);
+  const project = pkg.project; const projectVerdict = validateProject(project); if (!projectVerdict.valid) issues.push(...projectVerdict.issues);
   const evidence = pkg.evidence;
-  if (!Array.isArray(evidence) || evidence.length > MAX_ARRAY_LENGTH) {
-    issue(issues, '导入包证据列表必须是有界数组。');
-  } else {
-    for (const record of evidence) {
-      const verdict = validateEvidenceRecord(record);
-      if (!verdict.valid) issues.push(...verdict.issues);
-    }
-  }
+  if (!Array.isArray(evidence) || evidence.length > MAX_ARRAY_LENGTH) { issue(issues, '导入包证据列表必须是有界数组。'); }
+  else { for (const record of evidence) { const verdict = validateEvidenceRecord(record); if (!verdict.valid) issues.push(...verdict.issues); } }
   const analyses = pkg.analyses;
-  if (!Array.isArray(analyses) || analyses.length > MAX_ARRAY_LENGTH) {
-    issue(issues, '导入包分析列表必须是有界数组。');
-  } else {
-    for (const record of analyses) {
-      const verdict = validateAnalysis(record);
-      if (!verdict.valid) issues.push(...verdict.issues);
-    }
-  }
+  if (!Array.isArray(analyses) || analyses.length > MAX_ARRAY_LENGTH) { issue(issues, '导入包分析列表必须是有界数组。'); }
+  else { for (const record of analyses) { const verdict = validateAnalysis(record); if (!verdict.valid) issues.push(...verdict.issues); } }
   const cards = pkg.knowledge_cards;
-  if (!Array.isArray(cards) || cards.length > MAX_ARRAY_LENGTH) {
-    issue(issues, '导入包知识卡列表必须是有界数组。');
-  } else {
-    for (const record of cards) {
-      const verdict = validateKnowledgeCard(record);
-      if (!verdict.valid) issues.push(...verdict.issues);
-    }
-  }
-  const brief = pkg.brief;
-  if (brief !== null && !validateBrief(brief).valid) issues.push(...validateBrief(brief).issues);
-  const handoff = pkg.handoff;
-  if (handoff !== null && !validateHandoffPackageRecord(handoff).valid) issues.push(...validateHandoffPackageRecord(handoff).issues);
+  if (!Array.isArray(cards) || cards.length > MAX_ARRAY_LENGTH) { issue(issues, '导入包知识卡列表必须是有界数组。'); }
+  else { for (const record of cards) { const verdict = validateKnowledgeCard(record); if (!verdict.valid) issues.push(...verdict.issues); } }
+  const brief = pkg.brief; if (brief !== null && !validateBrief(brief).valid) issues.push(...validateBrief(brief).issues);
+  const handoff = pkg.handoff; if (handoff !== null && !validateHandoffPackageRecord(handoff).valid) issues.push(...validateHandoffPackageRecord(handoff).issues);
   checkGlobalBounds(pkg, issues);
   return { valid: issues.length === 0, issues };
 }

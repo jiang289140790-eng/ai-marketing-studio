@@ -1110,9 +1110,11 @@ export function buildMultimodalQwenContent(items) {
   }));
   const text = [
     '你是只读多模态内容研究助手。只分析给定公开来源与所附媒体，不补写事实。',
-    '返回严格 JSON：{"analyses":[{"source_id":"...","text_expression":"...","media_analysis":[{"media_id":"...","visual_content":"...","composition":"...","people":"...","scene":"...","emotion":"..."}],"virality_drivers":["..."],"reusable_methods":["..."],"signals":["..."],"risks":["..."]}]}',
+    '返回严格 JSON：{"analyses":[{"source_id":"...","text_expression":"...","hook":"...","copy_pattern":"...","target_audience":"...","audience_need_emotion":"...","media_analysis":[{"media_id":"...","visual_content":"...","composition":"...","people":"...","scene":"...","emotion":"...","visual_selling_points":["..."],"style_pattern":"..."}],"virality_drivers":["..."],"reusable_methods":["..."],"rewrite_suggestions":["..."],"signals":["..."],"risks":["..."]}]}',
+    'hook 是文本/标题钩子（≤500 字）；copy_pattern 是文案模式；target_audience 是目标受众；audience_need_emotion 是受众需求/情感。',
+    'visual_selling_points 是每条媒体的视觉卖点（最多 3 项、每项 ≤240 字）；style_pattern 是风格模式（≤500 字）。rewrite_suggestions 是可复写的建议（最多 5 项、每项 ≤240 字）。',
     'media_analysis 必须与每个来源的媒体一一对应并保持相同顺序，每项精确绑定 media_id；无媒体的来源 media_analysis 必须为空数组。',
-    'text_expression 不超过 300 字；virality_drivers/reusable_methods/signals/risks 各最多 5 项、每项最多 240 字；逐媒体字段各不超过 500 字。',
+    'text_expression/hook/copy_pattern/target_audience/audience_need_emotion 各 ≤500 字；virality_drivers/reusable_methods/rewrite_suggestions/signals/risks 各最多 5 项、每项最多 240 字；逐媒体字段各不超过 500 字。',
     '不得生成营销成品、路由或发布指令。',
     'Each media_analysis entry must bind the exact media_id in the same order as the source; missing, duplicate, reordered, foreign or extra media ids are invalid.',
     JSON.stringify(sources),
@@ -1163,7 +1165,7 @@ export function parseQwenMultimodalAnalyses(payload, items) {
       if (!object(entry) || entry.media_id !== mediaIds[index]) {
         throw new P22Error('MODEL_MEDIA_BINDING_INVALID', '逐媒体分析未按顺序绑定精确媒体 id（缺失/重复/乱序/外来均失败）。', 502, { field: 'media_analysis' });
       }
-      return {
+      const base = {
         media_id: entry.media_id,
         visual_content: boundedVisual(entry.visual_content, 'visual_content'),
         composition: boundedVisual(entry.composition, 'composition'),
@@ -1171,7 +1173,22 @@ export function parseQwenMultimodalAnalyses(payload, items) {
         scene: boundedVisual(entry.scene, 'scene'),
         emotion: boundedVisual(entry.emotion, 'emotion'),
       };
+      // P32-A v2 扩展：视觉卖点与风格模式（Qwen 可选输出，缺省为空）
+      if (entry.visual_selling_points !== undefined) {
+        base.visual_selling_points = (Array.isArray(entry.visual_selling_points) ? entry.visual_selling_points : []).slice(0, 3).map((v) => boundedModelText(v, 'visual_selling_points', 240));
+      }
+      if (entry.style_pattern !== undefined) {
+        base.style_pattern = boundedVisual(entry.style_pattern, 'style_pattern');
+      }
+      return base;
     });
+    const v2Fields = {};
+    // P32-A v2 扩展：钩子/文案模式/受众/情感/改写建议（Qwen 可选输出，缺省为空字符串或空数组）
+    if (row.hook !== undefined) v2Fields.hook = boundedModelText(row.hook, 'hook', 500);
+    if (row.copy_pattern !== undefined) v2Fields.copy_pattern = boundedModelText(row.copy_pattern, 'copy_pattern', 500);
+    if (row.target_audience !== undefined) v2Fields.target_audience = boundedModelText(row.target_audience, 'target_audience', 500);
+    if (row.audience_need_emotion !== undefined) v2Fields.audience_need_emotion = boundedModelText(row.audience_need_emotion, 'audience_need_emotion', 500);
+    if (row.rewrite_suggestions !== undefined) v2Fields.rewrite_suggestions = boundedList(row.rewrite_suggestions, 'rewrite_suggestions');
     return {
       source_id: sourceId,
       source_url: item.source_url,
@@ -1183,6 +1200,7 @@ export function parseQwenMultimodalAnalyses(payload, items) {
       signals: boundedList(row.signals, 'signals'),
       risks: boundedList(row.risks, 'risks'),
       method: 'qwen_multimodal_assisted_review',
+      ...v2Fields,
     };
   });
 }

@@ -27,6 +27,7 @@ import {
   MAX_IDENTIFIER_LENGTH,
   MAX_STRING_LENGTH,
   MODEL_ANALYSIS_SCHEMA_VERSION,
+  P32_MODEL_ANALYSIS_SCHEMA_VERSION,
   MULTIMODAL_METHOD,
   MULTIMODAL_MODEL,
   MULTIMODAL_PROVIDER,
@@ -570,6 +571,196 @@ export async function recordAssistedAnalysis(project, evidenceId, modelResult, {
   next.analyses = next.analyses.filter((item) => item.evidence_id !== evidenceId);
   next.analyses = [...next.analyses, record];
   return bumpProject(next, { now, hasher });
+}
+
+/**
+ * P32-A 版本化 Qwen 重新分析：始终追加新分析记录，绝不覆写/删除旧版本。
+ * 每次重新分析产生新的唯一分析 id，版本号为该证据下的顺序递增版本。
+ * v2 多模态模型扩展（p32_multimodal_model_v2）直接持久化，不与 v1 混用。
+ */
+export async function recordVersionedReanalysis(project, evidenceId, modelResult, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
+  assertNotArchived(project);
+  const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
+  if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要分析的证据不存在。');
+  // 验证媒体资产完整性
+  const mediaIds = (evidence.media_assets || []).map((asset) => asset.id);
+  if (!mediaIds.length) throw workbenchError('REANALYSIS_MEDIA_MISSING', '证据缺少已验证的媒体资产，无法进行 Qwen 多模态重新分析。');
+  if (!modelResult || typeof modelResult !== 'object') throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析结果缺失，已拒绝。');
+  const sourceId = String(modelResult.source_id || '');
+  if (!sourceId || sourceId !== String(evidence.provenance?.source_id || '')) {
+    throw workbenchError('ANALYSIS_SOURCE_BINDING_INVALID', '模型分析没有精确绑定证据来源身份，已拒绝。');
+  }
+  const result = modelResult.result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析结果无效，已拒绝。');
+
+  // 严格规范边界：v2 结果只接受已声明的字段子集。
+  const V2_KEYS = ['text_expression', 'hook', 'copy_pattern', 'target_audience', 'audience_need_emotion',
+    'media_analysis', 'virality_drivers', 'reusable_methods', 'rewrite_suggestions', 'signals', 'risks'];
+  if (Object.keys(result).some((key) => !V2_KEYS.includes(key))) {
+    throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型结果包含未知字段，已拒绝。');
+  }
+  // 逐媒体绑定校验
+  const boundMediaIds = (Array.isArray(result.media_analysis) ? result.media_analysis : []).map((row) => row && row.media_id);
+  if (JSON.stringify(boundMediaIds) !== JSON.stringify(mediaIds)) {
+    throw workbenchError('ANALYSIS_MEDIA_BINDING_INVALID', '模型分析未按精确顺序绑定全部媒体 id（缺失/重复/乱序/外来均拒绝）。');
+  }
+  const totalTokens = Number(modelResult.usage && modelResult.usage.total_tokens);
+  if (!Number.isInteger(totalTokens) || totalTokens <= 0) {
+    throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型用量无效，已拒绝。');
+  }
+
+  const timestamp = now();
+  const model = String(modelResult.model || MULTIMODAL_MODEL).slice(0, 80);
+  // 计算下一个版本号
+  const existingVersions = (project.analyses || []).filter((item) => item.evidence_id === evidenceId);
+  const nextVersion = existingVersions.reduce((max, item) => Math.max(max, item.version || 0), 0) + 1;
+
+  // 去重：相同请求身份不创建重复版本
+  const requestIdentity = modelResult._request_identity || null;
+  if (requestIdentity) {
+    const duplicate = existingVersions.find((item) =>
+      item.model_analysis && item.model_analysis._request_identity === requestIdentity);
+    if (duplicate) return clonePlain(project);
+  }
+
+  const extension = {
+    schema_version: P32_MODEL_ANALYSIS_SCHEMA_VERSION,
+    provider: MULTIMODAL_PROVIDER,
+    model,
+    method: MULTIMODAL_METHOD,
+    executed_at: String(modelResult.executed_at || timestamp).slice(0, 80),
+    media_ids: mediaIds,
+    result: clonePlain(result),
+    usage: { total_tokens: totalTokens },
+    _request_identity: requestIdentity,
+  };
+
+  const ruleOutputs = runDeterministicRules(evidence);
+  const id = await stableId('an-', { project_id: project.id, evidence_id: evidenceId, version: nextVersion, timestamp });
+  const record = {
+    schema_version: ANALYSIS_SCHEMA_VERSION,
+    id,
+    project_id: project.id,
+    evidence_id: evidenceId,
+    kind: ANALYSIS_KIND,
+    rule_ids: ruleOutputs.map((rule) => rule.rule_id),
+    provenance: {
+      method: ANALYSIS_KIND,
+      generated_by: ANALYSIS_ENGINE_VERSION,
+      model,
+      executed_at: timestamp,
+      statement: `本分析包含 P32 版本化多模态 Qwen 重新分析（p32_multimodal_model_v2，第 ${nextVersion} 版）；模型结果按来源与逐媒体精确绑定。`,
+    },
+    model_analysis: extension,
+    result: {
+      summary: ruleSummary(ruleOutputs, true),
+      rules: ruleOutputs.map((rule) => ({ rule_id: rule.rule_id, label: rule.label, output: clonePlain(rule.output) })),
+    },
+    evidence_fingerprint: evidence.fingerprint,
+    evidence_version: evidence.version,
+    version: nextVersion,
+    fingerprint: '',
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+  record.fingerprint = await hasher(record);
+  const verdict = validateAnalysis(record);
+  if (!verdict.valid) throw workbenchError('ANALYSIS_INVALID', verdict.issues[0] || '版本化重新分析记录未通过契约校验。');
+  const next = clonePlain(project);
+  // 追加，不覆写
+  next.analyses = [...next.analyses, record];
+  return bumpProject(next, { now, hasher });
+}
+
+/**
+ * 获取某证据的最新分析版本（版本号最高且有效的分析记录），
+ * 供 Knowledge Card 创建和比较使用。无分析返回 null。
+ */
+export function getLatestAnalysisForEvidence(project, evidenceId) {
+  const analyses = (project.analyses || []).filter((item) => item.evidence_id === evidenceId);
+  if (!analyses.length) return null;
+  return analyses.reduce((best, current) => (current.version > best.version ? current : best), analyses[0]);
+}
+
+/**
+ * 获取某证据的所有分析版本，按版本号降序排列（最新在前）。
+ */
+export function getAllAnalysisVersionsForEvidence(project, evidenceId) {
+  return (project.analyses || [])
+    .filter((item) => item.evidence_id === evidenceId)
+    .sort((a, b) => b.version - a.version);
+}
+
+/**
+ * P32-A 多选比较：2-5 条选定证据，每条绑定其最新有效分析，
+ * 输出确定性逐条摘要和比较信息。不调用模型、不虚构事实。
+ */
+export function generateEvidenceComparison(project, selectedEvidenceIds) {
+  const ids = Array.isArray(selectedEvidenceIds) ? selectedEvidenceIds : [];
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length < 2 || uniqueIds.length > 5) {
+    return { valid: false, reason: `比较需要 2-5 条记录，当前选择了 ${uniqueIds.length} 条。`, rows: [], summary: null };
+  }
+  const evidenceById = new Map((project.evidence || []).map((item) => [item.id, item]));
+  const rows = [];
+  const warnings = [];
+  for (const evidenceId of uniqueIds) {
+    const evidence = evidenceById.get(evidenceId);
+    if (!evidence) {
+      return { valid: false, reason: `证据 ${evidenceId} 不存在于当前项目中。`, rows: [], summary: null };
+    }
+    const latestAnalysis = getLatestAnalysisForEvidence(project, evidenceId);
+    if (!latestAnalysis || !latestAnalysis.model_analysis) {
+      warnings.push(`证据 ${evidenceId.slice(0, 16)}… 缺少有效多模态分析。`);
+      rows.push({ evidenceId, evidence, analysis: null, analysisMissing: true });
+      continue;
+    }
+    const ext = latestAnalysis.model_analysis;
+    const result = ext.result || {};
+    const isV2 = ext.schema_version === P32_MODEL_ANALYSIS_SCHEMA_VERSION;
+    rows.push({
+      evidenceId,
+      evidence,
+      analysis: latestAnalysis,
+      analysisVersion: latestAnalysis.version,
+      totalVersions: getAllAnalysisVersionsForEvidence(project, evidenceId).length,
+      schemaVersion: ext.schema_version,
+      hook: isV2 ? (result.hook || '') : (result.text_expression || '').slice(0, 200),
+      audience: isV2 ? (result.target_audience || '') : '',
+      engagement: evidence.source_metadata?.engagement || null,
+      visualPattern: (result.media_analysis || []).slice(0, 2).map((row) => (isV2 ? (row.style_pattern || row.visual_content) : (row.visual_content || ''))).join('；'),
+      propagationDrivers: result.virality_drivers || [],
+      reusableFormula: isV2 ? (result.reusable_methods || []) : (result.reusable_methods || []),
+      risks: result.risks || [],
+      analysisMissing: false,
+    });
+  }
+  // 确定性比较摘要：派生自精确选定记录，不调用模型
+  const validRows = rows.filter((row) => !row.analysisMissing);
+  const allHooks = validRows.map((row) => row.hook).filter(Boolean);
+  const allDrivers = validRows.flatMap((row) => row.propagationDrivers);
+  const allRisks = validRows.flatMap((row) => row.risks);
+  const highestEngagement = validRows.reduce((best, row) => {
+    if (!row.engagement) return best;
+    const total = (row.engagement.likes || 0) + (row.engagement.retweets || 0) + (row.engagement.replies || 0);
+    return total > (best.total || -1) ? { row, total } : best;
+  }, { row: null, total: -1 });
+
+  const summary = {
+    totalSelected: uniqueIds.length,
+    analyzedCount: validRows.length,
+    missingAnalysisCount: warnings.length,
+    warnings,
+    commonDrivers: [...new Set(allDrivers)].slice(0, 5),
+    commonRisks: [...new Set(allRisks)].slice(0, 5),
+    highestEngagementSignal: highestEngagement.row ? {
+      evidenceId: highestEngagement.row.evidenceId,
+      hook: highestEngagement.row.hook.slice(0, 100),
+      total: highestEngagement.total,
+    } : null,
+    diverseHooks: validRows.length >= 2 ? allHooks : [],
+  };
+  return { valid: true, rows, summary };
 }
 
 /** 从分析构建校验过的 content_knowledge_card_v1 知识卡（确定性）。 */
@@ -1130,6 +1321,9 @@ export async function computeStaleness(project, { hasher = fingerprintOf } = {})
   }
   const analysisById = new Map((project.analyses || []).map((item) => [item.id, item]));
   const analysisStaleIds = new Set(stale.analysis_stale_ids);
+  // P32-A: when an evidence has multiple versioned analyses, the Knowledge Card that references
+  // a specific analysis version must still match exactly; a new (higher-version) analysis does
+  // NOT automatically stale the card that was built from an older analysis.
   for (const card of project.knowledge_cards || []) {
     const bound = analysisById.get(card.analysis_id);
     const sourceStale = bound && analysisStaleIds.has(bound.id);

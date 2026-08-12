@@ -45,6 +45,7 @@ import {
   P19ProjectForm,
   P32EvidenceLibrary,
   P32ComparisonView,
+  P32HotTopicSearchPanel,
 } from '../components/integrated-workspace/P19WorkbenchPanels.jsx';
 import { getStagingRuntimeStatus } from '../services/staging-preview-service.js';
 import { useAuth } from '../contexts/auth-context.js';
@@ -58,7 +59,7 @@ import {
   P21_VIEW_MODES,
 } from '../services/p21-guided-workspace.js';
 import { P22ResearchAssistPanel } from '../components/integrated-workspace/P22ResearchAssistPanel.jsx';
-import { createP22ResearchAssistClient, findP22Evidence, toP19EvidenceInput } from '../services/p22-research-assist.js';
+import { createP22ResearchAssistClient, evidenceMatchesSearchIdentity, findP22Evidence, importSearchSelection, toP19EvidenceInput } from '../services/p22-research-assist.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
@@ -178,12 +179,12 @@ function buildOnlineCommand(previous, next) {
 export function ResearchWorkspacePage() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const onlineMode = isAuthenticated && isServerWriteEnabled();
-  const storeRef = useRef(null);
-  if (storeRef.current == null) storeRef.current = createP19Store();
-  const onlineStoreRef = useRef(null);
-  if (onlineStoreRef.current == null) onlineStoreRef.current = createP20OnlineStore();
-  const assistClientRef = useRef(null);
-  if (assistClientRef.current == null) assistClientRef.current = createP22ResearchAssistClient();
+  // 稳定客户端实例：useState 惰性初始化（渲染期间绝不读写 ref.current）。
+  // 三个实例只创建一次且跨渲染稳定；项目切换由 key 与 activeId effect 隔离，
+  // 瞬态搜索状态（hotSearchState）绝不会被跨项目复用。
+  const [store] = useState(() => createP19Store());
+  const [onlineStore] = useState(() => createP20OnlineStore());
+  const [assistClient] = useState(() => createP22ResearchAssistClient());
 
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(readActiveProjectId);
@@ -199,6 +200,9 @@ export function ResearchWorkspacePage() {
   const [viewMode, setViewMode] = useState(readP21ViewMode);
   const [selectedStep, setSelectedStep] = useState(null);
   const [comparedEvidenceIds, setComparedEvidenceIds] = useState([]);
+  // P32-B 热门主题搜索瞬态状态：{ batch, selectedIds }。切换项目、重新搜索或刷新后
+  // 立即失效，绝不把旧选择导入其他项目（见 activeId 清理 effect）。
+  const [hotSearchState, setHotSearchState] = useState(null);
   const importInputRef = useRef(null);
 
   const stagingStatus = useMemo(() => getStagingRuntimeStatus(), []);
@@ -223,7 +227,7 @@ export function ResearchWorkspacePage() {
   const reloadProjects = useCallback(async () => {
     if (onlineMode) {
       try {
-        const onlineProjects = await onlineStoreRef.current.listProjects();
+        const onlineProjects = await onlineStore.listProjects();
         setProjects(onlineProjects);
         setError(null);
         return onlineProjects;
@@ -232,7 +236,7 @@ export function ResearchWorkspacePage() {
         return [];
       }
     }
-    const result = storeRef.current.listProjects();
+    const result = store.listProjects();
     if (result.ok) {
       setProjects(result.projects);
       return result.projects;
@@ -244,12 +248,12 @@ export function ResearchWorkspacePage() {
     }
     setError({ code: result.code, message: result.message });
     return [];
-  }, [onlineMode]);
+  }, [onlineMode, onlineStore, store]);
 
   const reloadProject = useCallback(async (id) => {
     if (onlineMode) {
       try {
-        const onlineProject = await onlineStoreRef.current.getProject(id);
+        const onlineProject = await onlineStore.getProject(id);
         setProject(onlineProject);
         setError(null);
         return onlineProject;
@@ -259,7 +263,7 @@ export function ResearchWorkspacePage() {
         return null;
       }
     }
-    const result = storeRef.current.getProject(id);
+    const result = store.getProject(id);
     if (result.ok) {
       setProject(result.project);
       return result.project;
@@ -267,7 +271,7 @@ export function ResearchWorkspacePage() {
     setError({ code: result.code, message: result.message });
     setProject(null);
     return null;
-  }, [onlineMode]);
+  }, [onlineMode, onlineStore, store]);
 
   // 初次加载：项目列表 + 激活项目
   useEffect(() => {
@@ -319,6 +323,8 @@ export function ResearchWorkspacePage() {
     setPendingImport(null);
     setSelectedStep(null);
     setComparedEvidenceIds([]);
+    // P32-B：切换项目必须清空瞬态搜索结果与选择，防止旧选择导入其他项目。
+    setHotSearchState(null);
   }, [activeId]);
 
   const selectProject = useCallback(async (id) => {
@@ -346,13 +352,13 @@ export function ResearchWorkspacePage() {
         const spec = typeof options.onlineCommand === 'function'
           ? options.onlineCommand(next, project)
           : buildOnlineCommand(project, next);
-        const persisted = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+        const persisted = await onlineStore.execute(spec.command, spec.payload, spec.options);
         if (persisted) setProject(persisted);
         await reloadProjects();
         if (options.notice) setNotice(options.notice.replace(/本地/g, '在线'));
         return true;
       }
-      const saved = storeRef.current.putProject(next);
+      const saved = store.putProject(next);
       if (!saved.ok) {
         setError({ code: saved.code, message: saved.message });
         return false;
@@ -368,7 +374,7 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [onlineMode, project, reloadProject, reloadProjects]);
+  }, [onlineMode, onlineStore, project, reloadProject, reloadProjects, store]);
 
   // ---- 项目操作 ----
   const handleCreateProject = useCallback(async (form) => {
@@ -376,7 +382,7 @@ export function ResearchWorkspacePage() {
       setBusy(true);
       setError(null);
       try {
-        const created = await onlineStoreRef.current.execute('project.create', { project: form });
+        const created = await onlineStore.execute('project.create', { project: form });
         setCreating(false);
         setProject(created);
         setActiveId(created.id);
@@ -392,20 +398,20 @@ export function ResearchWorkspacePage() {
     }
     const ok = await run('创建项目', async () => {
       const next = await createProject(form);
-      const saved = storeRef.current.putProject(next);
+      const saved = store.putProject(next);
       if (!saved.ok) throw workbenchError(saved.code, saved.message);
       setCreating(false);
       return next;
     }, { notice: '项目已创建（本地草稿）。', allowArchived: true });
     if (ok) {
       reloadProjects();
-      const list = storeRef.current.listProjects();
+      const list = store.listProjects();
       if (list.ok && list.projects.length > 0) {
         const created = list.projects[list.projects.length - 1];
         selectProject(created.id);
       }
     }
-  }, [onlineMode, run, reloadProjects, selectProject]);
+  }, [onlineMode, onlineStore, reloadProjects, run, selectProject, store]);
 
   const handleSaveProfile = useCallback((patch) => {
     return run('保存项目档案', () => updateProjectProfile(project, patch), { notice: '项目档案已保存；下游 Brief/交接包已标记为过时。' });
@@ -434,7 +440,7 @@ export function ResearchWorkspacePage() {
         persistedEvidence = afterEvidence;
         if (onlineMode) {
           const spec = buildOnlineCommand(project, afterEvidence);
-          persistedEvidence = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+          persistedEvidence = await onlineStore.execute(spec.command, spec.payload, spec.options);
           evidence = findP22Evidence(persistedEvidence, item);
           setProject(persistedEvidence);
         }
@@ -448,7 +454,7 @@ export function ResearchWorkspacePage() {
         let afterAnalysis;
         if (evidence.media_assets && evidence.media_assets.length > 0) {
           // P29：带媒体来源必须走真实多模态 Qwen 分析（绝不静默回退到文本分析）。
-          const response = await assistClientRef.current.analyze([{
+          const response = await assistClient.analyze([{
             ...item,
             source_metadata: evidence.source_metadata,
             media_assets: evidence.media_assets,
@@ -456,13 +462,23 @@ export function ResearchWorkspacePage() {
           const modelResult = (response.analyses || []).find((row) => row.source_id === evidence.provenance.source_id);
           if (!modelResult) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '模型分析没有精确绑定来源身份，已停止。');
           // 严格规范边界：result 只接受 p29_multimodal_model_v1 的模型结果子集，
-          // 顶层保留来源/模型/执行身份；持久化的就是服务端返回的精确模型结果。
+          // 顶层保留来源/模型/执行身份；服务端逐媒体行携带的 v2 扩展字段
+          // （visual_selling_points/style_pattern）不属于 v1 子集，绝不带入 v1
+          // 持久化路径（v2 字段只出现在 P32-A 版本化重分析路径），逐媒体行
+          // 只保留 v1 声明的精确字段。
           afterAnalysis = await recordAssistedAnalysis(persistedEvidence, evidence.id, {
             source_id: modelResult.source_id,
             model: modelResult.model,
             result: {
               text_expression: modelResult.text_expression,
-              media_analysis: modelResult.media_analysis,
+              media_analysis: (modelResult.media_analysis || []).map((row) => ({
+                media_id: row.media_id,
+                visual_content: row.visual_content,
+                composition: row.composition,
+                people: row.people,
+                scene: row.scene,
+                emotion: row.emotion,
+              })),
               virality_drivers: modelResult.virality_drivers,
               reusable_methods: modelResult.reusable_methods,
               signals: modelResult.signals,
@@ -480,7 +496,7 @@ export function ResearchWorkspacePage() {
         persistedAnalysis = afterAnalysis;
         if (onlineMode) {
           const spec = buildOnlineCommand(persistedEvidence, afterAnalysis);
-          persistedAnalysis = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+          persistedAnalysis = await onlineStore.execute(spec.command, spec.payload, spec.options);
           analysis = persistedAnalysis.analyses.find((row) => row.evidence_id === evidence.id
             && row.evidence_fingerprint === evidence.fingerprint && row.evidence_version === evidence.version);
           setProject(persistedAnalysis);
@@ -496,11 +512,11 @@ export function ResearchWorkspacePage() {
         completed = afterCard;
         if (onlineMode) {
           const spec = buildOnlineCommand(persistedAnalysis, afterCard);
-          completed = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+          completed = await onlineStore.execute(spec.command, spec.payload, spec.options);
         }
       }
       if (!onlineMode) {
-        const saved = storeRef.current.putProject(completed);
+        const saved = store.putProject(completed);
         if (!saved.ok) throw workbenchError(saved.code, saved.message);
       }
 
@@ -509,10 +525,10 @@ export function ResearchWorkspacePage() {
         const afterBrief = await assembleBrief(completed);
         if (onlineMode) {
           const spec = buildOnlineCommand(completed, afterBrief);
-          completed = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+          completed = await onlineStore.execute(spec.command, spec.payload, spec.options);
         } else {
           completed = afterBrief;
-          const saved = storeRef.current.putProject(completed);
+          const saved = store.putProject(completed);
           if (!saved.ok) throw workbenchError(saved.code, saved.message);
         }
       }
@@ -526,7 +542,7 @@ export function ResearchWorkspacePage() {
     } catch (cause) {
       if (onlineMode && project?.id) {
         try {
-          const recovered = await onlineStoreRef.current.getProject(project.id);
+          const recovered = await onlineStore.getProject(project.id);
           setProject(recovered);
         } catch {
           // Keep the original bounded pipeline error; a later explicit reload remains available.
@@ -538,7 +554,7 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [onlineMode, project, reloadProjects]);
+  }, [assistClient, onlineMode, onlineStore, project, reloadProjects, store]);
 
   const handleUpdateEvidence = useCallback((evidenceId, patch) => {
     return run('编辑证据', () => updateEvidence(project, evidenceId, patch), { notice: '证据已更新；下游分析/知识卡/Brief 已标记为过时。' });
@@ -590,7 +606,7 @@ export function ResearchWorkspacePage() {
         },
         collection_proof: evidence.provenance?.collection_proof || '',
       };
-      const response = await assistClientRef.current.analyze([item]);
+      const response = await assistClient.analyze([item]);
       const modelResult = (response.analyses || []).find((row) => row.source_id === evidence.provenance?.source_id);
       if (!modelResult) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '模型分析没有精确绑定来源身份，已停止。');
       const afterAnalysis = await recordVersionedReanalysis(project, evidenceId, {
@@ -616,10 +632,10 @@ export function ResearchWorkspacePage() {
       setProject(afterAnalysis);
       if (onlineMode) {
         const spec = buildOnlineCommand(project, afterAnalysis);
-        const persisted = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+        const persisted = await onlineStore.execute(spec.command, spec.payload, spec.options);
         if (persisted) setProject(persisted);
       } else {
-        const saved = storeRef.current.putProject(afterAnalysis);
+        const saved = store.putProject(afterAnalysis);
         if (!saved.ok) throw workbenchError(saved.code, saved.message);
       }
       await reloadProjects();
@@ -628,7 +644,7 @@ export function ResearchWorkspacePage() {
       return true;
     } catch (cause) {
       if (onlineMode && project?.id) {
-        try { const recovered = await onlineStoreRef.current.getProject(project.id); setProject(recovered); } catch { /* keep pipeline error */ }
+        try { const recovered = await onlineStore.getProject(project.id); setProject(recovered); } catch { /* keep pipeline error */ }
       }
       const message = cause && cause.bounded ? cause.message : String((cause && cause.message) || cause).slice(0, 300);
       setError({ code: (cause && cause.code) || 'REANALYSIS_FAILED', message });
@@ -636,7 +652,123 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [onlineMode, project, reloadProjects]);
+  }, [assistClient, onlineMode, onlineStore, project, reloadProjects, store]);
+
+  /**
+   * P32-B 批量导入所选搜索结果到当前项目：先在前端工作区层面原子重验证
+   * （项目 ID、搜索批次 ID 重算、结果身份、正文哈希、collection proof、媒体与来源快照），
+   * 任一条无效时当前项目完全不变；全部有效才执行写入。不自动批准 Brief、
+   * 不自动路由、不生成、不发布。
+   *
+   * 在线模式不具备远端跨命令事务原子性，准确表述为「导入前整批验证 + 失败后
+   * 权威重载 + 幂等续传」：逐条确定性幂等 evidence.create（服务端按证据身份幂等）。
+   * 任何一步失败立即重载权威项目，并按权威 Evidence 与原始选择的
+   * URL/external_id/content hash 身份重新对账（响应丢失但写入已成功的情况绝不
+   * 误报为待重试），返回结构化 P32_ONLINE_BATCH_PARTIAL（已确认导入数量 +
+   * 可安全重试的剩余身份），绝不把部分结果展示为全成功；同一选择重试只写入
+   * 尚未导入的身份（skipAlreadyImported），不产生重复 Evidence，最终完整导入。
+   * 离线分支保持 addEvidenceBatch 真正单次原子保存。
+   */
+  const handleImportHotSearch = useCallback(async (selectedIds) => {
+    if (!project || project.status === 'archived') {
+      setError({ code: 'PROJECT_ARCHIVED', message: '项目已归档，不能导入搜索结果。' });
+      return false;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await importSearchSelection({
+        project,
+        batch: hotSearchState?.batch,
+        selectedIds,
+        nowMs: Date.now(),
+        // 在线逐条命令不具备数据库事务原子性：重试必须幂等（同一选择只写入
+        // 尚未导入的身份，绝不产生重复记录）。离线分支保持真正单次原子保存。
+        skipAlreadyImported: onlineMode,
+      });
+      const newRecords = (result.project.evidence || []).filter((record) => !(project.evidence || []).some((existing) => existing.id === record.id));
+      let persisted = result.project;
+      if (onlineMode) {
+        // 全部已在前端预验证；逐条写入，任一步失败立即重载权威状态并结构化报错。
+        persisted = project;
+        try {
+          for (const record of newRecords) {
+            persisted = await onlineStore.execute('evidence.create', { project_id: project.id, evidence: record });
+          }
+        } catch {
+          // 以重载后的权威 Evidence 按身份重新对账：已确认成功数量绝不依赖本地
+          // 响应观测（响应丢失但写入已成功的情况绝不能误报为待重试）。
+          let authoritative = persisted;
+          try {
+            authoritative = await onlineStore.getProject(project.id);
+          } catch {
+            // 重载失败时以最后一次成功命令返回的项目为准。
+          }
+          setProject(authoritative);
+          const batchItemById = new Map(result.items.map((item) => [item.id, item]));
+          const authoritativeEvidence = Array.isArray(authoritative?.evidence) ? authoritative.evidence : [];
+          const confirmedRecords = newRecords.filter((record) => {
+            const source = batchItemById.get(record?.provenance?.source_id);
+            return Boolean(source) && authoritativeEvidence.some((row) => evidenceMatchesSearchIdentity(row, source));
+          });
+          const pendingRecords = newRecords.filter((record) => !confirmedRecords.includes(record));
+          const pendingLabels = pendingRecords.map((record) => String(record.label || record.id).slice(0, 40));
+          const partialError = workbenchError(
+            'P32_ONLINE_BATCH_PARTIAL',
+            `在线导入未全部完成（已确认 ${confirmedRecords.length} 条成功）：剩余 ${pendingRecords.length} 条尚未导入${pendingLabels.length ? `（待重试：${pendingLabels.join('、')}）` : ''}，已重载服务端权威状态；可直接重试同一选择，不会产生重复记录。`,
+          );
+          partialError.details = {
+            imported: confirmedRecords.length,
+            pending: pendingRecords.length,
+            pending_ids: pendingRecords.map((record) => record.id),
+          };
+          throw partialError;
+        }
+        setProject(persisted);
+      } else {
+        const saved = store.putProject(result.project);
+        if (!saved.ok) throw workbenchError(saved.code, saved.message);
+      }
+      await reloadProjects();
+      // 保留结果批次（用于「已导入」标记），只清空选择。
+      setHotSearchState((previous) => (previous ? { ...previous, selectedIds: [] } : previous));
+      if (result.imported > 0) {
+        setNotice(`已导入 ${result.imported} 条搜索结果到当前项目（Evidence 状态为待分析，可逐条 Qwen 重新分析或多帖比较）。`);
+      } else if (result.alreadyImported > 0) {
+        setNotice(`所选 ${result.alreadyImported} 条结果均已导入当前项目，无需重复导入。`);
+      }
+      // 导入后滚动/聚焦到 Evidence 列表。
+      globalThis.setTimeout(() => {
+        const library = globalThis.document?.querySelector('.p32-library');
+        if (library) {
+          library.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          library.setAttribute('tabindex', '-1');
+          library.focus({ preventScroll: true });
+        }
+      }, 120);
+      return { ok: true, imported: result.imported, alreadyImported: result.alreadyImported };
+    } catch (cause) {
+      if (onlineMode && project?.id) {
+        try {
+          const recovered = await onlineStore.getProject(project.id);
+          setProject(recovered);
+        } catch {
+          // Keep the original bounded import error; a later explicit reload remains available.
+        }
+      }
+      const message = cause && cause.bounded ? cause.message : String((cause && cause.message) || cause).slice(0, 300);
+      setError({
+        code: (cause && cause.code) || 'P32_IMPORT_FAILED',
+        message,
+        ...(cause && cause.details && typeof cause.details === 'object' ? { details: cause.details } : {}),
+      });
+      // 失败也向面板抛出（面板本地显示精确错误；页面顶栏已重载权威状态）。
+      throw cause;
+    } finally {
+      setBusy(false);
+    }
+  }, [hotSearchState, onlineMode, onlineStore, project, reloadProjects, store]);
 
   const handleAssembleBrief = useCallback(() => {
     return run('组装 Brief', () => assembleBrief(project), { notice: 'Brief 已组装（版本递增，审核重置为待审核）。' });
@@ -658,7 +790,7 @@ export function ResearchWorkspacePage() {
     setBusy(true);
     setError(null);
     try {
-      const result = await storeRef.current.exportProjectPackage(project.id);
+      const result = await store.exportProjectPackage(project.id);
       if (!result.ok) {
         setError({ code: result.code, message: result.message });
         return;
@@ -676,7 +808,7 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [project]);
+  }, [project, store]);
 
   const handleImportFile = useCallback(async (file) => {
     if (!file) return;
@@ -689,13 +821,13 @@ export function ResearchWorkspacePage() {
         return;
       }
       const text = await file.text();
-      const inspected = await storeRef.current.inspectProjectPackage(text);
+      const inspected = await store.inspectProjectPackage(text);
       if (!inspected.ok) {
         setError({ code: inspected.code, message: inspected.message });
         return;
       }
       if (onlineMode) {
-        const onlineProjects = await onlineStoreRef.current.listProjects();
+        const onlineProjects = await onlineStore.listProjects();
         if (onlineProjects.some((item) => item.id === inspected.project_id)) {
           setError({
             code: 'IMPORT_PROJECT_COLLISION',
@@ -712,7 +844,7 @@ export function ResearchWorkspacePage() {
         setNotice('检测到同 ID 项目：尚未写入。请核对版本与指纹后明确确认替换。');
         return;
       }
-      const result = await storeRef.current.importProjectPackage(text);
+      const result = await store.importProjectPackage(text);
       if (!result.ok) {
         setError({ code: result.code, message: result.message });
         return;
@@ -726,7 +858,7 @@ export function ResearchWorkspacePage() {
       if (importInputRef.current) importInputRef.current.value = '';
       setBusy(false);
     }
-  }, [onlineMode, reloadProjects, selectProject]);
+  }, [onlineMode, onlineStore, reloadProjects, selectProject, store]);
 
   const handleConfirmImportReplacement = useCallback(async () => {
     if (!pendingImport) return;
@@ -734,7 +866,7 @@ export function ResearchWorkspacePage() {
     setError(null);
     try {
       if (pendingImport.online) {
-        const imported = await onlineStoreRef.current.importPackage(pendingImport.pkg);
+        const imported = await onlineStore.importPackage(pendingImport.pkg);
         setPendingImport(null);
         setProject(imported);
         setActiveId(imported.id);
@@ -743,7 +875,7 @@ export function ResearchWorkspacePage() {
         setNotice('备份已按完整身份原子导入在线工作区；本机备份未删除。');
         return;
       }
-      const result = await storeRef.current.importProjectPackage(pendingImport.text, {
+      const result = await store.importProjectPackage(pendingImport.text, {
         replacement_confirmation: pendingImport.replacement_confirmation,
       });
       if (!result.ok) {
@@ -761,14 +893,14 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [pendingImport, reloadProjects, selectProject]);
+  }, [onlineStore, pendingImport, reloadProjects, selectProject, store]);
 
   const handleArchiveProject = useCallback(async (id) => {
     if (onlineMode) {
       setBusy(true);
       setError(null);
       try {
-        const persisted = await onlineStoreRef.current.execute('project.archive', { project_id: id });
+        const persisted = await onlineStore.execute('project.archive', { project_id: id });
         setProject(persisted);
         await reloadProjects();
         setNotice('项目已在线归档并保持只读。');
@@ -780,10 +912,10 @@ export function ResearchWorkspacePage() {
       return;
     }
     setBusy(true);
-    const result = storeRef.current.getProject(id);
+    const result = store.getProject(id);
     if (result.ok && result.project.status !== 'archived') {
       const next = await archiveProject(result.project);
-      const saved = storeRef.current.putProject(next);
+      const saved = store.putProject(next);
       if (!saved.ok) setError({ code: saved.code, message: saved.message });
       else {
         setNotice('项目已归档（本地）。');
@@ -794,7 +926,7 @@ export function ResearchWorkspacePage() {
     }
     reloadProjects();
     setBusy(false);
-  }, [onlineMode, reloadProjects, reloadProject]);
+  }, [onlineMode, onlineStore, reloadProject, reloadProjects, store]);
 
   const handleDeleteProject = useCallback((id) => {
     if (onlineMode) {
@@ -802,7 +934,7 @@ export function ResearchWorkspacePage() {
       return;
     }
     setBusy(true);
-    const result = storeRef.current.deleteProject(id);
+    const result = store.deleteProject(id);
     if (!result.ok) setError({ code: result.code, message: result.message });
     else {
       setNotice('项目已从本地删除（破坏性操作完成）。');
@@ -816,7 +948,7 @@ export function ResearchWorkspacePage() {
       }
     }
     setBusy(false);
-  }, [activeId, onlineMode, reloadProjects, selectProject]);
+  }, [activeId, onlineMode, reloadProjects, selectProject, store]);
 
   const activeRow = useMemo(() => {
     if (!project || !lineage) return null;
@@ -1041,6 +1173,18 @@ export function ResearchWorkspacePage() {
             </section>
             <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
               {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}
+              {onlineMode && (
+                <P32HotTopicSearchPanel
+                  key={project.id}
+                  project={project}
+                  busy={busy}
+                  client={assistClient}
+                  searchState={hotSearchState}
+                  onSearchStateChange={setHotSearchState}
+                  onImport={handleImportHotSearch}
+                  importError={error}
+                />
+              )}
               <P32EvidenceLibrary
                 project={project}
                 workflow={workflow}

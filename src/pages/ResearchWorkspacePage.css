@@ -1195,3 +1195,245 @@
   display: grid;
   gap: 2px;
 }
+
+/* ---- P32-B 热门主题搜索（与单帖 URL 读取区分）---- */
+
+.p32-search {
+  margin-bottom: 14px;
+  padding: 16px;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(8, 47, 73, 0.4), rgba(15, 23, 42, 0.9));
+}
+
+.p32-search-head,
+.p32-search-toolbar,
+.p32-search-query-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.p32-search-head h4 {
+  margin: 3px 0 0;
+  font-size: 17px;
+  color: var(--text-strong, #f8fafc);
+}
+
+.p32-search-mode-note {
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.p32-search-query-row input {
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 9px;
+  background: #07111f;
+  color: #e5e7eb;
+  padding: 10px 12px;
+}
+
+.p32-search-count,
+.p32-search-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.p32-search-count select,
+.p32-search-sort select {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: #07111f;
+  color: #e5e7eb;
+  padding: 7px 8px;
+}
+
+.p32-search-batch-line {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #94a3b8;
+  overflow-wrap: anywhere;
+}
+
+.p32-search-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.p32-search-selection {
+  color: #67e8f9;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.p32-search-sort-note {
+  margin: 0;
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.6;
+}
+
+.p32-search-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.p32-search-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 11px;
+  background: rgba(2, 6, 23, 0.54);
+}
+
+.p32-search-card.selected {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
+}
+
+.p32-search-card.imported {
+  opacity: 0.72;
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.p32-search-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.p32-search-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.p32-search-check-label {
+  font-weight: 600;
+}
+
+.p32-search-card input[type="checkbox"] {
+  accent-color: #38bdf8;
+  width: 16px;
+  height: 16px;
+}
+
+.p32-search-card input[type="checkbox"]:disabled {
+  accent-color: #4ade80;
+  opacity: 0.7;
+}
+
+.p32-search-author {
+  font-weight: 800;
+  color: #e5e7eb;
+  font-size: 14px;
+}
+
+.p32-search-meta {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.p32-search-imported {
+  margin-left: auto;
+  color: #86efac;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(134, 239, 172, 0.14);
+}
+
+.p32-search-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.p32-search-label a {
+  color: #67e8f9;
+  font-size: 12px;
+}
+
+.p32-search-text {
+  margin: 0;
+  color: #e5e7eb;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.p32-search-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.p32-search-media img,
+.p32-search-media video {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: #020617;
+}
+
+.p32-search-media-more {
+  align-self: center;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.p32-search-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 6px;
+}
+
+.p32-search-metric {
+  display: grid;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.p32-search-metric b {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.p32-search-metric i {
+  color: #e5e7eb;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.p32-search-imported-note {
+  margin: 0;
+  color: #86efac;
+  font-size: 12px;
+}

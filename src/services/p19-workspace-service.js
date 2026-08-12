@@ -258,6 +258,33 @@ async function refreshFingerprint(project, hasher) {
 /** 附加证据记录（元数据仅限本地；绝不接收原始字节）。 */
 export async function addEvidence(project, input, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
   assertNotArchived(project);
+  const record = await buildEvidenceRecord(project, input, { now, hasher });
+  const existing = (project.evidence || []).find((item) => item.id === record.id);
+  if (existing) {
+    const p22Source = record.provenance?.manual === false;
+    if (!p22Source
+      || existing.source_url !== record.source_url
+      || existing.provenance?.content_sha256 !== record.provenance?.content_sha256
+      || existing.provenance?.external_id !== record.provenance?.external_id) {
+      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '相同证据身份绑定了不同来源内容，已失败关闭。');
+    }
+    // 同一正文身份不得静默绑定不同来源快照/媒体（服务端证明同样绑定它们）。
+    if (p29EvidenceBindingFingerprint(existing) !== p29EvidenceBindingFingerprint(record)) {
+      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '同一证据身份绑定了不同的来源快照或媒体内容，已失败关闭。');
+    }
+    return clonePlain(project);
+  }
+  const next = clonePlain(project);
+  next.evidence = [...next.evidence, record];
+  return bumpProject(next, { now, hasher });
+}
+
+/**
+ * 构建一条证据记录（不落库）：provenance 默认值、正文有界、P29 来源快照/媒体
+ * 资产校验、P22 正文哈希复算、确定性 id 与契约校验。addEvidence 与
+ * addEvidenceBatch 共用同一构建器，保证单条与批量行为完全一致。
+ */
+async function buildEvidenceRecord(project, input, { now, hasher }) {
   const timestamp = now();
   const provenance = input.provenance && typeof input.provenance === 'object' && !Array.isArray(input.provenance)
     ? clonePlain(input.provenance)
@@ -314,22 +341,42 @@ export async function addEvidence(project, input, { now = () => new Date().toISO
   const verdict = validateEvidenceRecord(record);
   if (!verdict.valid) throw workbenchError('EVIDENCE_INVALID', verdict.issues[0] || '证据记录未通过契约校验。');
   record.fingerprint = await hasher(record);
-  const existing = (project.evidence || []).find((item) => item.id === id);
-  if (existing) {
-    if (!p22Source
-      || existing.source_url !== record.source_url
-      || existing.provenance?.content_sha256 !== provenance.content_sha256
-      || existing.provenance?.external_id !== provenance.external_id) {
-      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '相同证据身份绑定了不同来源内容，已失败关闭。');
+  return record;
+}
+
+/**
+ * P32-B 批量导入证据：前端工作区层面的原子操作。全部输入先按单条相同规则
+ * 构建并校验，任何一条无效（含批次内重复身份、与项目内已有证据身份冲突）
+ * 即整批失败关闭，当前项目完全不变；全部有效才一次性保存并递增一次版本。
+ */
+export async function addEvidenceBatch(project, inputs, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
+  assertNotArchived(project);
+  const list = Array.isArray(inputs) ? inputs : [];
+  if (list.length < 1 || list.length > 5) {
+    throw workbenchError('BATCH_SIZE_OUT_OF_RANGE', '批量导入必须为 1–5 条。');
+  }
+  const records = [];
+  const seenIds = new Set();
+  const seenTriples = new Set();
+  for (const input of list) {
+    if (!input || typeof input !== 'object') throw workbenchError('BATCH_INPUT_INVALID', '批量导入包含无效条目，已整批失败关闭。');
+    const record = await buildEvidenceRecord(project, input, { now, hasher });
+    if (seenIds.has(record.id)) {
+      throw workbenchError('BATCH_DUPLICATE_IDENTITY', '批量导入中存在相同证据身份，已整批失败关闭。');
     }
-    // 同一正文身份不得静默绑定不同来源快照/媒体（服务端证明同样绑定它们）。
-    if (p29EvidenceBindingFingerprint(existing) !== p29EvidenceBindingFingerprint(record)) {
-      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '同一证据身份绑定了不同的来源快照或媒体内容，已失败关闭。');
+    seenIds.add(record.id);
+    const triple = `${record.source_url}|${record.provenance?.external_id || ''}|${record.provenance?.content_sha256 || ''}`;
+    if (seenTriples.has(triple)) {
+      throw workbenchError('BATCH_DUPLICATE_IDENTITY', '批量导入中存在重复来源（同一 URL/外部 ID/正文哈希），已整批失败关闭。');
     }
-    return clonePlain(project);
+    seenTriples.add(triple);
+    if ((project.evidence || []).some((item) => item.id === record.id)) {
+      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '批量导入与项目内已有证据身份冲突，已整批失败关闭。');
+    }
+    records.push(record);
   }
   const next = clonePlain(project);
-  next.evidence = [...next.evidence, record];
+  next.evidence = [...next.evidence, ...records];
   return bumpProject(next, { now, hasher });
 }
 

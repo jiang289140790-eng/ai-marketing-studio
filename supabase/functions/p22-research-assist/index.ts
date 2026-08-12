@@ -1,8 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 import {
   P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, P22_SCHEMA_VERSION, P22Error, buildMultimodalQwenContent, buildQwenPrompt,
-  assertUniqueRawCollectedPost, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, parseQwenMultimodalAnalyses, publicError,
-  runApifyCollectionSequence, verifyAnalyzeSources,
+  assertUniqueRawCollectedPost, assertUniqueSearchResults, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, parseQwenMultimodalAnalyses, publicError,
+  runApifyCollectionSequence, searchBatchId, verifyAnalyzeSources,
 } from './assist-core.mjs';
 
 const ORIGINS = new Set(['https://jiang289140790-eng.github.io','http://localhost:3000','http://127.0.0.1:3000','http://127.0.0.1:5173','http://127.0.0.1:5174']);
@@ -57,22 +57,38 @@ async function collect(db, userId: string, input, proofSecret: string) {
   const costRecord=await recordProviderCost(db,userId,'apify',P22_LIMITS.apify_reservation_cny);
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),P22_LIMITS.apify_sequence_ms);
   try {
+    // P32-B：搜索是服务端构造的批量契约——精确关键词、X 平台（actorId 固定）、
+    // 数量（1–20）与排序意图（latest）都由服务端绑定，绝不接受客户端任意 Actor 输入。
+    // P22_LIMITS 在 JS 模块中推断为字面量类型（search_max: 20 / collect: 5），
+    // 此处显式声明 number 保持类型边界：collect 仍上限 5、search 仍上限 20。
+    const isSearch=input.action==='search';
+    const hardMax: number=isSearch?P22_LIMITS.search_max:P22_LIMITS.collect;
+    const count: number=isSearch?input.count:(input.action==='collect'?input.count:1);
     const sequence=await runApifyCollectionSequence({
       token, actorId:ACTOR,
-      topic:input.action==='collect'?input.topic:undefined,
+      topic:isSearch?input.keyword:(input.action==='collect'?input.topic:undefined),
       sourceUrl:input.action==='collect_url'?input.url:undefined,
-      count:input.action==='collect'?input.count:1,
-      maxItems:P22_LIMITS.collect,
+      count,
+      maxItems:hardMax,
+      hardMax,
       maxTotalChargeUsd:P22_LIMITS.apify_reservation_cny/P22_CNY_PER_USD,
       signal:controller.signal,
     });
     if (input.action==='collect_url') assertUniqueRawCollectedPost(sequence.items,{canonical_url:input.url,external_id:input.external_id});
-    const normalizedAll=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:new Date().toISOString(),usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:costRecord.reservation_id},sha256,{fetchImpl:globalThis.fetch});
+    const collectedAt=new Date().toISOString();
+    const normalizedAll=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:collectedAt,usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:costRecord.reservation_id},sha256,{fetchImpl:globalThis.fetch,maxItems:hardMax});
     const normalized=input.action==='collect_url'
       ? bindExactCollectedPost(normalizedAll,{canonical_url:input.url,external_id:input.external_id})
       : normalizedAll;
+    // 搜索结果唯一性：URL/外部 ID/正文哈希重复或错绑即整批失败关闭。
+    if (isSearch) assertUniqueSearchResults(normalized);
     const items=await Promise.all(normalized.map(async (item)=>({...item,collection_proof:await issueCollectionProof(proofSecret,userId,item)})));
-    return {items,cost:{recorded_cny:P22_LIMITS.apify_reservation_cny,actual_cny:Number((sequence.usageTotalUsd*P22_CNY_PER_USD).toFixed(4)),tracking:costRecord}};
+    const cost={recorded_cny:P22_LIMITS.apify_reservation_cny,actual_cny:Number((sequence.usageTotalUsd*P22_CNY_PER_USD).toFixed(4)),tracking:costRecord};
+    if (isSearch) {
+      const batchId=await searchBatchId({keyword:input.keyword,count:input.count,sort:input.sort,runId:sequence.runId,collectedAt,items:normalized},sha256);
+      return {items,cost,search_batch_id:batchId,keyword:input.keyword,count:input.count,sort_intent:input.sort,collected_at:collectedAt};
+    }
+    return {items,cost};
   } catch (error) { if (error?.name==='AbortError') throw new P22Error('APIFY_TIMEOUT','采集超时。',504); throw error; }
   finally { clearTimeout(timer); }
 }
@@ -121,7 +137,7 @@ Deno.serve(async (request)=>{
     const capabilities={apify_configured:configured('APIFY_TOKEN'),qwen_configured:configured('DASHSCOPE_API_KEY')};
     if(input.action==='status') return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,role,capabilities,limits:P22_LIMITS,cost_tracking:await costStatus(db),execution_flags:P22_EXECUTION_FLAGS});
     if(!['operator','admin'].includes(role)) throw new P22Error('OPERATOR_REQUIRED','智能研究仅向 operator 开放。',403);
-    const result=(input.action==='collect'||input.action==='collect_url')
+    const result=(input.action==='collect'||input.action==='collect_url'||input.action==='search')
       ? await collect(db,userId,input,proofSecret)
       : await analyze(db,userId,input.items,proofSecret);
     return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,action:input.action,...result,execution_flags:P22_EXECUTION_FLAGS});

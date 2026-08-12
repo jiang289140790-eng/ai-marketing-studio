@@ -5,6 +5,11 @@ export const P22_COLLECTION_PROOF_VERSION = 'p22_collection_proof_v3';
 export const P22_COLLECTION_PROOF_V2_VERSION = 'p22_collection_proof_v2';
 export const P22_LIMITS = Object.freeze({
   collect: 5,
+  /** P32-B 热门主题搜索：结果条数默认 10、最大 20（与 collect 单次 5 条分离）。 */
+  search_default: 10,
+  search_max: 20,
+  /** P32-B 搜索关键词规范化后的长度上限。 */
+  search_keyword_max: 120,
   analyze: 2,
   persist_text: 5000,
   proof_ttl_ms: 15 * 60 * 1000,
@@ -57,6 +62,7 @@ const ACTION_FIELDS = Object.freeze({
   status: new Set(['action']),
   collect: new Set(['action', 'topic', 'count']),
   collect_url: new Set(['action', 'url']),
+  search: new Set(['action', 'keyword', 'count', 'sort']),
   analyze: new Set(['action', 'items']),
 });
 const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof', 'source_metadata', 'media_assets']);
@@ -165,6 +171,25 @@ export function parseP22Request(raw) {
     }
     return { action, url: identity.canonical_url, platform: identity.platform, external_id: identity.external_id, count: 1 };
   }
+  if (action === 'search') {
+    // P32-B：关键词规范化（trim + 折叠空白）并有界；URL 一律失败关闭——
+    // 搜索绝不把任意链接当关键词，单帖读取必须走 collect_url。
+    const keyword = text(input.keyword, 'keyword', P22_LIMITS.search_keyword_max).replace(/\s+/gu, ' ');
+    if (isUrlLikeKeyword(keyword)) {
+      throw new P22Error('KEYWORD_IS_URL', '热门主题搜索不接受链接作为关键词；读取单帖请使用「单帖 URL 读取」。', 400, { field: 'keyword' });
+    }
+    const count = Number(input.count ?? P22_LIMITS.search_default);
+    if (!Number.isInteger(count) || count < 1 || count > P22_LIMITS.search_max) {
+      throw new P22Error('COUNT_OUT_OF_RANGE', `搜索数量必须为 1–${P22_LIMITS.search_max}。`, 400, { field: 'count' });
+    }
+    // 排序意图服务端固定为 latest（可扩展但本里程碑只执行该意图）；
+    // Actor 输入由服务端构造，绝不接受客户端任意 Actor 输入。
+    const sort = input.sort === undefined ? 'latest' : String(input.sort).trim().toLowerCase();
+    if (!['latest'].includes(sort)) {
+      throw new P22Error('SORT_INTENT_UNSUPPORTED', '当前仅支持按最新发布采集搜索结果。', 400, { field: 'sort' });
+    }
+    return { action, keyword, count, sort };
+  }
   if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > P22_LIMITS.analyze) {
     throw new P22Error('ITEM_COUNT_OUT_OF_RANGE', '分析项目必须为 1–2 条。', 400, { field: 'items' });
   }
@@ -217,6 +242,17 @@ export function normalizeXUrl(value) {
   url.search = '';
   url.hash = '';
   return url.toString().replace(/\/$/, '');
+}
+
+/**
+ * P32-B：判断关键词是否像链接（协议前缀、已知社交平台主机或「域名/路径」形态）。
+ * 搜索动作绝不把任意 URL 当关键词；命中即失败关闭并引导使用单帖读取。
+ */
+export function isUrlLikeKeyword(value) {
+  const text = String(value || '').trim();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return true;
+  return /^(?:www\.)?(?:x\.com|twitter\.com|instagram\.com|tiktok\.com|youtube\.com|youtu\.be|reddit\.com|linkedin\.com)\//i.test(text)
+    || /^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\//i.test(text);
 }
 
 /**
@@ -946,12 +982,20 @@ export async function verifyAnalyzeSources(secret, userId, items, options = {}) 
  * 规范化 Actor 行：正文/身份 + 有界来源快照（作者/时间/互动）+ 有序媒体资产。
  * 内容 SHA-256 只从严格 CDN 白名单抓取（fetchMediaContentHash 失败即整体失败关闭，
  * 绝不把抓取失败静默降级为 url 哈希）。`options.fetchMediaImpl` 可注入供测试离线运行。
+ * @param {Array<object>} rawItems Actor 原始行数组。
+ * @param {object} context 采集上下文（provider/run_id/collected_at/usage/budget）。
+ * @param {function(string): Promise<string>} digest 内容 SHA-256 摘要函数。
+ * @param {object} [options] 可选配置。
+ * @param {number} [options.maxItems] 最大保留条数（P32-B 搜索 20 / 普通采集缺省 5）。
+ * @param {function} [options.fetchImpl] 媒体内容哈希抓取的 fetch 实现（可注入供测试离线运行）。
  */
 export async function normalizeCollectedItems(rawItems, context, digest, options = {}) {
   if (!Array.isArray(rawItems)) throw new P22Error('PROVIDER_RESPONSE_INVALID', '采集响应不是数组。', 502);
   const output = [];
   const seen = new Set();
-  for (const raw of rawItems.slice(0, P22_LIMITS.collect)) {
+  // P32-B：搜索允许最多 P22_LIMITS.search_max 条；单帖/普通采集保持 P22_LIMITS.collect。
+  const limit = Math.max(1, Math.min(options.maxItems ?? P22_LIMITS.collect, P22_LIMITS.search_max));
+  for (const raw of rawItems.slice(0, limit)) {
     if (!object(raw) || raw.demo === true || raw.noResults === true || raw.resultType === 'diagnostic') continue;
     const externalId = String(first(raw.external_content_id, raw.tweet_id, raw.tweetId, raw.rest_id, raw.id_str, raw.id, '')).trim();
     const candidateUrl = first(raw.url, raw.content_url, raw.webpage_url, raw.tweet_url, externalId ? `https://x.com/i/web/status/${encodeURIComponent(externalId)}` : '');
@@ -1017,6 +1061,44 @@ export function assertUniqueRawCollectedPost(rawItems, requested) {
     throw new P22Error('POST_NOT_FOUND', '采集结果无法绑定到请求的帖子。', 422, { field: 'source_url' });
   }
   return true;
+}
+
+/**
+ * P32-B：搜索结果唯一性断言（fail closed）。规范化已去重（静默跳过），但搜索是
+ * 批量结果契约：任何 source URL / external ID / 正文哈希出现重复，即视为提供方
+ * 响应错绑或重复，整批失败关闭，绝不静默丢弃或接受。
+ */
+export function assertUniqueSearchResults(items) {
+  if (!Array.isArray(items)) throw new P22Error('PROVIDER_RESPONSE_INVALID', '搜索响应不是数组。', 502);
+  const seenUrl = new Set();
+  const seenId = new Set();
+  const seenHash = new Set();
+  for (const item of items) {
+    const url = String(item?.source_url || '');
+    const id = item?.external_id == null ? '' : String(item.external_id);
+    const hash = String(item?.content_sha256 || '');
+    if (seenUrl.has(url) || (id && seenId.has(id)) || (hash && seenHash.has(hash))) {
+      throw new P22Error('SEARCH_RESULT_DUPLICATE', '搜索结果包含重复来源身份（URL/外部 ID/正文哈希），已失败关闭。', 422, { field: 'items' });
+    }
+    if (url) seenUrl.add(url);
+    if (id) seenId.add(id);
+    if (hash) seenHash.add(hash);
+  }
+  return true;
+}
+
+/**
+ * P32-B：搜索批次身份。确定性绑定精确关键词、数量、排序意图、采集运行、
+ * 采集时间与全部结果的（URL|外部 ID|正文哈希）有序身份集合 —— 任何字段的
+ * 缺失、篡改、乱序、错绑都会产生不同批次身份，导入端据此失败关闭。
+ */
+export async function searchBatchId({ keyword, count, sort, runId, collectedAt, items }, digest) {
+  const identities = (Array.isArray(items) ? items : [])
+    .map((item) => `${String(item?.source_url || '')}|${item?.external_id == null ? '' : String(item.external_id)}|${String(item?.content_sha256 || '')}`)
+    .join(';');
+  const value = `p32-search-batch\0${String(keyword || '')}\0${String(count ?? '')}\0${String(sort || '')}\0${String(runId || '')}\0${String(collectedAt || '')}\0${identities}`;
+  const digestValue = await digest(value);
+  return `p32-search-${String(digestValue).slice(0, 24)}`;
 }
 
 /** Bind a provider response to exactly one requested post identity. */
@@ -1341,6 +1423,24 @@ function verifyRunIdentity(payload, runId, datasetId, stage) {
  * 终态失败或始终不稳定则失败关闭。
  * 所有边界（maxItems、maxTotalChargeUsd、超时、轮询间隔、稳定次数）都受 P22_LIMITS 约束；
  * token 只用于 Authorization 头，绝不进入返回值、诊断或异常。
+ * @param {object} options 采集序列选项。
+ * @param {string} options.token Apify 令牌（只用于 Authorization 头）。
+ * @param {string} options.actorId Apify Actor 标识（xquik/x-tweet-scraper）。
+ * @param {string} [options.topic] 关键词搜索主题（与 sourceUrl 二选一）。
+ * @param {string} [options.sourceUrl] 单帖读取 URL（与 topic 二选一）。
+ * @param {number} [options.count] 请求的 Actor 输入条数。
+ * @param {number} [options.maxItems] 请求的 Actor 输入上限（P32-B 搜索 20 / 采集 5）。
+ * @param {number} [options.hardMax] 服务端硬上限（搜索 20 / 采集 5；两者分离，绝不放宽普通采集）。
+ * @param {number} [options.maxTotalChargeUsd] 单次最大费用（USD，受 P22_LIMITS 约束）。
+ * @param {function} [options.fetchImpl] fetch 实现（可注入供测试离线运行）。
+ * @param {function} [options.sleepImpl] 等待实现（可注入供测试离线运行）。
+ * @param {function} [options.nowImpl] 当前时间实现（可注入供测试离线运行）。
+ * @param {number} [options.waitTimeoutMs] 等待完成超时（受 P22_LIMITS 约束）。
+ * @param {number} [options.pollIntervalMs] 等待轮询间隔（受 P22_LIMITS 约束）。
+ * @param {number} [options.costStabilizePolls] 费用稳定读取次数（受 P22_LIMITS 约束）。
+ * @param {number} [options.costStabilizeIntervalMs] 费用稳定读取间隔（受 P22_LIMITS 约束）。
+ * @param {AbortSignal} [options.signal] 中止信号（超时门禁）。
+ * @returns {Promise<{runId: string, items: Array<object>, usageTotalUsd: number}>} 运行身份、原始结果行与稳定费用。
  */
 export async function runApifyCollectionSequence({
   token,
@@ -1349,6 +1449,8 @@ export async function runApifyCollectionSequence({
   sourceUrl,
   count,
   maxItems = P22_LIMITS.collect,
+  /** P32-B：搜索允许最多 P22_LIMITS.search_max 条；其余调用保持 P22_LIMITS.collect。 */
+  hardMax = P22_LIMITS.collect,
   maxTotalChargeUsd,
   fetchImpl = globalThis.fetch,
   sleepImpl = (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)),
@@ -1359,7 +1461,7 @@ export async function runApifyCollectionSequence({
   costStabilizeIntervalMs = P22_LIMITS.cost_stabilize_interval_ms,
   signal,
 }) {
-  const boundedMaxItems = Math.max(1, Math.min(P22_LIMITS.collect, Number(maxItems) || P22_LIMITS.collect));
+  const boundedMaxItems = Math.max(1, Math.min(Math.max(1, Number(hardMax) || P22_LIMITS.collect), Number(maxItems) || P22_LIMITS.collect));
   const boundedCount = Math.max(1, Math.min(boundedMaxItems, Number(count) || 1));
   const boundedTopic = String(topic || '').trim().slice(0, 240);
   const boundedSource = sourceUrl ? identifyPublicPostUrl(sourceUrl) : null;

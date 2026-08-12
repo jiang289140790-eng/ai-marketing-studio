@@ -13,6 +13,16 @@ import {
   getAllAnalysisVersionsForEvidence,
   getLatestAnalysisForEvidence,
 } from '../../services/p19-workspace-service.js';
+import {
+  P32_BATCH_IMPORT_MAX,
+  P32_SEARCH_COUNT_DEFAULT,
+  P32_SEARCH_SORT_KEYS,
+  P32_SEARCH_SORT_LABELS,
+  computeEngagementMetrics,
+  findConflictingEvidence,
+  looksLikePublicUrl,
+  rankSearchResults,
+} from '../../services/p22-research-assist.js';
 
 const STATE_TEXT = {
   INVALID_SOURCE: { label: '无效来源', tone: 'danger', icon: '⛔' },
@@ -1040,6 +1050,295 @@ export function P32ComparisonView({ project, selectedIds, onSelectionChange }) {
 
       {comparison && !comparison.valid && (
         <p className="p19-blocking-note">{comparison.reason}</p>
+      )}
+    </div>
+  );
+}
+
+// ---- P32-B 热门主题搜索：批量关键词搜索 → 指标排序 → 勾选 1–5 条导入当前项目 ----
+
+const P32_SEARCH_COUNT_OPTIONS = [5, 10, 15, 20];
+
+function formatSearchCount(value) {
+  return value === null || value === undefined ? '—' : String(value);
+}
+
+function formatSearchRate(value) {
+  return value === null || value === undefined ? '—' : `${(value * 100).toFixed(2)}%`;
+}
+
+function formatPublishedShortUtc(value) {
+  const text = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return '时间未知';
+  return `${text.slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+function SearchMediaPreview({ assets }) {
+  if (!Array.isArray(assets) || assets.length === 0) return null;
+  return (
+    <div className="p32-search-media" data-media-count={assets.length}>
+      {assets.slice(0, 3).map((asset) => {
+        const isVideo = asset.kind === 'video' || String(asset.mime_type || '').startsWith('video/');
+        return isVideo
+          ? <video key={asset.id} src={asset.media_url} controls preload="metadata" data-media-order={asset.order} aria-label={`媒体 ${asset.order + 1}`} />
+          : <img key={asset.id} src={asset.media_url} alt={`媒体 ${asset.order + 1}`} loading="lazy" data-media-order={asset.order} />;
+      })}
+      {assets.length > 3 && <span className="p32-search-media-more">+{assets.length - 3} 项媒体</span>}
+    </div>
+  );
+}
+
+/**
+ * P32-B 热门主题搜索面板（与「智能找资料」的单帖 URL 读取清楚区分）：
+ * - 输入关键词批量搜索 X 公共帖子（默认 10、最多 20 条，服务端构造 Actor 输入）；
+ * - 五种确定性排序（views/likes/retweets/total_engagement/engagement_rate），
+ *   缺失指标显示「—」绝不伪造为 0，排序口径明确说明不是 X 官方热门榜；
+ * - 勾选 1–5 条一次导入当前项目 Evidence；已导入来源明确标记并禁止重复导入；
+ * - 搜索批次状态由页面持有：切换项目、重新搜索或刷新后旧选择立即失效。
+ */
+export function P32HotTopicSearchPanel({
+  project,
+  busy,
+  client,
+  searchState,
+  onSearchStateChange,
+  onImport,
+  importError,
+}) {
+  const [keyword, setKeyword] = useState('');
+  const [count, setCount] = useState(P32_SEARCH_COUNT_DEFAULT);
+  const [sortKey, setSortKey] = useState('views');
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const batch = searchState?.batch || null;
+  const selectedIds = Array.isArray(searchState?.selectedIds) ? searchState.selectedIds : [];
+  const results = batch ? rankSearchResults(batch.items || [], sortKey) : [];
+  const selectedCount = selectedIds.length;
+  // 页面级 P32 导入错误镜像：项目版本变化会确定性重挂载本面板（清空本地
+  // error 状态），因此在线部分失败的结构化错误必须由页面持有并在此镜像，
+  // 保证「已确认 N 条成功 / 剩余 M 条」在重挂载后仍精确可见。
+  const mirroredImportError = importError && typeof importError === 'object'
+    && String(importError.code || '').startsWith('P32_')
+    ? importError
+    : null;
+
+  const runSearch = async () => {
+    const cleanKeyword = keyword.trim();
+    if (!cleanKeyword) {
+      setError('请输入搜索关键词。');
+      return;
+    }
+    if (looksLikePublicUrl(cleanKeyword)) {
+      setError('热门主题搜索不接受链接作为关键词；读取单帖请使用「智能找资料」面板的链接模式。');
+      return;
+    }
+    setWorking(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await client.search(cleanKeyword, count, 'latest');
+      const items = Array.isArray(response.items) ? response.items : [];
+      if (!response.search_batch_id || !items.length) {
+        throw new Error('搜索未返回可导入的结果（无来源证明）。');
+      }
+      onSearchStateChange({
+        batch: {
+          batch_id: response.search_batch_id,
+          project_id: project.id,
+          keyword: String(response.keyword || cleanKeyword),
+          count: Number(response.count) || count,
+          sort_intent: String(response.sort_intent || 'latest'),
+          collected_at: String(response.collected_at || ''),
+          cost: response.cost || null,
+          items,
+        },
+        selectedIds: [],
+      });
+      const costText = response.cost
+        ? `本次费用 ¥${response.cost.actual_cny ?? response.cost.recorded_cny ?? 0}（预留 ¥${response.cost.recorded_cny ?? 0}）`
+        : '费用记录不可用';
+      setMessage(`已找到 ${items.length} 条公开来源（最多 ${count} 条），尚未保存。${costText}。`);
+    } catch (cause) {
+      setError(String(cause?.message || cause));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const toggleSelect = (id, alreadyImported) => {
+    if (alreadyImported) return;
+    const next = selectedIds.includes(id)
+      ? selectedIds.filter((selected) => selected !== id)
+      : [...selectedIds, id];
+    if (next.length > P32_BATCH_IMPORT_MAX) return; // 最多 5 条
+    onSearchStateChange({ batch, selectedIds: next });
+  };
+
+  const importSelected = async () => {
+    setWorking(true);
+    setError('');
+    setMessage('');
+    try {
+      const outcome = await onImport(selectedIds);
+      // 以页面返回的精确导入数为准（幂等重试时选择数可能大于新导入数）。
+      if (outcome && outcome.ok) {
+        const skipped = outcome.alreadyImported > 0 ? `（另有 ${outcome.alreadyImported} 条已导入，已跳过）` : '';
+        setMessage(`已导入 ${outcome.imported} 条到当前项目${skipped}；结果保留「已导入」标记，可在证据库继续 Qwen 重新分析或多帖比较。`);
+      }
+    } catch (cause) {
+      setError(String(cause?.message || cause));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const capabilitiesReady = Boolean(client && project && project.status === 'active');
+
+  return (
+    <div className="p32-search" aria-label="热门主题搜索">
+      <div className="p32-search-head">
+        <div>
+          <span className="p22-kicker">P32-B · 热门主题搜索</span>
+          <h4>热门主题搜索（批量导入当前项目）</h4>
+        </div>
+        <span className="p32-search-mode-note">与「智能找资料」的单帖 URL 读取区分：本面板只按关键词批量搜索 X 公共帖子</span>
+      </div>
+      <p className="p19-panel-note">
+        输入关键词搜索 X 公共帖子（默认 10、最多 20 条，来源带服务端证明）；按浏览量/点赞/转发/总互动/互动率
+        确定性排序后，勾选 1–5 条导入当前项目 Evidence（导入前整批验证，在线失败后权威重载并幂等续传，绝不谎报全成功）。
+        不自动批准 Brief、不自动路由、不生成、不发布。
+      </p>
+      <div className="p32-search-query-row">
+        <input
+          value={keyword}
+          maxLength={120}
+          onChange={(event) => setKeyword(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter') runSearch(); }}
+          placeholder="输入研究关键词（例如：AI 营销 出海）"
+          aria-label="热门主题搜索关键词"
+        />
+        <label className="p32-search-count">
+          <span>条数</span>
+          <select value={count} onChange={(event) => setCount(Number(event.target.value))} aria-label="搜索结果条数">
+            {P32_SEARCH_COUNT_OPTIONS.map((option) => <option value={option} key={option}>{option}</option>)}
+          </select>
+        </label>
+        <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || !capabilitiesReady || !keyword.trim()} onClick={runSearch}>
+          {working ? '搜索中…' : '搜索公开帖子'}
+        </button>
+      </div>
+      {error && <p className="p19-error-text" role="alert">{error}</p>}
+      {!error && mirroredImportError && (
+        <p className="p19-error-text" role="alert">{mirroredImportError.code}：{mirroredImportError.message}</p>
+      )}
+      {message && <p className="p22-message" role="status">{message}</p>}
+      {batch && (
+        <div className="p32-search-batch-line">
+          批次 {batch.batch_id} · 关键词「{boundedText(batch.keyword, 40)}」 · 采集 {formatPublishedShortUtc(batch.collected_at)}
+          {batch.cost ? ` · 费用记录 ¥${batch.cost.actual_cny ?? batch.cost.recorded_cny ?? 0}（预留 ¥${batch.cost.recorded_cny ?? 0}）` : ''}
+        </div>
+      )}
+      {results.length > 0 && (
+        <div className="p32-search-results">
+          <div className="p32-search-toolbar">
+            <label className="p32-search-sort">
+              <span>排序（本地展示口径，不是 X 官方热门榜）</span>
+              <select value={sortKey} onChange={(event) => setSortKey(event.target.value)} aria-label="结果排序方式">
+                {P32_SEARCH_SORT_KEYS.map((key) => <option value={key} key={key}>{P32_SEARCH_SORT_LABELS[key]}</option>)}
+              </select>
+            </label>
+            <span className="p32-search-selection">已选 {selectedCount} / {P32_BATCH_IMPORT_MAX}</span>
+            <button
+              className="p19-btn p19-btn-primary"
+              type="button"
+              disabled={busy || working || selectedCount < 1}
+              title={selectedCount < 1 ? '请先勾选 1–5 条结果' : `导入所选 ${selectedCount} 条到当前项目`}
+              onClick={importSelected}
+            >
+              导入所选到当前项目（{selectedCount}）
+            </button>
+          </div>
+          <p className="p32-search-sort-note">
+            排序口径：按所选指标降序；缺失指标排在可用指标之后（显示「—」，绝不伪造为 0）；
+            主指标相同时按发布时间（较新在前）与完整来源身份稳定排序。总互动 = 点赞 + 转发 + 回复 + 引用 + 收藏；
+            互动率 = 总互动 ÷ 浏览量（浏览量非正或总互动不可用时显示「—」）。
+          </p>
+          <ul className="p32-search-list">
+            {results.map((item) => {
+              const metrics = computeEngagementMetrics(item);
+              const conflicting = findConflictingEvidence(project, item);
+              const alreadyImported = Boolean(conflicting);
+              const metadata = item.source_metadata || {};
+              const author = metadata.author || {};
+              const media = Array.isArray(item.media_assets) ? item.media_assets : [];
+              const isSelected = selectedIds.includes(item.id);
+              const engagementRaw = metadata.engagement || {};
+              const rawCount = (key) => (Number.isInteger(engagementRaw[key]) ? engagementRaw[key] : null);
+              const metricCells = [
+                ['views', '浏览', metrics.views],
+                ['likes', '点赞', metrics.likes],
+                ['retweets', '转发', metrics.retweets],
+                ['replies', '回复', rawCount('replies')],
+                ['bookmarks', '收藏', rawCount('bookmarks')],
+                ['total', '总互动', metrics.total_engagement],
+                ['rate', '互动率', metrics.engagement_rate],
+              ];
+              return (
+                <li className={`p32-search-card ${alreadyImported ? 'imported' : ''} ${isSelected ? 'selected' : ''}`} key={item.id}>
+                  <div className="p32-search-card-head">
+                    <label className="p32-search-select">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={alreadyImported || (selectedCount >= P32_BATCH_IMPORT_MAX && !isSelected)}
+                        onChange={() => toggleSelect(item.id, alreadyImported)}
+                        aria-label={`选择 ${boundedText(item.label, 40)} 导入当前项目`}
+                      />
+                      <span className="p32-search-check-label">{alreadyImported ? '已导入' : '选择'}</span>
+                    </label>
+                    <span className="p32-search-author">
+                      {author.name || author.handle || '未知作者'}{author.handle ? ` @${boundedText(author.handle, 20)}` : ''}
+                    </span>
+                    <span className="p32-search-meta">X · {formatPublishedShortUtc(metadata.published_at)}</span>
+                    {alreadyImported && (
+                      <span className="p32-search-imported" title={conflicting.id}>已导入 ✓</span>
+                    )}
+                  </div>
+                  <div className="p32-search-label">
+                    <span className="p32-search-text">{boundedText(item.label, 120)}</span>
+                    <a href={item.source_url} target="_blank" rel="noreferrer">查看原始来源</a>
+                  </div>
+                  <SearchMediaPreview assets={media} />
+                  <div className="p32-search-metrics" data-sort-key={sortKey}>
+                    {metricCells.map(([key, label, value]) => (
+                      <span className="p32-search-metric" data-metric={key} key={key}>
+                        <b>{label}</b>
+                        <i>{key === 'rate' ? formatSearchRate(value) : formatSearchCount(value)}</i>
+                      </span>
+                    ))}
+                  </div>
+                  <p className="p32-search-text">{boundedText(item.content_text, 220)}</p>
+                  <small className="p22-media-hashes">
+                    正文 SHA-256：{String(item.content_sha256 || '').slice(0, 16)}…
+                    {media.slice(0, 2).map((asset) => (
+                      <span key={asset.id} title={`${asset.hash?.algorithm || ''}（${asset.hash?.kind || ''}）`}>
+                        · 媒体{asset.order + 1} {String(asset.hash?.value || '').slice(0, 12)}…
+                      </span>
+                    ))}
+                    {media.length > 2 && <span> 等 {media.length} 项</span>}
+                    <span> · Run：{String(item.provenance?.run_id || '未提供').slice(0, 48)}</span>
+                  </small>
+                  {alreadyImported && (
+                    <p className="p32-search-imported-note">
+                      该来源已作为证据导入当前项目（{boundedText(conflicting.label, 40)}），禁止重复导入。
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
     </div>
   );

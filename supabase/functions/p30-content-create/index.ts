@@ -1,9 +1,10 @@
 // P30 内容创建 Edge Function — 三模式智能内容生成。
+// P31 v2 扩展：resolve_intent、条件化输出、多模态模型选择。
 //
 // - 只接受 POST/OPTIONS，严格 CORS allowlist
 // - JWT 验证 + staging role（viewer 可读 status；generate/revise 需要 operator）
-// - 动作：status / generate_quick / generate_from_brief / revise
-// - 只调用 Qwen/DashScope，固定 qwen-plus、低温度、有界 tokens、有界超时
+// - 动作：status / generate_quick / generate_from_brief / revise / resolve_intent / generate_quick_v2
+// - 只调用 Qwen/DashScope，文本用 qwen-plus，多模态用 qwen3.5-omni-flash
 // - 函数只生成结构化内容，不写数据库、不创建外部作业
 // - 日志和错误脱敏
 
@@ -12,13 +13,21 @@ import {
   ACTIONS,
   ALLOWED_MODEL,
   LIMITS,
+  MULTIMODAL_MODEL,
   P30Error,
   buildQuickPrompt,
   buildBriefPrompt,
+  buildResolveIntentPrompt,
+  buildV2GenerationPrompt,
   formatSummaryLine,
+  formatIntentSummaryLine,
+  formatV2SummaryLine,
   parseRequest,
   sanitizeError,
+  shouldUseMultimodal,
   validateGeneratedContent,
+  validateResolvedIntentOutput,
+  validateV2GeneratedContent,
 } from './content-core.mjs';
 
 export { P30Error };
@@ -104,20 +113,38 @@ async function verifyAuth(request: Request) {
 
 /**
  * 调用 Qwen/DashScope 进行内容生成。
- * 使用固定的 qwen-plus 模型、低温度、JSON 输出格式。
+ * 支持纯文本和真实多模态（content 数组含 image_url）。
  */
-async function callQwen(prompt: string, signal?: AbortSignal) {
+export async function callQwen(
+  prompt: string,
+  signal?: AbortSignal,
+  modelOverride?: string,
+  imageDataUrl?: string | null,
+) {
   const apiKey = Deno.env.get('DASHSCOPE_API_KEY');
   if (!apiKey) {
     throw new P30Error('QWEN_NOT_CONFIGURED', 'AI 生成服务尚未配置。', 503);
   }
 
+  const model = modelOverride || ALLOWED_MODEL;
+  const useMultimodal = Boolean(imageDataUrl) && model === MULTIMODAL_MODEL;
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), LIMITS.TIMEOUT_MS);
 
-  // 如果外部已传入 signal，链接它
   if (signal) {
     signal.addEventListener('abort', () => controller.abort());
+  }
+
+  // 构造消息内容：多模态时使用 content 数组，纯文本时使用字符串
+  let messageContent: string | Array<Record<string, unknown>>;
+  if (useMultimodal && imageDataUrl) {
+    messageContent = [
+      { type: 'text', text: prompt },
+      { type: 'image_url', image_url: { url: imageDataUrl } },
+    ];
+  } else {
+    messageContent = prompt;
   }
 
   try {
@@ -130,11 +157,11 @@ async function callQwen(prompt: string, signal?: AbortSignal) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: ALLOWED_MODEL,
+          model,
           temperature: LIMITS.TEMPERATURE,
-          max_tokens: LIMITS.MAX_TOKENS,
+          max_tokens: model === MULTIMODAL_MODEL ? LIMITS.MAX_TOKENS_V2 : LIMITS.MAX_TOKENS,
           response_format: { type: 'json_object' },
-          messages: [{ role: 'user', content: prompt }],
+          messages: [{ role: 'user', content: messageContent }],
         }),
         signal: controller.signal,
       },
@@ -142,7 +169,6 @@ async function callQwen(prompt: string, signal?: AbortSignal) {
 
     if (!response.ok) {
       const statusCode = response.status;
-      // 不输出原始响应正文
       throw new P30Error(
         'QWEN_REQUEST_FAILED',
         `AI 生成失败（服务端状态：${statusCode}）。请稍后重试。`,
@@ -152,13 +178,11 @@ async function callQwen(prompt: string, signal?: AbortSignal) {
 
     const payload = await response.json();
 
-    // 验证用量
     const totalTokens = Number(payload?.usage?.total_tokens);
     if (!Number.isFinite(totalTokens) || totalTokens <= 0) {
       throw new P30Error('QWEN_COST_UNVERIFIABLE', '无法验证 AI 调用用量。', 502);
     }
 
-    // 提取 JSON 内容
     const content = payload?.choices?.[0]?.message?.content;
     if (!content || typeof content !== 'string') {
       throw new P30Error('QWEN_EMPTY_RESPONSE', 'AI 未返回有效内容。', 502);
@@ -171,14 +195,11 @@ async function callQwen(prompt: string, signal?: AbortSignal) {
       throw new P30Error('QWEN_JSON_PARSE_FAILED', 'AI 返回了无法解析的响应。', 502);
     }
 
-    const validated = validateGeneratedContent(parsed);
-
     return {
-      result: validated,
-      summary: formatSummaryLine(validated),
+      parsed,
       usage: {
         total_tokens: totalTokens,
-        model: payload.model || ALLOWED_MODEL,
+        model: payload.model || model,
         provider: 'dashscope/qwen',
       },
     };
@@ -236,6 +257,7 @@ export async function handleP30Request(request: Request, dependencies: {
         data: {
           schema_version: 'p30_content_create_v1',
           model: ALLOWED_MODEL,
+          multimodal_model: MULTIMODAL_MODEL,
           role,
           user_id: userId,
         },
@@ -253,6 +275,90 @@ export async function handleP30Request(request: Request, dependencies: {
       }, 403);
     }
 
+    // ---- P31 v2: resolve_intent ----
+    if (parsed.action === ACTIONS.RESOLVE_INTENT) {
+      const prompt = buildResolveIntentPrompt(
+        parsed.input_text,
+        parsed.reference_text || null,
+        parsed.reference_url_data || null,
+        parsed.intent_overrides || null,
+      );
+
+      const hasImage = Boolean(parsed.image_data_url);
+      const modelToUse = hasImage ? MULTIMODAL_MODEL : ALLOWED_MODEL;
+      const generation = await modelCaller(prompt, undefined, modelToUse, parsed.image_data_url || null);
+      const intent = validateResolvedIntentOutput(generation.parsed);
+
+      // 关键安全检查：如果 intent_overrides 有指定平台，使用 overrides 覆盖
+      if (parsed.intent_overrides?.platform) {
+        intent.platform = parsed.intent_overrides.platform;
+        intent.confidence = 'explicit';
+        intent.provenance = 'user_overrides';
+      }
+      if (parsed.intent_overrides?.content_format) {
+        intent.content_format = parsed.intent_overrides.content_format;
+      }
+
+      return respond(request, {
+        ok: true,
+        code: 'INTENT_RESOLVED',
+        message: '意图解析完成。',
+        data: {
+          intent,
+          summary: formatIntentSummaryLine(intent),
+        },
+        meta: {
+          schema_version: 'p31_reference_driven_v2',
+          provider: generation.usage.provider,
+          model: generation.usage.model,
+          total_tokens: generation.usage.total_tokens,
+          user_id: userId,
+          role,
+        },
+      });
+    }
+
+    // ---- P31 v2: generate_quick_v2 ----
+    if (parsed.action === ACTIONS.GENERATE_QUICK_V2) {
+      const hasImage = Boolean(parsed.image_data_url);
+      const useMultimodal = shouldUseMultimodal(
+        parsed.has_image_reference,
+        parsed.reference_url_data,
+      ) || hasImage;
+
+      const prompt = buildV2GenerationPrompt(
+        parsed.input_text,
+        parsed.intent,
+        parsed.reference_text || null,
+        parsed.reference_url_data || null,
+      );
+
+      const modelToUse = useMultimodal ? MULTIMODAL_MODEL : ALLOWED_MODEL;
+      const generation = await modelCaller(prompt, undefined, modelToUse, parsed.image_data_url || null);
+
+      const validated = validateV2GeneratedContent(generation.parsed, parsed.intent);
+
+      return respond(request, {
+        ok: true,
+        code: 'GENERATED_V2',
+        message: '内容生成完成。',
+        data: {
+          ...validated,
+          summary: formatV2SummaryLine(validated),
+        },
+        meta: {
+          schema_version: 'p31_reference_driven_v2',
+          provider: generation.usage.provider,
+          model: generation.usage.model,
+          total_tokens: generation.usage.total_tokens,
+          user_id: userId,
+          role,
+          multimodal: useMultimodal,
+        },
+      });
+    }
+
+    // ---- v1: generate_quick / generate_from_brief / revise ----
     let prompt;
     if (parsed.action === ACTIONS.GENERATE_QUICK) {
       prompt = buildQuickPrompt(parsed.input_text, parsed.previous_version);
@@ -307,14 +413,15 @@ export async function handleP30Request(request: Request, dependencies: {
     }
 
     const generation = await modelCaller(prompt);
+    const validated = validateGeneratedContent(generation.parsed);
 
     return respond(request, {
       ok: true,
       code: 'GENERATED',
       message: '内容生成完成。',
       data: {
-        ...generation.result,
-        summary: generation.summary,
+        ...validated,
+        summary: formatSummaryLine(validated),
       },
       meta: {
         schema_version: 'p30_content_create_v1',
@@ -328,7 +435,6 @@ export async function handleP30Request(request: Request, dependencies: {
   } catch (error) {
     const sanitized = sanitizeError(error);
     console.error('P30 error:', JSON.stringify({ code: sanitized.code, status: sanitized.status }));
-    // 日志中不输出完整消息以防信息泄露
     return respond(request, {
       ok: false,
       code: sanitized.code,

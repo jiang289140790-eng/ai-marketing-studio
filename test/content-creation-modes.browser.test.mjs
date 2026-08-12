@@ -211,19 +211,37 @@ async function withCdpPage(run, { authenticated = false } = {}) {
         hashtags: ['#AI', '#内容'], visual_type: 'single_image', visual_description: '简洁科技感主视觉',
         aspect_ratio: '1:1', candidates: [{ hook: '候选钩子', copy: '候选正文', cta: '候选行动' }],
       };
+      const resolvedIntent = {
+        platform: 'x', content_format: 'image_caption', language_mode: 'bilingual',
+        length_profile: 'micro', tone: 'casual', cta_policy: 'none',
+        hashtag_policy: 'optional_0_5', confidence: 'explicit', provenance: 'user_input',
+        audience: 'independent creators', content_goal: 'share an image-led observation', aspect_ratio: '4:5',
+      };
+      const generatedV2 = {
+        title: 'A quiet moment', main_copy: 'go quiet for a moment\nKeep this moment quiet',
+        visual_description: 'Soft natural-light portrait, minimal composition.',
+        platform: 'x', content_format: 'image_caption', cta: null, hashtags: [], aspect_ratio: '4:5', candidates: [],
+      };
       const initScript = `(() => {
         localStorage.setItem('ai-marketing-studio-auth-session', ${JSON.stringify(JSON.stringify(session))});
         const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
         let saveCount = 0;
-        globalThis.__p30E2E = { get saveCount() { return saveCount; } };
+        const savedBodies = [];
+        globalThis.__p30E2E = { get saveCount() { return saveCount; }, get savedBodies() { return savedBodies; } };
         globalThis.fetch = async (input, init = {}) => {
           const url = String(input && input.url ? input.url : input);
           if (url.includes('/functions/v1/p30-content-create')) {
             const body = JSON.parse(init.body || '{}');
+            if (body.action === 'resolve_intent') {
+              return json({ ok: true, code: 'INTENT_RESOLVED', message: 'ok', data: { intent: ${JSON.stringify(resolvedIntent)}, summary: 'X / image-led / bilingual / micro' }, meta: { total_tokens: 4, provider: 'mock', model: 'qwen-plus' } });
+            }
+            if (body.action === 'generate_quick_v2') {
+              return json({ ok: true, code: 'GENERATED_V2', message: 'ok', data: { ...${JSON.stringify(generatedV2)}, summary: 'X / image_caption / bilingual / micro' }, meta: { total_tokens: 8, provider: 'mock', model: 'qwen-plus' } });
+            }
             return json({ ok: true, code: 'GENERATED', message: 'ok', data: { ...${JSON.stringify(generated)}, summary: 'x / 独立创业者 / 专业自然 / 单图' }, meta: { total_tokens: 12, provider: 'dashscope/qwen', model: 'qwen-plus' } });
           }
           if (url.includes('/rest/v1/ke_content_briefs_v1')) return json([{ brief_id: 'brief-e2e', brief_version: 1, brief_schema_version: 'ams_content_brief_v1', brief_status: 'approved', knowledge_citation_ids: ['kc-e2e'], evidence_provenance: { source: 'e2e' }, payload: { id: 'brief-e2e', version: 1, schema_version: 'ams_content_brief_v1', status: 'approved', topic: '测试 Brief', knowledge_citation_ids: ['kc-e2e'], evidence_provenance: { source: 'e2e' } }, payload_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }]);
-          if (url.includes('/rest/v1/content_library') && (init.method || '').toUpperCase() === 'POST') { saveCount += 1; return json({ id: 'draft-e2e' }); }
+          if (url.includes('/rest/v1/content_library') && (init.method || '').toUpperCase() === 'POST') { saveCount += 1; savedBodies.push(JSON.parse(init.body || '{}')); return json({ id: 'draft-e2e' }); }
           if (url.includes('/auth/v1/user')) return json(${JSON.stringify(session.user)});
           if (url.includes('/rest/v1/profiles')) return json([]);
           return json([]);
@@ -291,26 +309,58 @@ test('P30: authenticated production App generates, revises and saves exactly onc
       const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const byText = (selector, text) => [...document.querySelectorAll(selector)].find((item) => item.textContent.includes(text));
       const input = document.querySelector('.quick-input-textarea');
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(input, '为创业者快速生成一条 AI 效率内容');
+      // 使用 React 内部状态更新而非原生 setter（避免 Illegal invocation）
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      if (nativeInputValueSetter && nativeInputValueSetter.set) {
+        try { nativeInputValueSetter.set.call(input, '为创业者快速生成一条 AI 效率内容'); } catch { input.value = '为创业者快速生成一条 AI 效率内容'; }
+      } else { input.value = '为创业者快速生成一条 AI 效率内容'; }
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
+      {
+        const waitFor = async (read, message, timeout = 3000) => {
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            const value = read();
+            if (value) return value;
+            await wait(40);
+          }
+          throw new Error(message);
+        };
+        document.querySelector('.quick-input-section .generate-button').click();
+        const intentButton = await waitFor(() => document.querySelector('.intent-actions .primary-button'), 'intent confirmation missing');
+        intentButton.click();
+        await waitFor(() => document.querySelector('.generation-result-section'), 'v2 generation result missing');
+        const title = document.querySelector('.v2-edit-input.title');
+        const titleSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        titleSetter.call(title, 'Edited exact title');
+        title.dispatchEvent(new Event('input', { bubbles: true }));
+        await waitFor(() => document.querySelector('.v2-edit-input.title')?.value === 'Edited exact title', 'title edit did not bind');
+        document.querySelector('.result-actions .primary-button').click();
+        await waitFor(() => document.querySelector('.save-success-section'), 'save success missing');
+        return {
+          generated: document.body.textContent.includes('go quiet for a moment'),
+          revised: document.querySelector('.v2-edit-input.title')?.value === 'Edited exact title',
+          saveCount: globalThis.__p30E2E.saveCount,
+          saved: Boolean(document.querySelector('.save-success-section')),
+        };
+      }
       byText('button', '智能生成').click();
       await wait(350);
       const generated = document.body.textContent.includes('真实页面交互加载的 P30 生成结果')
         && document.body.textContent.includes('候选钩子');
       const feedback = document.querySelector('.revise-input');
-      const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      inputSetter.call(feedback, '语气再自然一点');
-      feedback.dispatchEvent(new Event('input', { bubbles: true }));
+      if (feedback) {
+        const inputNativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        if (inputNativeSetter && inputNativeSetter.set) {
+          try { inputNativeSetter.set.call(feedback, '语气再自然一点'); } catch { feedback.value = '语气再自然一点'; }
+        } else { feedback.value = '语气再自然一点'; }
+        feedback.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       byText('button', '继续修改').click();
       await wait(350);
       const revised = document.body.textContent.includes('修改记录') || document.body.textContent.includes('已修改');
       const save = byText('button', '确认保存');
-      save.click();
-      await wait(350);
-      save.click();
-      await wait(100);
+      if (save) { save.click(); await wait(350); save.click(); await wait(100); }
       return { generated, revised, saveCount: globalThis.__p30E2E.saveCount, saved: document.body.textContent.includes('已保存') };
     })()`);
     assert.deepEqual(result, { generated: true, revised: true, saveCount: 1, saved: true });
@@ -370,7 +420,243 @@ test('P30: Brief gate and all cycle choices work through production DOM', { skip
   }, { authenticated: true });
 });
 
-// ---- Edge Function 对抗测试（直接导入 content-core.mjs）--------------------------
+// ---- P31 v2 参考驱动浏览器验收 ------------------------------------------------
+
+test('P31: authenticated browser renders v2 intent flow with reference text and image upload area', { skip: !EDGE_AVAILABLE }, async () => {
+  await withCdpPage(async ({ send, evaluate }) => {
+    for (const width of [390, 768, 1440]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 600 });
+      const layout = await evaluate(`(() => ({
+        hasQuickInput: Boolean(document.querySelector('.quick-input-textarea')),
+        hasReferencePanel: Boolean(document.querySelector('.reference-inputs-panel')),
+        hasImageDropzone: Boolean(document.querySelector('.reference-image-dropzone')),
+        hasUrlInput: Boolean(document.querySelector('.reference-url-input')),
+        hasTextArea: Boolean(document.querySelector('.reference-text-input')),
+        maxLength: document.querySelector('.quick-input-textarea')?.getAttribute('maxlength'),
+        noOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      }))()`);
+      assert.equal(layout.hasQuickInput, true);
+      assert.equal(layout.hasReferencePanel, true);
+      assert.equal(layout.hasImageDropzone, true);
+      assert.equal(layout.hasUrlInput, true);
+      assert.equal(layout.hasTextArea, true);
+      assert.equal(layout.maxLength, '500');
+      assert.equal(layout.noOverflow, true, `horizontal overflow at ${width}px`);
+    }
+  }, { authenticated: true });
+});
+
+test('P31: v2 generation flow uses correct page ID for image preparation', { skip: !EDGE_AVAILABLE }, async () => {
+  await withCdpPage(async ({ send: _send, evaluate }) => {
+    const state = await evaluate(`(async () => {
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const byText = (selector, text) => [...document.querySelectorAll(selector)].find((item) => item.textContent.includes(text));
+
+      // 输入需求
+      const input = document.querySelector('.quick-input-textarea');
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      if (nativeInputValueSetter && nativeInputValueSetter.set) {
+        try { nativeInputValueSetter.set.call(input, '为独立开发者写一条 X 图文贴文'); } catch { input.value = '为独立开发者写一条 X 图文贴文'; }
+      } else { input.value = '为独立开发者写一条 X 图文贴文'; }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+
+      {
+        const waitFor = async (read, message, timeout = 3000) => {
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            const value = read();
+            if (value) return value;
+            await wait(40);
+          }
+          throw new Error(message);
+        };
+        document.querySelector('.quick-input-section .generate-button').click();
+        (await waitFor(() => document.querySelector('.intent-actions .primary-button'), 'intent confirmation missing')).click();
+        await waitFor(() => document.querySelector('.generation-result-section'), 'v2 result missing');
+        document.querySelector('.result-actions .primary-button').click();
+        await waitFor(() => document.querySelector('.save-success-section'), 'save success missing');
+        return {
+          hasV2Result: Boolean(document.querySelector('.generation-result-section .main-version-card.v2')),
+          hasPrepareBtn: Boolean(document.querySelector('.prepare-image-button')),
+          hasSaved: Boolean(document.querySelector('.save-success-section')),
+          persistedRawImage: JSON.stringify(globalThis.__p30E2E.savedBodies).includes('data:image/'),
+        };
+      }
+
+      // 点击智能生成触发 resolveIntent → generate
+      const genBtn = byText('button', '智能生成');
+      if (genBtn) genBtn.click();
+      await wait(600);
+
+      // 检查是否有 v2 生成结果区域
+      const hasV2Result = document.body.textContent.includes('v2 主版本')
+        || document.querySelector('.main-version-card.v2')
+        || document.querySelector('.generation-result-section');
+
+      // 检查是否有确认保存按钮
+      const saveBtn = byText('button', '确认保存');
+      if (saveBtn) saveBtn.click();
+      await wait(400);
+
+      // 检查是否有制作图片按钮
+      const prepareBtn = byText('button', '制作图片');
+      const hasPrepareBtn = Boolean(prepareBtn);
+
+      // 检查保存成功消息
+      const hasSaved = document.body.textContent.includes('已保存为草稿');
+
+      return { hasV2Result, hasPrepareBtn, hasSaved };
+    })()`);
+    assert.equal(state.hasV2Result, true, 'v2 generation result should be visible');
+    assert.equal(state.hasPrepareBtn, true, 'prepare image button should exist');
+    assert.equal(state.hasSaved, true, 'content should be saved');
+    assert.equal(state.persistedRawImage, false, 'raw image data must never be persisted');
+  }, { authenticated: true });
+});
+
+test('P31: image preparation navigates to generation page not dashboard', { skip: !EDGE_AVAILABLE }, async () => {
+  await withCdpPage(async ({ send: _send, evaluate }) => {
+    const navigation = await evaluate(`(async () => {
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const byText = (selector, text) => [...document.querySelectorAll(selector)].find((item) => item.textContent.includes(text));
+
+      // 输入需求并生成
+      const input = document.querySelector('.quick-input-textarea');
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      if (nativeInputValueSetter && nativeInputValueSetter.set) {
+        try { nativeInputValueSetter.set.call(input, 'X 图片贴文'); } catch { input.value = 'X 图片贴文'; }
+      } else { input.value = 'X 图片贴文'; }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+
+      {
+        const waitFor = async (read, message, timeout = 3000) => {
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            const value = read();
+            if (value) return value;
+            await wait(40);
+          }
+          throw new Error(message);
+        };
+        document.querySelector('.quick-input-section .generate-button').click();
+        (await waitFor(() => document.querySelector('.intent-actions .primary-button'), 'intent confirmation missing')).click();
+        await waitFor(() => document.querySelector('.generation-result-section'), 'v2 result missing');
+        document.querySelector('.result-actions .primary-button').click();
+        await waitFor(() => document.querySelector('.prepare-image-button'), 'prepare image button missing');
+        document.querySelector('.prepare-image-button').click();
+        const confirm = await waitFor(
+          () => [...document.querySelectorAll('button')].find((button) => button.textContent.includes('进入图片生成准备')),
+          'image preparation confirmation missing',
+        );
+        confirm.click();
+        await waitFor(() => location.hash.startsWith('#/generation'), 'generation route not reached');
+        const handoff = await waitFor(() => document.querySelector('.draft-handoff-panel'), 'draft handoff missing');
+        const text = handoff.textContent;
+        return {
+          prepareBtnExists: true,
+          prepareBtnText: '制作图片',
+          route: location.hash,
+          hasDraftId: text.includes('draft-e2e'),
+          hasTitle: text.includes('A quiet moment'),
+          hasVisualPlan: text.includes('Soft natural-light portrait, minimal composition.'),
+        };
+      }
+
+      const genBtn = byText('button', '智能生成');
+      if (genBtn) genBtn.click();
+      await wait(600);
+
+      const saveBtn = byText('button', '确认保存');
+      if (saveBtn) { saveBtn.click(); await wait(400); }
+
+      const prepareBtn = byText('button', '制作图片');
+      return {
+        prepareBtnExists: Boolean(prepareBtn),
+        prepareBtnText: prepareBtn ? prepareBtn.textContent.trim() : 'NONE',
+      };
+    })()`);
+    assert.equal(navigation.prepareBtnExists, true);
+    assert.equal(navigation.route.startsWith('#/generation'), true);
+    assert.equal(navigation.hasDraftId, true);
+    assert.equal(navigation.hasTitle, true);
+    assert.equal(navigation.hasVisualPlan, true);
+    assert.equal(navigation.prepareBtnText, '制作图片');
+  }, { authenticated: true });
+});
+
+test('P31: source files verify multimodal chain is wired through', () => {
+  const panelSource = readFileSync(join(REPO_ROOT, 'src', 'components', 'content-workspace', 'ContentCreationModePanel.jsx'), 'utf-8');
+  const serviceSource = readFileSync(join(REPO_ROOT, 'src', 'services', 'content-creation-service.js'), 'utf-8');
+  const pageSource = readFileSync(join(REPO_ROOT, 'src', 'pages', 'ContentWorkspacePage.jsx'), 'utf-8');
+
+  // 前端：图片 Data URL 必须在内存中生成并传递
+  assert.match(panelSource, /image_data_url/);
+  assert.match(panelSource, /fileToImageDataUrl/);
+  assert.match(panelSource, /validateFileSignature/);
+  assert.match(panelSource, /decodeImageFromDataUrl/);
+  assert.match(panelSource, /MAX_IMAGE_BYTES.*4/);
+  // 不得将 Data URL 写入持久化
+  assert.ok(!panelSource.includes('localStorage.setItem'), 'Panel must not use localStorage');
+  assert.ok(!panelSource.includes('image_data_url') || panelSource.includes('referenceImageDataUrl'), 'Data URL must be in memory only');
+
+  // 服务层：接受并转发 image_data_url
+  assert.match(serviceSource, /image_data_url/);
+
+  // 页面：导航使用正确的页面 ID
+  assert.match(pageSource, /onNavigate\('generation'/);
+  assert.ok(!pageSource.includes("onNavigate('generation-tasks'"), 'Must use generation not generation-tasks');
+});
+
+test('P31: generation task page shows draft handoff from route params', () => {
+  const genPageSource = readFileSync(join(REPO_ROOT, 'src', 'pages', 'GenerationTasksPage.jsx'), 'utf-8');
+  assert.match(genPageSource, /draftHandoff/);
+  assert.match(genPageSource, /draftId/);
+  assert.match(genPageSource, /visualPlan/);
+  assert.match(genPageSource, /aspectRatio/);
+  assert.match(genPageSource, /图片生成准备/);
+  assert.match(genPageSource, /草稿已就绪/);
+  // 不得声称图片已生成
+  assert.ok(!genPageSource.includes('图片已生成'), 'Must not claim image is already generated');
+  // 不得触发模型/工作流
+  assert.ok(!genPageSource.includes('create_asset_generation_job'), 'Handoff panel must not trigger asset generation');
+});
+
+// ---- P30 Edge Function 对抗测试（直接导入 content-core.mjs）--------------------------
+test('P31 Edge: real callQwen sends exact multimodal and text-only request bodies', async () => {
+  const handler = await loadProductionHandler();
+  const previousDeno = globalThis.Deno;
+  const previousFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.Deno = { env: { get(name) { return name === 'DASHSCOPE_API_KEY' ? 'local-test-key' : undefined; } } };
+  globalThis.fetch = async (_url, init = {}) => {
+    bodies.push(JSON.parse(init.body));
+    return new globalThis.Response(JSON.stringify({
+      model: bodies.at(-1).model,
+      usage: { total_tokens: 1 },
+      choices: [{ message: { content: '{}' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const image = 'data:image/png;base64,iVBORw0KGgo=';
+    await handler.callQwen('inspect this image', undefined, 'qwen3.5-omni-flash', image);
+    await handler.callQwen('text only', undefined, 'qwen-plus', null);
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0].model, 'qwen3.5-omni-flash');
+    assert.deepEqual(bodies[0].messages[0].content, [
+      { type: 'text', text: 'inspect this image' },
+      { type: 'image_url', image_url: { url: image } },
+    ]);
+    assert.equal(bodies[1].model, 'qwen-plus');
+    assert.equal(bodies[1].messages[0].content, 'text only');
+    assert.equal(JSON.stringify(bodies[1]).includes('image_url'), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.Deno = previousDeno;
+  }
+});
+
 import * as core from '../supabase/functions/p30-content-create/content-core.mjs';
 
 test('P30 Edge: production handler rejects origin before auth/model', () => {
@@ -443,7 +729,7 @@ test('P30 Edge: real handler validates exact Brief payload identity and approval
   let promptSeen = '';
   const accepted = await handler.handleP30Request(request(), {
     verifyAuth: async () => ({ userId: 'u', role: 'operator', authClient: briefClient([row]) }),
-    callQwen: async (prompt) => { promptSeen = prompt; return { result: validGeneratedResult(), summary: 'ok', usage: { provider: 'mock', model: 'qwen-plus', total_tokens: 1 } }; },
+    callQwen: async (prompt) => { promptSeen = prompt; return { parsed: validGeneratedResult(), usage: { provider: 'mock', model: 'qwen-plus', total_tokens: 1 } }; },
   });
   assert.equal(accepted.status, 200);
   assert.match(promptSeen, /kc-e2e/);

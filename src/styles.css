@@ -10817,6 +10817,360 @@ textarea {
   padding: 16px;
 }
 
+/* ---- 参考输入面板（P31 v2）---- */
+.reference-inputs-panel {
+  margin-bottom: 16px;
+}
+
+.reference-inputs-panel summary {
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reference-indicator {
+  color: var(--accent-2);
+  font-weight: 400;
+}
+
+.reference-inputs-body {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.reference-field label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reference-field label span {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-strong);
+}
+
+.reference-field label small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.reference-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.reference-url-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.reference-url-input:focus {
+  border-color: var(--accent);
+}
+
+.reference-text-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.reference-text-input:focus {
+  border-color: var(--accent);
+}
+
+.reference-char-count {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: right;
+  display: block;
+  margin-top: 2px;
+}
+
+.reference-image-dropzone {
+  cursor: pointer;
+}
+
+/* ---- 意图摘要（P31 v2）---- */
+.intent-summary-section {
+  margin-bottom: 16px;
+}
+
+.intent-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.intent-chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.intent-chip.platform {
+  background: rgba(124, 58, 237, 0.15);
+  color: var(--accent);
+}
+
+.intent-chip.format {
+  background: rgba(34, 211, 238, 0.12);
+  color: var(--accent-2);
+}
+
+.intent-chip.tone {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--muted);
+}
+
+.intent-chip.language {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--success);
+}
+
+.intent-chip.confidence {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+  font-weight: 400;
+  font-size: 0.72rem;
+}
+
+.intent-edit-toggle {
+  margin-left: auto;
+}
+
+.intent-summary-line {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.intent-edit-panel {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.intent-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.intent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.intent-field span {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text-strong);
+}
+
+.intent-field select {
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.intent-provenance-row {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.intent-provenance-row small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.intent-resolving-indicator {
+  padding: 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.intent-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ---- v2 编辑字段 ---- */
+.v2-edit-field {
+  margin-bottom: 14px;
+}
+
+.v2-edit-field label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.edit-label {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--text-strong);
+}
+
+.v2-edit-input {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 1rem;
+  outline: none;
+  width: 100%;
+}
+
+.v2-edit-input:focus {
+  border-color: var(--accent);
+}
+
+.v2-edit-input.title {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.v2-edit-textarea {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  width: 100%;
+  min-height: 120px;
+}
+
+.v2-edit-textarea:focus {
+  border-color: var(--accent);
+}
+
+.v2-edit-textarea.visual {
+  min-height: 60px;
+}
+
+.char-count {
+  display: block;
+  text-align: right;
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+.v2-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+
+.main-version-card.v2 {
+  padding-bottom: 24px;
+}
+
+/* ---- 保存成功 + next steps（P31 v2）---- */
+.next-steps.v2 {
+  margin-top: 16px;
+}
+
+.next-steps-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.prepare-image-button {
+  background: linear-gradient(135deg, var(--accent-2), rgba(34, 211, 238, 0.7));
+  color: var(--bg);
+  border: none;
+}
+
+.saved-draft-preview {
+  margin-top: 16px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.saved-draft-preview h4 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  color: var(--text-strong);
+}
+
+.image-prepare-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+/* ---- 草稿 handoff 面板（GenerationTasksPage）---- */
+.draft-handoff-panel {
+  margin-bottom: 24px;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--accent-2);
+  border-radius: 12px;
+}
+
+.draft-handoff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+/* ---- 参考输入错误/成功通知 ---- */
+.reference-field .notice {
+  margin-top: 6px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+}
+
 /* ---- 响应式 ---- */
 @media (max-width: 768px) {
   .creation-mode-switcher {

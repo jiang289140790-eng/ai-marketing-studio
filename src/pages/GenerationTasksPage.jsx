@@ -33,12 +33,24 @@ export function GenerationTasksPage({
   userId,
   detailId,
   onNavigate,
+  routeParams = {},
 }) {
   const [data, setData] = useState({ workflowRuns: [], characters: [], comfyWorkflows: [], assets: [], legacyAssets: [], contentPackages: [], campaigns: [] });
   const [filter, setFilter] = useState('queued');
   const [selectedId, setSelectedId] = useState(detailId || '');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+
+  // P31 v2：草稿 → 图片生成准备 handoff
+  const draftHandoff = useMemo(() => {
+    if (!routeParams || !routeParams.draftId) return null;
+    return {
+      draftId: routeParams.draftId,
+      title: routeParams.title || '',
+      visualPlan: routeParams.visualPlan || '',
+      aspectRatio: routeParams.aspectRatio || '1:1',
+    };
+  }, [routeParams]);
 
   const refresh = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) {
@@ -105,6 +117,28 @@ export function GenerationTasksPage({
         <button className="primary-button" type="button" onClick={() => onNavigate?.('workspace')}>在内容工作台创建任务</button>
       </div>
       {message && <div className={/失败|不可用/.test(message) ? 'notice error' : 'notice'}>{message}</div>}
+
+      {/* P31 v2：草稿图片生成准备 */}
+      {draftHandoff && (
+        <div className="draft-handoff-panel" role="region" aria-label="准备从草稿生成图片">
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">图片生成准备</p>
+              <h3>从草稿创建图片生成任务</h3>
+            </div>
+            <span className="status-badge approved">草稿已就绪</span>
+          </div>
+          <div className="draft-handoff-grid">
+            <div className="detail-item"><span className="detail-label">草稿 ID</span><strong>{draftHandoff.draftId}</strong></div>
+            <div className="detail-item"><span className="detail-label">标题</span><strong>{draftHandoff.title || '未命名'}</strong></div>
+            <div className="detail-item"><span className="detail-label">画幅</span><strong>{draftHandoff.aspectRatio}</strong></div>
+            <div className="detail-item detail-full"><span className="detail-label">视觉方案</span><strong>{draftHandoff.visualPlan || '暂无视觉描述'}</strong></div>
+          </div>
+          <p className="form-hint">
+            来自 P31 内容工作台的草稿 handoff。你可以在此页面选择角色、LoRA 和工作流，基于上述视觉方案和画幅创建图片生成任务。草稿正文不会自动填充为生成 prompt——可根据需要在创建任务时手动组合。
+          </p>
+        </div>
+      )}
       <div className="segmented-tabs generation-status-tabs">
         {FILTERS.map(([id, label]) => <button className={filter === id ? 'active' : ''} type="button" key={id} onClick={() => setFilter(id)}>{label}<strong>{tasks.filter((task) => task.normalizedStatus === id).length}</strong></button>)}
       </div>

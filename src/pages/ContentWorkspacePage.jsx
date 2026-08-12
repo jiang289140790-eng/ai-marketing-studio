@@ -152,6 +152,7 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
   const [selectedBriefId, setSelectedBriefId] = useState('');
   const [draftCount, setDraftCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [prepareImageParams, setPrepareImageParams] = useState(null); // P31 v2 制作图片 handoff
   const [selectedStrategyId, setSelectedStrategyId] = useState(routeParams.strategy_id || '');
   const [selectedPackageId, setSelectedPackageId] = useState(detailId || '');
 
@@ -392,12 +393,34 @@ export function ContentWorkspacePage({ userId, onNavigate, detailId, routeParams
       {/* 模式 1：快速生成一条（默认） */}
       {creationMode === 'quick' && (
         <div className="creation-mode-content" role="tabpanel" aria-label="快速生成一条">
+          {prepareImageParams && (
+            <div className="notice info image-prepare-notice" role="status">
+              <span>已从草稿「{prepareImageParams.title?.slice(0, 60)}」准备制作图片 · 画幅 {prepareImageParams.aspectRatio || '1:1'}</span>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  onNavigate('generation', prepareImageParams.draftId, { draftId: prepareImageParams.draftId, title: prepareImageParams.title, visualPlan: prepareImageParams.visualPlan, aspectRatio: prepareImageParams.aspectRatio });
+                }}
+              >
+                进入图片生成准备
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setPrepareImageParams(null)}
+              >
+                取消
+              </button>
+            </div>
+          )}
           <ContentCreationModePanel
             mode="quick"
             brief={null}
             userId={userId}
             onNavigate={onNavigate}
             onDraftCountChange={(delta) => setDraftCount((c) => c + delta)}
+            onPrepareImage={(params) => setPrepareImageParams(params)}
           />
         </div>
       )}

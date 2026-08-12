@@ -279,6 +279,10 @@ test('P22 signed labels remain exact at 160, 161 and 200 characters through P19 
         content_text: record.content_text,
         external_id: record.provenance.external_id,
         content_sha256: record.media_metadata.sha256,
+        // 与生产 p19-workspace-command/index.ts 的 verifyP22EvidenceRecord 一致：
+        // v3 证明绑定 P29 来源快照与媒体资产，重建校验项必须原样携带。
+        source_metadata: record.source_metadata,
+        media_assets: record.media_assets,
         provenance: {
           schema_version: 'p22_collected_source_v1',
           provider: record.provenance.provider,
@@ -419,17 +423,18 @@ test('P22 production UI contains capability gates, explicit preview and save wor
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
   const edge = readFileSync(join(process.cwd(), 'supabase', 'functions', 'p22-research-assist', 'index.ts'), 'utf8');
   assert.match(component, /Apify：.*尚未配置/s);
-  assert.match(component, /Qwen：.*尚未配置/s);
+  assert.match(component, /Qwen 多模态：.*尚未配置/s);
   assert.match(component, /来源预览（未保存）/);
-  assert.match(component, /保存并生成可审核 Brief/);
-  assert.match(component, /仅预览/);
+  assert.match(component, /保存图文证据并生成分析/);
+  assert.match(component, /多模态分析（已绑定保存）/);
+  assert.doesNotMatch(component, /仅预览/);
   assert.match(component, /按实际使用记录费用/);
   assert.match(component, /今日已记录/);
   assert.doesNotMatch(component, /每日各\s*[≤<]=?\s*¥?10|今日剩余/);
   assert.match(page, /onlineMode && <P22ResearchAssistPanel/);
   assert.match(page, /P22ResearchAssistPanel key=\{project\.id\}/);
   assert.match(page, /toP19EvidenceInput/);
-  assert.match(component, /setItems\(\(project\.evidence \|\| \[\]\)\.map\(p22ItemFromEvidence\)\.filter\(Boolean\)\)[\s\S]+setSelected\(\[\]\)[\s\S]+setAnalyses\(\[\]\)/);
+  assert.match(component, /setItems\(\(project\.evidence \|\| \[\]\)\.map\(p22ItemFromEvidence\)\.filter\(Boolean\)\)[\s\S]+setMessage\(''\)[\s\S]+setError\(''\)/);
   const analyzeBody = edge.slice(edge.indexOf('async function analyze'), edge.indexOf('Deno.serve'));
   assert.doesNotMatch(edge, /DAILY_BUDGET_EXCEEDED|今日\s*¥10\s*预算已不足/);
   assert.match(edge, /daily_cap_enabled:false/);
@@ -945,7 +950,9 @@ test('P22 records bounded cost before the documented Apify sequence and issues p
   assert.ok(!/headers\s*\.\s*get\s*\(\s*['"]x-apify-actor-run-id/i.test(core), '适配器不得读取未文档化响应头');
   assert.ok(!edge.includes('run-sync-get-dataset-items'));
   assert.ok(!core.includes('run-sync-get-dataset-items'));
-  const collectBody = edge.slice(edge.indexOf('async function collect'), edge.indexOf('async function analyze'));
+  // 只检查可执行逻辑：注释（含 qwen 契约说明）不属于 collect 的可执行路径。
+  const executable = (source) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const collectBody = executable(edge.slice(edge.indexOf('async function collect'), edge.indexOf('async function analyze')));
   const reserveAt = collectBody.indexOf("recordProviderCost(db,userId,'apify'");
   const adapterAt = collectBody.indexOf('runApifyCollectionSequence(');
   const normalizeAt = collectBody.indexOf('normalizeCollectedItems(');
@@ -956,7 +963,7 @@ test('P22 records bounded cost before the documented Apify sequence and issues p
   assert.ok(!collectBody.includes('fetch('), 'collect 路径不直接发起上游请求');
   assert.ok(!/p22_(release|refund|delete)\w*/i.test(edge), '不存在释放、退款或删除预留的调用');
   assert.ok(!/\.delete\(/.test(edge));
-  const analyzeBody = edge.slice(edge.indexOf('async function analyze'), edge.indexOf('Deno.serve'));
+  const analyzeBody = executable(edge.slice(edge.indexOf('async function analyze'), edge.indexOf('Deno.serve')));
   assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("recordProviderCost(db,userId,'qwen'"), '分析必须先验证来源证明再记录 Qwen 费用');
   assert.ok(analyzeBody.indexOf("recordProviderCost(db,userId,'qwen'") < analyzeBody.indexOf('fetch('), '分析必须记录 Qwen 费用后再调用模型');
 });
@@ -1244,24 +1251,24 @@ test('P22 real production page clears preview state when switching projects', { 
     await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'exact URL mode');
     await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
     await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Exact URL source')`), 'exact URL preview');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button) => button.textContent.includes('保存并生成可审核 Brief')).click()`);
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button) => button.textContent.includes('保存图文证据并生成分析')).click()`);
     await browserWait(() => boundary.getProject()?.evidence.length === 1 && boundary.getProject()?.analyses.length === 0, 'partial Evidence persistence');
     await sleep(750);
     const retryState = await cdp.evaluate(`(() => { const button=document.querySelector('.p22-source-card button'); return { exists:Boolean(button), disabled:button?.disabled, cards:document.querySelectorAll('.p22-source-card').length, busy:document.body.innerText.includes('正在执行'), text:button?.textContent || '', alert:document.querySelector('[role="alert"]')?.textContent || '' }; })()`);
     assert.equal(retryState.exists, true, `partial-success source card disappeared: ${JSON.stringify(retryState)}`);
     assert.equal(retryState.disabled, false, `partial-success retry stayed disabled: ${JSON.stringify(retryState)}`);
     await cdp.evaluate(`document.querySelector('.p22-source-card button').click()`);
-    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Evidence → 确定性分析 → Knowledge Card → 可审核 Brief')`), 'reviewable brief chain completion');
+    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Evidence → 确定性分析 → Knowledge Card → 内容策划草案')`), 'reviewable brief chain completion');
     assert.equal(boundary.getProject().evidence.length, 1);
     assert.equal(boundary.getProject().analyses.length, 1);
     assert.equal(boundary.getProject().knowledge_cards.length, 1);
     assert.equal(boundary.getProject().brief.status, 'pending_review');
     assert.equal(boundary.getProject().analyses[0].evidence_id, boundary.getProject().evidence[0].id);
     assert.equal(boundary.getProject().knowledge_cards[0].analysis_id, boundary.getProject().analyses[0].id);
-    await browserWait(() => cdp.evaluate(`Boolean([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief')))`), 'brief review controls');
+    await browserWait(() => cdp.evaluate(`Boolean([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准草案')))`), 'brief review controls');
     await cdp.evaluate(`(() => { const field=document.querySelector('.p19-brief-actions textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(field,'来源和知识绑定已人工核对'); field.dispatchEvent(new Event('input',{bubbles:true})); })()`);
-    await browserWait(() => cdp.evaluate(`!([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief'))?.disabled)`), 'review rationale gate');
-    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief')).click()`);
+    await browserWait(() => cdp.evaluate(`!([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准草案'))?.disabled)`), 'review rationale gate');
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准草案')).click()`);
     await browserWait(() => boundary.getProject()?.brief?.status === 'approved', 'online manual Brief approval');
     await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('#p21-step-handoff button.p19-btn-primary')) && !document.querySelector('#p21-step-handoff button.p19-btn-primary').disabled`), 'handoff action');
     await cdp.evaluate(`document.querySelector('#p21-step-handoff button.p19-btn-primary').click()`);

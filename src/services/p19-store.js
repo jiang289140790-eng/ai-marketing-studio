@@ -90,16 +90,16 @@ const STORED_PROJECT_FIELDS = Object.freeze([
 const STORED_ENTITY_FIELDS = Object.freeze({
   evidence: Object.freeze([
     'schema_version','id','project_id','source_url','label','platform','content_text','recorded_at',
-    'provenance','media_metadata','version','fingerprint','created_at','updated_at',
+    'provenance','media_metadata','source_metadata','media_assets','version','fingerprint','created_at','updated_at',
   ]),
   analyses: Object.freeze([
     'schema_version','id','project_id','evidence_id','kind','rule_ids','provenance','result',
-    'evidence_fingerprint','evidence_version','version','fingerprint','created_at','updated_at',
+    'model_analysis','evidence_fingerprint','evidence_version','version','fingerprint','created_at','updated_at',
   ]),
   knowledge_cards: Object.freeze([
     'schema_version','source_observations','creative_analysis','evidence_links','generation_guidance',
     'generation_readiness','id','project_id','analysis_id','analysis_fingerprint','analysis_version',
-    'trust_status','validation_status','version','fingerprint','created_at','updated_at',
+    'trust_status','validation_status','analysis_provenance','version','fingerprint','created_at','updated_at',
   ]),
   handoffs: Object.freeze([
     'schema_version','id','version','kind','status','payload_label','is_external_task',
@@ -112,7 +112,7 @@ const STORED_ENTITY_FIELDS = Object.freeze({
     'schema_version','id','project_id','version','status','topic','objective','audience','channel',
     'constraints','knowledge_citation_ids','structural_guidance','evidence_provenance',
     'card_fingerprints','evidence_provenance_fingerprint','project_fingerprint','review','version_note',
-    'fingerprint','created_at','updated_at',
+    'analysis_provenance','multimodal_findings','fingerprint','created_at','updated_at',
   ]),
 });
 

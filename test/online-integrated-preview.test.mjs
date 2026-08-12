@@ -67,6 +67,16 @@ const OWNED_PATHS = new Set([
   'test/p19-checker.test.mjs',
   'test/p19-deployment-gate.test.mjs',
   'test/p19-sql-integration.test.mjs',
+  // P29 多模态证据闭环新增授权路径（本里程碑）。
+  'src/components/integrated-workspace/P22ResearchAssistPanel.jsx',
+  'src/services/p22-research-assist.js',
+  'supabase/functions/p22-research-assist/assist-core.mjs',
+  'supabase/functions/p22-research-assist/index.ts',
+  'test/p22-assisted-research.test.mjs',
+  'test/p23-link-evidence-knowledge.test.mjs',
+  'test/p29-multimodal-x-evidence.test.mjs',
+  'test/p29-multimodal-x-evidence.browser.test.mjs',
+  'docs/P29_MULTIMODAL_X_EVIDENCE_LOOP.md',
 ]);
 
 // P19 已验收迁移对账唯一允许的删除：5 个过时时间戳变体。
@@ -264,6 +274,6 @@ test('所有权与删除防护：仅授权路径发生受跟踪修改，无删�
 // 有界条目数量
 // ==============================================================================
 test('有界条目数量：OWNED_PATHS 不超过合理上限', () => {
-  // P19 里程碑合法扩充授权路径（迁移对账 + 工作台服务 + 函数 + 测试 + 文档）。
-  assert.ok(OWNED_PATHS.size <= 50, `路径集过大: ${OWNED_PATHS.size}`);
+  // P19 + P29 里程碑合法扩充授权路径（迁移对账 + 工作台服务 + 函数 + 测试 + 文档）。
+  assert.ok(OWNED_PATHS.size <= 60, `路径集过大: ${OWNED_PATHS.size}`);
 });

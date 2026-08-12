@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 import {
-  P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, P22_SCHEMA_VERSION, P22Error, buildQwenPrompt,
-  assertUniqueRawCollectedPost, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, publicError,
+  P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, P22_SCHEMA_VERSION, P22Error, buildMultimodalQwenContent, buildQwenPrompt,
+  assertUniqueRawCollectedPost, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, parseP22Request, parseQwenAnalyses, parseQwenMultimodalAnalyses, publicError,
   runApifyCollectionSequence, verifyAnalyzeSources,
 } from './assist-core.mjs';
 
@@ -67,7 +67,7 @@ async function collect(db, userId: string, input, proofSecret: string) {
       signal:controller.signal,
     });
     if (input.action==='collect_url') assertUniqueRawCollectedPost(sequence.items,{canonical_url:input.url,external_id:input.external_id});
-    const normalizedAll=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:new Date().toISOString(),usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:costRecord.reservation_id},sha256);
+    const normalizedAll=await normalizeCollectedItems(sequence.items,{provider:`apify:${ACTOR}`,run_id:sequence.runId,collected_at:new Date().toISOString(),usage_total_usd:sequence.usageTotalUsd,budget_reservation_id:costRecord.reservation_id},sha256,{fetchImpl:globalThis.fetch});
     const normalized=input.action==='collect_url'
       ? bindExactCollectedPost(normalizedAll,{canonical_url:input.url,external_id:input.external_id})
       : normalizedAll;
@@ -78,19 +78,39 @@ async function collect(db, userId: string, input, proofSecret: string) {
 }
 
 async function analyze(db,userId:string,items,proofSecret:string) {
+  // 按媒体分组调用模型：带媒体来源 → qwen3.5-omni-flash 多模态契约（逐媒体绑定，
+  // 绝不静默回退到纯文本分析）；纯文本来源 → 既有 qwen-plus 文本契约。
+  // 每组独立记录有界费用；全部组的结果合并为一个 analyses 数组。
   await verifyAnalyzeSources(proofSecret,userId,items);
   const key=Deno.env.get('DASHSCOPE_API_KEY');
   if (!key) throw new P22Error('QWEN_NOT_CONFIGURED','Qwen 尚未配置。',503);
-  const costRecord=await recordProviderCost(db,userId,'qwen',P22_LIMITS.qwen_reservation_cny);
-  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),60000);
-  try {
-    const response=await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:'qwen-plus',temperature:0.2,max_tokens:1200,response_format:{type:'json_object'},messages:[{role:'user',content:buildQwenPrompt(items)}]}),signal:controller.signal});
-    if (!response.ok) throw new P22Error('QWEN_REQUEST_FAILED','辅助分析失败。',502);
-    const payload=await response.json(); const totalTokens=Number(payload?.usage?.total_tokens);
-    if (!Number.isFinite(totalTokens) || totalTokens <= 0) throw new P22Error('QWEN_COST_UNVERIFIABLE','无法验证分析用量。',502);
-    return {analyses:parseQwenAnalyses(payload,items),usage:{total_tokens:totalTokens},cost:{recorded_cny:P22_LIMITS.qwen_reservation_cny,tracking:costRecord}};
-  } catch(error) { if(error?.name==='AbortError') throw new P22Error('QWEN_TIMEOUT','辅助分析超时。',504); throw error; }
-  finally { clearTimeout(timer); }
+  const groups=[];
+  const mediaItems=items.filter((item)=>Array.isArray(item.media_assets)&&item.media_assets.length>0);
+  const textItems=items.filter((item)=>!(Array.isArray(item.media_assets)&&item.media_assets.length>0));
+  if (mediaItems.length>0) groups.push({items:mediaItems,multimodal:true});
+  if (textItems.length>0) groups.push({items:textItems,multimodal:false});
+  const analyses=[]; let usageTotal=0; const costRecords=[];
+  for (const group of groups) {
+    const costRecord=await recordProviderCost(db,userId,'qwen',P22_LIMITS.qwen_reservation_cny);
+    const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),60000);
+    try {
+      const messages=group.multimodal
+        ? [{role:'user',content:buildMultimodalQwenContent(group.items)}]
+        : [{role:'user',content:buildQwenPrompt(group.items)}];
+      const response=await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:group.multimodal?'qwen3.5-omni-flash':'qwen-plus',temperature:0.2,max_tokens:group.multimodal?2400:1200,response_format:{type:'json_object'},messages}),signal:controller.signal});
+      if (!response.ok) throw new P22Error('QWEN_REQUEST_FAILED','辅助分析失败。',502);
+      const payload=await response.json(); const totalTokens=Number(payload?.usage?.total_tokens);
+      if (!Number.isFinite(totalTokens) || totalTokens <= 0) throw new P22Error('QWEN_COST_UNVERIFIABLE','无法验证分析用量。',502);
+      const modelName=group.multimodal?'qwen3.5-omni-flash':'qwen-plus';
+      analyses.push(...(group.multimodal
+        ? parseQwenMultimodalAnalyses(payload,group.items).map((row)=>({...row,model:modelName}))
+        : parseQwenAnalyses(payload,group.items).map((row)=>({...row,model:modelName}))));
+      usageTotal+=totalTokens;
+      costRecords.push({recorded_cny:P22_LIMITS.qwen_reservation_cny,tracking:costRecord});
+    } catch(error) { if(error?.name==='AbortError') throw new P22Error('QWEN_TIMEOUT','辅助分析超时。',504); throw error; }
+    finally { clearTimeout(timer); }
+  }
+  return {analyses,usage:{total_tokens:usageTotal},cost:{recorded_cny:costRecords.reduce((sum,row)=>sum+row.recorded_cny,0),tracking:costRecords.map((row)=>row.tracking)}};
 }
 
 Deno.serve(async (request)=>{

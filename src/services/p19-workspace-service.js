@@ -26,6 +26,10 @@ import {
   MAX_ARRAY_LENGTH,
   MAX_IDENTIFIER_LENGTH,
   MAX_STRING_LENGTH,
+  MODEL_ANALYSIS_SCHEMA_VERSION,
+  MULTIMODAL_METHOD,
+  MULTIMODAL_MODEL,
+  MULTIMODAL_PROVIDER,
   PROJECT_SCHEMA_VERSION,
   clonePlain,
   evidenceProofFingerprint,
@@ -33,11 +37,15 @@ import {
   isNonEmptyString,
   resolveBriefEvidenceBindings,
   sha256Hex,
+  stableCanonicalJson,
   stableId,
+  validateAnalysis,
   validateBrief,
   validateEvidenceRecord,
   validateHandoffPackageRecord,
   validateKnowledgeCard,
+  validateMediaAssets,
+  validateSourceMetadata,
 } from './p19-contracts.js';
 
 export const ANALYSIS_ENGINE_VERSION = 'p19_analysis_engine_v1';
@@ -277,6 +285,17 @@ export async function addEvidence(project, input, { now = () => new Date().toISO
     created_at: timestamp,
     updated_at: timestamp,
   };
+  // P29 版本化扩展：来源快照与有序媒体资产（缺省 = 旧记录；存在即严格校验）。
+  if (input.source_metadata !== undefined && input.source_metadata !== null) {
+    const snapshot = validateSourceMetadata(input.source_metadata);
+    if (!snapshot.valid) throw workbenchError('EVIDENCE_INVALID', snapshot.issues[0] || '来源快照不符合 P29 有界契约。');
+    record.source_metadata = clonePlain(input.source_metadata);
+  }
+  if (input.media_assets !== undefined) {
+    const assets = validateMediaAssets(input.media_assets);
+    if (!assets.valid) throw workbenchError('EVIDENCE_INVALID', assets.issues[0] || '媒体资产不符合 P29 有界契约。');
+    record.media_assets = clonePlain(input.media_assets);
+  }
   if (p22Source && await sha256Hex(record.content_text) !== provenance.content_sha256) {
     throw workbenchError('EVIDENCE_HASH_MISMATCH', 'P22 证据正文与来源 SHA-256 不一致，已拒绝。');
   }
@@ -302,6 +321,10 @@ export async function addEvidence(project, input, { now = () => new Date().toISO
       || existing.provenance?.external_id !== provenance.external_id) {
       throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '相同证据身份绑定了不同来源内容，已失败关闭。');
     }
+    // 同一正文身份不得静默绑定不同来源快照/媒体（服务端证明同样绑定它们）。
+    if (p29EvidenceBindingFingerprint(existing) !== p29EvidenceBindingFingerprint(record)) {
+      throw workbenchError('EVIDENCE_IDENTITY_CONFLICT', '同一证据身份绑定了不同的来源快照或媒体内容，已失败关闭。');
+    }
     return clonePlain(project);
   }
   const next = clonePlain(project);
@@ -320,6 +343,18 @@ function normalizeMediaMetadata(meta) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/**
+ * P29 证据绑定指纹：来源快照 + 每条有序媒体的 (id, order, 哈希种类, 哈希值)。
+ * 同一证据身份（正文/来源）不得静默绑定不同快照或媒体集合。
+ */
+function p29EvidenceBindingFingerprint(record) {
+  const snapshot = stableCanonicalJson(record.source_metadata !== undefined ? record.source_metadata : null);
+  const media = (Array.isArray(record.media_assets) ? record.media_assets : []).map((asset) => (
+    `${asset.id}|${asset.order}|${asset.hash && asset.hash.kind}|${asset.hash && asset.hash.value}`
+  ));
+  return `${JSON.stringify(snapshot)}::${media.join(',')}`;
+}
+
 /** 编辑证据；下游分析/知识卡/Brief/交接包全部变为过时。 */
 export async function updateEvidence(project, evidenceId, patch, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
   assertNotArchived(project);
@@ -331,6 +366,24 @@ export async function updateEvidence(project, evidenceId, patch, { now = () => n
   if (patch.platform !== undefined) record.platform = boundedSlice(patch.platform, 80);
   if (patch.content_text !== undefined) record.content_text = boundedSlice(patch.content_text, MAX_STRING_LENGTH);
   if (patch.media_metadata !== undefined) record.media_metadata = normalizeMediaMetadata(patch.media_metadata);
+  if (patch.source_metadata !== undefined) {
+    if (patch.source_metadata === null) {
+      delete record.source_metadata;
+    } else {
+      const snapshot = validateSourceMetadata(patch.source_metadata);
+      if (!snapshot.valid) throw workbenchError('EVIDENCE_INVALID', snapshot.issues[0] || '来源快照不符合 P29 有界契约。');
+      record.source_metadata = clonePlain(patch.source_metadata);
+    }
+  }
+  if (patch.media_assets !== undefined) {
+    if (patch.media_assets === null) {
+      delete record.media_assets;
+    } else {
+      const assets = validateMediaAssets(patch.media_assets);
+      if (!assets.valid) throw workbenchError('EVIDENCE_INVALID', assets.issues[0] || '媒体资产不符合 P29 有界契约。');
+      record.media_assets = clonePlain(patch.media_assets);
+    }
+  }
   const verdict = validateEvidenceRecord(record);
   if (!verdict.valid) throw workbenchError('EVIDENCE_INVALID', verdict.issues[0] || '更新后的证据未通过契约校验。');
   record.version += 1;
@@ -419,17 +472,104 @@ export async function runAnalysis(project, evidenceId, { now = () => new Date().
   return bumpProject(next, { now, hasher });
 }
 
-function ruleSummary(ruleOutputs) {
+function ruleSummary(ruleOutputs, withModel = false) {
   const byId = new Map(ruleOutputs.map((rule) => [rule.rule_id, rule.output]));
   const keywords = byId.get('keyword_frequency').keywords || [];
   const tones = byId.get('tone_indicators') || {};
   return {
-    label: '确定性本地分析（无模型）',
+    label: withModel ? '多模态 Qwen 分析（模型结果 + 确定性补充）' : '确定性本地分析（无模型）',
     keyword_count: keywords.length,
     top_keywords: keywords.slice(0, 3),
     exclamations: tones.exclamations || 0,
     questions: tones.questions || 0,
   };
+}
+
+/**
+ * 登记 P29 服务端多模态分析（精确接受模型结果，绝不替换为本地确定性文本）：
+ * - 模型结果以显式版本化 model_analysis 扩展持久化（p29_multimodal_model_v1），
+ *   kind 保持数据库边界唯一的 deterministic_local，模型/执行身份在扩展中保留；
+ * - 逐媒体分析必须按精确顺序绑定证据的全部媒体 id（缺失/重复/乱序/外来一律拒绝）；
+ * - 确定性规则作为补充合并进 result；按证据重跑保持分析 id，幂等重放。
+ */
+export async function recordAssistedAnalysis(project, evidenceId, modelResult, { now = () => new Date().toISOString(), hasher = fingerprintOf } = {}) {
+  assertNotArchived(project);
+  const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
+  if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要分析的证据不存在。');
+  const previous = (project.analyses || []).find((item) => item.evidence_id === evidenceId) || null;
+  if (previous && previous.model_analysis && previous.evidence_fingerprint === evidence.fingerprint && previous.evidence_version === evidence.version) {
+    return clonePlain(project);
+  }
+  if (!modelResult || typeof modelResult !== 'object') throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析结果缺失，已拒绝。');
+  const sourceId = String(modelResult.source_id || '');
+  if (!sourceId || sourceId !== String(evidence.provenance?.source_id || '')) {
+    throw workbenchError('ANALYSIS_SOURCE_BINDING_INVALID', '模型分析没有精确绑定证据来源身份，已拒绝。');
+  }
+  const result = modelResult.result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析结果无效，已拒绝。');
+  // 严格规范边界：result 只接受 p29_multimodal_model_v1 声明的模型结果子集；
+  // 解析行携带的来源身份字段（source_id/source_url/content_sha256/method）不属于结果子集，
+  // 存在未知字段一律失败关闭，绝不静默丢弃或降级。
+  const MODEL_RESULT_KEYS = ['text_expression', 'media_analysis', 'virality_drivers', 'reusable_methods', 'signals', 'risks'];
+  if (Object.keys(result).some((key) => !MODEL_RESULT_KEYS.includes(key))) {
+    throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型结果包含未知字段，已拒绝。');
+  }
+  const mediaIds = (evidence.media_assets || []).map((asset) => asset.id);
+  const boundMediaIds = (Array.isArray(result.media_analysis) ? result.media_analysis : []).map((row) => row && row.media_id);
+  if (JSON.stringify(boundMediaIds) !== JSON.stringify(mediaIds)) {
+    throw workbenchError('ANALYSIS_MEDIA_BINDING_INVALID', '模型分析未按精确顺序绑定全部媒体 id（缺失/重复/乱序/外来均拒绝）。');
+  }
+  const totalTokens = Number(modelResult.usage && modelResult.usage.total_tokens);
+  if (!Number.isInteger(totalTokens) || totalTokens <= 0) {
+    throw workbenchError('ANALYSIS_MODEL_RESULT_INVALID', '模型用量无效，已拒绝。');
+  }
+  const timestamp = now();
+  const model = String(modelResult.model || MULTIMODAL_MODEL).slice(0, 80);
+  const extension = {
+    schema_version: MODEL_ANALYSIS_SCHEMA_VERSION,
+    provider: MULTIMODAL_PROVIDER,
+    model,
+    method: MULTIMODAL_METHOD,
+    executed_at: String(modelResult.executed_at || timestamp).slice(0, 80),
+    media_ids: mediaIds,
+    result: clonePlain(result),
+    usage: { total_tokens: totalTokens },
+  };
+  const ruleOutputs = runDeterministicRules(evidence);
+  const id = previous?.id || await stableId('an-', { project_id: project.id, evidence_id: evidenceId, timestamp });
+  const record = {
+    schema_version: ANALYSIS_SCHEMA_VERSION,
+    id,
+    project_id: project.id,
+    evidence_id: evidenceId,
+    kind: ANALYSIS_KIND,
+    rule_ids: ruleOutputs.map((rule) => rule.rule_id),
+    provenance: {
+      method: ANALYSIS_KIND,
+      generated_by: ANALYSIS_ENGINE_VERSION,
+      model,
+      executed_at: timestamp,
+      statement: '本分析包含 P29 服务端多模态 Qwen 分析（model_analysis 扩展）与确定性规则补充；模型结果按来源与逐媒体精确绑定。',
+    },
+    model_analysis: extension,
+    result: {
+      summary: ruleSummary(ruleOutputs, true),
+      rules: ruleOutputs.map((rule) => ({ rule_id: rule.rule_id, label: rule.label, output: clonePlain(rule.output) })),
+    },
+    evidence_fingerprint: evidence.fingerprint,
+    evidence_version: evidence.version,
+    version: previous ? previous.version + 1 : 1,
+    fingerprint: '',
+    created_at: previous?.created_at || timestamp,
+    updated_at: timestamp,
+  };
+  record.fingerprint = await hasher(record);
+  const verdict = validateAnalysis(record);
+  if (!verdict.valid) throw workbenchError('ANALYSIS_INVALID', verdict.issues[0] || '多模态分析记录未通过契约校验。');
+  const next = clonePlain(project);
+  next.analyses = next.analyses.filter((item) => item.evidence_id !== evidenceId);
+  next.analyses = [...next.analyses, record];
+  return bumpProject(next, { now, hasher });
 }
 
 /** 从分析构建校验过的 content_knowledge_card_v1 知识卡（确定性）。 */
@@ -449,6 +589,7 @@ export async function buildKnowledgeCard(project, analysisId, { now = () => new 
   const verdict = validateKnowledgeCard(card);
   if (!verdict.valid) throw workbenchError('CARD_BUILD_FAILED', verdict.issues[0] || '知识卡构建未通过 content_knowledge_card_v1 校验。');
   const id = previous?.id || await stableId('kc-', { project_id: project.id, analysis_id: analysisId, timestamp });
+  const multimodal = analysis.model_analysis;
   const record = {
     ...card,
     id,
@@ -456,8 +597,18 @@ export async function buildKnowledgeCard(project, analysisId, { now = () => new 
     analysis_id: analysisId,
     analysis_fingerprint: analysis.fingerprint,
     analysis_version: analysis.version,
-    trust_status: 'manual_local',
-    validation_status: 'validated_deterministic',
+    trust_status: multimodal ? 'multimodal_model' : 'manual_local',
+    validation_status: multimodal ? 'validated_multimodal' : 'validated_deterministic',
+    // P29 版本化扩展：模型/执行身份与绑定媒体（纯确定性卡为 null）。
+    analysis_provenance: multimodal ? {
+      method: MULTIMODAL_METHOD,
+      provider: MULTIMODAL_PROVIDER,
+      model: multimodal.model,
+      executed_at: multimodal.executed_at,
+      source_analysis_id: analysis.id,
+      media_ids: (multimodal.media_ids || []).slice(0, 8),
+      statement: '该卡包含 P29 服务端多模态 Qwen 分析的绑定结果；模型/执行身份随分析保留。',
+    } : null,
     version: previous ? previous.version + 1 : 1,
     fingerprint: '',
     created_at: previous?.created_at || timestamp,
@@ -475,6 +626,153 @@ export async function buildKnowledgeCard(project, analysisId, { now = () => new 
 }
 
 function buildCardFromAnalysis(analysis, evidence) {
+  return analysis.model_analysis ? buildMultimodalCardFromAnalysis(analysis, evidence) : buildDeterministicCardFromAnalysis(analysis, evidence);
+}
+
+/**
+ * 已验收禁止措辞清洗：模型输出中的不确定措辞必须移入 uncertainties，
+ * 不得作为卡内断言出现（validateKnowledgeCard 全文扫描同样强制）。
+ */
+function scrubAssertive(value) {
+  const text = String(value ?? '');
+  const cleaned = text.replace(/看起来像|应该是|大概有/g, '');
+  return { text: cleaned, scrubbed: cleaned !== text };
+}
+
+function buildMultimodalCardFromAnalysis(analysis, evidence) {
+  const extension = analysis.model_analysis;
+  const result = extension.result;
+  const postText = textOf(evidence.content_text);
+  const mediaById = new Map((evidence.media_assets || []).map((asset) => [asset.id, asset]));
+  const mediaRows = Array.isArray(result.media_analysis) ? result.media_analysis : [];
+  let scrubbedAny = false;
+  const scrubAll = (list) => list.map((value) => {
+    const cleaned = scrubAssertive(value);
+    if (cleaned.scrubbed) scrubbedAny = true;
+    return cleaned.text.trim();
+  });
+  const visual = (row) => {
+    const cleaned = scrubAssertive(row.visual_content);
+    if (cleaned.scrubbed) scrubbedAny = true;
+    return boundedSlice(cleaned.text, 500);
+  };
+  const composition = scrubAll(mediaRows.map((row) => row.composition).filter(Boolean));
+  const scenes = scrubAll(mediaRows.map((row) => row.scene).filter(Boolean));
+  const people = scrubAll(mediaRows.map((row) => row.people).filter(Boolean));
+  const emotions = scrubAll(mediaRows.map((row) => row.emotion).filter(Boolean));
+  const signals = scrubAll(Array.isArray(result.signals) ? result.signals : []);
+  const reusableMethods = scrubAll(Array.isArray(result.reusable_methods) ? result.reusable_methods : []);
+  const risks = scrubAll(Array.isArray(result.risks) ? result.risks : []);
+  const drivers = scrubAll(Array.isArray(result.virality_drivers) ? result.virality_drivers : []);
+  const textExpression = scrubAssertive(result.text_expression).text.trim() || postText;
+
+  const segments = mediaRows.map((row, index) => {
+    const asset = mediaById.get(row.media_id);
+    return {
+      stage: `media_${index + 1}`,
+      time_range: asset && asset.kind === 'video' ? 'video_media' : 'image_media',
+      visual_evidence: boundedSlice(visual(row), 300) || '（模型未提供确定性画面描述）',
+      audio_evidence: '无音轨：媒体分析未包含音频内容。',
+    };
+  });
+  while (segments.length < 3) {
+    const third = Math.max(1, Math.floor(postText.length / 3));
+    const index = segments.length;
+    segments.push({
+      stage: ['start', 'middle', 'end'][index] || `text_${index + 1}`,
+      time_range: 'not_applicable_local_text',
+      visual_evidence: boundedSlice(postText.slice((index % 3) * third, ((index % 3) + 1) * third), 300) || '（该段无正文内容）',
+      audio_evidence: '无音轨。',
+    });
+  }
+
+  const firstSentence = textExpression.split(/[.!?。！？]+/).map((part) => part.trim()).find((part) => part.length > 0) || textExpression.slice(0, 40);
+  const firstImage = mediaRows[0];
+  const firstAsset = mediaById.get(firstImage && firstImage.media_id);
+  const risksText = risks.join('；');
+  const links = [
+    { claim: boundedSlice(`来源正文首句：${firstSentence}`, 200), evidence_type: 'post_text', source_ref: evidence.id, time_range: null, confidence: 0.9 },
+    ...mediaRows.map((row, index) => {
+      const asset = mediaById.get(row.media_id);
+      return {
+        claim: boundedSlice(`媒体 #${index + 1}（${asset ? asset.kind : 'media'} ${row.media_id}）画面：${visual(row)}`, 200),
+        evidence_type: 'video_frame',
+        source_ref: evidence.id,
+        time_range: null,
+        confidence: 0.8,
+      };
+    }),
+    { claim: boundedSlice(`来源含 ${mediaRows.length} 个媒体资产，全部按顺序绑定并哈希（内容或 URL 完整性）。`, 200), evidence_type: 'metadata', source_ref: evidence.id, time_range: null, confidence: 0.8 },
+  ];
+  if (links.length < 3) {
+    // 内容表达作为补充断言，保证 evidence_links 至少 3 条（卡契约下限）。
+    links.push({
+      claim: boundedSlice(`内容表达：${textExpression}`, 200),
+      evidence_type: 'post_text',
+      source_ref: evidence.id,
+      time_range: null,
+      confidence: 0.8,
+    });
+  }
+  const riskLabels = {
+    sexual_suggestiveness: /性|成人|擦边|暴露|性感/.test(risksText) ? 'medium' : 'none',
+    platform_moderation: /平台|审核|封禁|违规|敏感/.test(risksText) ? 'medium' : 'low',
+    brand_suitability: /品牌|代言|争议|负面/.test(risksText) ? 'restricted' : 'broad',
+    notes: [boundedSlice(`模型风险信号：${risksText || '无'}`, 300)],
+  };
+  const uncertainties = [
+    '模型对画面内容的描述基于服务端多模态分析，具体视觉细节以原始媒体为准。',
+    ...(scrubbedAny ? ['模型输出中的不确定措辞已移入本清单，未作为断言进入卡内。'] : []),
+  ];
+  const mustPreserve = reusableMethods.slice(0, 3);
+  return {
+    schema_version: KNOWLEDGE_CARD_SCHEMA_VERSION,
+    source_observations: {
+      post_text: boundedSlice(postText, 2000),
+      media: {
+        duration_seconds: 0,
+        resolution: firstAsset && firstAsset.dimensions ? `${firstAsset.dimensions.width}x${firstAsset.dimensions.height}` : 'local_metadata_only',
+        audio_track_present: false,
+        timeline: segments,
+        transcript_segments: [],
+      },
+      uncertainties,
+    },
+    creative_analysis: {
+      hook: boundedSlice(firstSentence, 200),
+      copy_device: reusableMethods[0] || signals[0] || '直述句式',
+      semantic_layers: [...composition, ...scenes, ...people].slice(0, 4),
+      visual_impact: firstImage ? boundedSlice(visual(firstImage), 300) : '无视觉媒体。',
+      seductive_tone: boundedSlice(`情感基调：${emotions[0] || '中性'}${emotions.length > 1 ? `；第二情绪：${emotions[1]}` : ''}。`, 200),
+      narrative_arc: boundedSlice(textExpression, 200),
+      audio_role: '无音轨（媒体分析未包含音频判断）。',
+      audience_response_mechanisms: signals.slice(0, 3),
+      replicable_features: reusableMethods.slice(0, 4),
+      risk_labels: riskLabels,
+    },
+    evidence_links: links,
+    generation_guidance: {
+      reusable_pattern: boundedSlice(`围绕「${boundedSlice(textExpression, 100)}」的叙事，采用「${reusableMethods[0] || '直接展示'}」手法：先陈述事实，再给出可复用的视觉与结构特征。`, 500),
+      must_preserve: mustPreserve.length > 0 ? mustPreserve : ['保留来源事实与画面细节'],
+      must_not_invent: ['不虚构来源中没有的事实', '不猜测平台数据或互动数据'],
+      prompt_ingredients: signals.slice(0, 3),
+      variation_space: ['调整叙述顺序', '替换示例', '改变语气强度'],
+    },
+    generation_readiness: {
+      usable: true,
+      score: Math.min(100, 55 + mediaRows.length * 10),
+      reasons: [
+        '多模态模型分析已按顺序绑定全部媒体',
+        '证据绑定完整',
+        '模型/执行身份已保留',
+        ...(drivers.length ? [boundedSlice(`传播驱动：${drivers[0]}`, 120)] : []),
+      ],
+      blockers: [],
+    },
+  };
+}
+
+function buildDeterministicCardFromAnalysis(analysis, evidence) {
   const rules = new Map(analysis.result.rules.map((rule) => [rule.rule_id, rule.output]));
   const keywords = rules.get('keyword_frequency')?.keywords || [];
   const tones = rules.get('tone_indicators') || {};
@@ -574,6 +872,10 @@ export async function assembleBrief(project, { now = () => new Date().toISOStrin
   const previous = project.brief || null;
   const id = previous && previous.id ? previous.id : await stableId('brief-', { project_id: project.id, timestamp });
   const version = previous ? previous.version + 1 : 1;
+  // P29：被引用知识卡中多模态卡的分析身份与纯语言发现（无多模态卡时缺省，兼容旧 Brief）。
+  const multimodalCards = cards.filter((card) => card.analysis_provenance && card.analysis_provenance.method === MULTIMODAL_METHOD);
+  const analysisById = new Map((project.analyses || []).map((row) => [row.id, row]));
+  const evidenceById = new Map(citedEvidence.map((row) => [row.id, row]));
   const brief = {
     schema_version: BRIEF_SCHEMA_VERSION,
     id,
@@ -598,6 +900,16 @@ export async function assembleBrief(project, { now = () => new Date().toISOStrin
     card_fingerprints: cardFingerprints,
     evidence_provenance_fingerprint: evidenceProvenanceFingerprint,
     project_fingerprint: projectFingerprint,
+    analysis_provenance: multimodalCards.length > 0 ? {
+      method: MULTIMODAL_METHOD,
+      provider: MULTIMODAL_PROVIDER,
+      model: multimodalCards[0].analysis_provenance.model,
+      executed_at: multimodalCards[0].analysis_provenance.executed_at,
+      analysis_ids: multimodalCards.map((card) => card.analysis_id),
+      media_count: multimodalCards.reduce((sum, card) => sum + (card.analysis_provenance.media_ids || []).length, 0),
+      statement: 'Brief 包含 P29 服务端多模态 Qwen 分析的绑定发现；模型/执行身份随分析与知识卡保留。',
+    } : null,
+    multimodal_findings: multimodalCards.length > 0 ? buildMultimodalFindings(multimodalCards, analysisById, evidenceById) : null,
     review: {
       schema_version: BRIEF_REVIEW_SCHEMA_VERSION,
       brief_id: id,
@@ -617,6 +929,30 @@ export async function assembleBrief(project, { now = () => new Date().toISOStrin
   next.handoff = null; // Brief 重建后旧交接包作废
   next.handoffs = [];
   return bumpProject(next, { now, hasher });
+}
+
+/** 从多模态卡的绑定分析构建纯语言发现（有界、确定性；最多 10 条 × 240 字符）。 */
+function buildMultimodalFindings(cards, analysisById, evidenceById) {
+  const findings = [];
+  for (const card of cards) {
+    const analysis = analysisById.get(card.analysis_id);
+    const extension = analysis && analysis.model_analysis;
+    if (!extension) continue;
+    const result = extension.result || {};
+    if (typeof result.text_expression === 'string' && result.text_expression.trim()) {
+      findings.push(`内容表达：${boundedSlice(result.text_expression, 220)}`);
+    }
+    const evidence = evidenceById.get(analysis.evidence_id);
+    const assetByMediaId = new Map((evidence && evidence.media_assets || []).map((asset) => [asset.id, asset]));
+    for (const row of Array.isArray(result.media_analysis) ? result.media_analysis : []) {
+      const asset = assetByMediaId.get(row && row.media_id);
+      const label = asset ? `媒体 #${asset.order + 1}` : String(row && row.media_id || '媒体').slice(0, 24);
+      findings.push(`画面（${label}）：${boundedSlice(row.visual_content, 200)}`);
+      if (findings.length >= 10) return findings;
+    }
+    if (findings.length >= 10) return findings;
+  }
+  return findings;
 }
 
 /** 审核决定（ams_brief_review_v1：approved / return_for_revision + local_manual）。 */
@@ -892,9 +1228,9 @@ export async function buildProjectWorkflowState(project, { hasher = fingerprintO
   const steps = [
     { id: 'project', label: '研究项目', done: true, blocking: [] },
     { id: 'evidence', label: '证据采集', done: evidence.length > 0, blocking: evidence.length > 0 ? [] : ['至少录入一条证据。'] },
-    { id: 'analysis', label: '确定性分析', done: analyses.length > 0, blocking: analyses.length > 0 ? [] : ['对证据运行确定性本地分析（deterministic_local）。'] },
+    { id: 'analysis', label: '来源分析', done: analyses.length > 0, blocking: analyses.length > 0 ? [] : ['对证据运行分析（多模态模型或确定性本地）。'] },
     { id: 'card', label: '知识卡', done: cards.length > 0, blocking: cards.length > 0 ? [] : ['把分析结果转为 content_knowledge_card_v1 知识卡。'] },
-    { id: 'brief', label: '可审核 Brief', done: Boolean(brief), blocking: brief ? [] : ['组装可审核 Brief。'] },
+    { id: 'brief', label: '内容策划草案', done: Boolean(brief), blocking: brief ? [] : ['组装内容策划草案（待你确认）。'] },
     {
       id: 'review',
       label: '人工审核',

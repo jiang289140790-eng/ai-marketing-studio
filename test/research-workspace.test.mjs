@@ -75,6 +75,17 @@ const OWNED_PATHS = new Set([
   // P19 合并修复 2（repair 2）：api 架构客户端路径测试 + 项目切换浏览器测试。
   'test/p19-api-schema.test.mjs',
   'test/p19-browser-switch.test.mjs',
+  // P29 多模态 X 证据闭环新增授权路径（本里程碑）。
+  'supabase/functions/p22-research-assist/assist-core.mjs',
+  'supabase/functions/p22-research-assist/index.ts',
+  'src/services/p22-research-assist.js',
+  'src/components/integrated-workspace/P22ResearchAssistPanel.jsx',
+  'test/p22-assisted-research.test.mjs',
+  'test/p23-link-evidence-knowledge.test.mjs',
+  'test/p24-knowledge-brief-review.test.mjs',
+  'test/p29-multimodal-x-evidence.test.mjs',
+  'test/p29-multimodal-x-evidence.browser.test.mjs',
+  'docs/P29_MULTIMODAL_X_EVIDENCE_LOOP.md',
 ]);
 
 // P19 已验收迁移对账唯一允许的删除：5 个过时时间戳变体，由已验收规范文件替代。

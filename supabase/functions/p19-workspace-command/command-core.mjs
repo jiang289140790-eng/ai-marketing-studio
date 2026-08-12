@@ -104,7 +104,7 @@ const COMMAND_FIELDS = Object.freeze({
 });
 
 const PROJECT_PATCH_FIELDS = ['topic', 'objective', 'audience', 'channel', 'constraints'];
-const EVIDENCE_PATCH_FIELDS = ['source_url', 'label', 'platform', 'content_text', 'media_metadata'];
+const EVIDENCE_PATCH_FIELDS = ['source_url', 'label', 'platform', 'content_text', 'media_metadata', 'source_metadata', 'media_assets'];
 
 /** 证据表 required 列 recorded_at 的 ISO-8601 模式（与边界 timestamptz 转换一致）。 */
 const ISO8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
@@ -649,6 +649,8 @@ async function applyEvidenceCreate(ctx) {
     recorded_at: recordedAt,
     provenance: isPlainObject(raw.provenance) ? clonePlain(raw.provenance) : { manual: true, statement: '服务端登记：来源由人工提交。' },
     media_metadata: isPlainObject(raw.media_metadata) ? clonePlain(raw.media_metadata) : null,
+    source_metadata: raw.source_metadata === undefined ? undefined : (raw.source_metadata === null ? null : clonePlain(raw.source_metadata)),
+    media_assets: raw.media_assets === undefined ? undefined : clonePlain(raw.media_assets),
     version: 1,
     fingerprint: '',
     created_at: p22Source ? recordedAt : new Date().toISOString(),
@@ -737,6 +739,14 @@ async function applyEvidenceUpdate(ctx) {
   if (patch.platform !== undefined) next.platform = String(patch.platform).trim().slice(0, 80);
   if (patch.content_text !== undefined) next.content_text = String(patch.content_text).slice(0, 5000);
   if (patch.media_metadata !== undefined) next.media_metadata = isPlainObject(patch.media_metadata) ? clonePlain(patch.media_metadata) : null;
+  if (patch.source_metadata !== undefined) {
+    if (patch.source_metadata === null) delete next.source_metadata;
+    else next.source_metadata = clonePlain(patch.source_metadata);
+  }
+  if (patch.media_assets !== undefined) {
+    if (patch.media_assets === null) delete next.media_assets;
+    else next.media_assets = clonePlain(patch.media_assets);
+  }
   const { valid, issues } = validateEvidenceRecord(next);
   if (!valid) return fail('EVIDENCE_INVALID', '更新后的证据未通过契约校验。', { entity: { type: 'evidence', id: evidenceId }, diagnostics: boundedDiagnostics(issues) });
   next.version = (record.version || 1) + 1;
@@ -816,7 +826,7 @@ async function applyAnalysisCreate(ctx) {
   const baseline = requireExpectedFingerprint(payload, previous, 'analysis', String(record.id || '').slice(0, 200));
   if (!baseline.ok) return baseline;
   const { valid, issues } = validateAnalysis(record);
-  if (!valid) return fail('ANALYSIS_INVALID', '分析记录未通过 P19 分析契约校验（kind 必须为 deterministic_local）。', { entity: { type: 'project', id: owned.projectId }, diagnostics: boundedDiagnostics(issues) });
+  if (!valid) return fail('ANALYSIS_INVALID', '分析记录未通过 P19 分析契约校验（kind 恒为 deterministic_local；P29 模型结果必须为显式 model_analysis 扩展）。', { entity: { type: 'project', id: owned.projectId }, diagnostics: boundedDiagnostics(issues) });
   const hashCheck = await requireHash(record, ctx.payloadSha256, hasher);
   if (!hashCheck.ok) return hashCheck;
   const write = await boundaryWrite(ctx, {

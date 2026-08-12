@@ -2,7 +2,7 @@
 // 暗色视觉体系沿用 P18 词汇；中文文案 UTF-8；状态不只靠颜色（文字 + 图标）。
 // 本组件不发起任何网络请求。
 
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   EXECUTION_FLAG_LABELS,
   MAX_STRING_LENGTH,
@@ -296,7 +296,20 @@ export function P19EvidenceList({ project, onAdd, onUpdate, onRemove, onAnalyze,
             <p className="p19-meta-line">
               {boundedText(record.platform, 24)} · {boundedText(record.source_url, 48)}
             </p>
+            {record.source_metadata?.author && (
+              <p className="p19-meta-line">
+                作者：{boundedText(record.source_metadata.author.name || record.source_metadata.author.handle || '未知', 40)}
+                {record.source_metadata.author.handle ? ` @${boundedText(record.source_metadata.author.handle, 30)}` : ''}
+                {record.source_metadata.published_at ? ` · ${boundedText(record.source_metadata.published_at, 16)}` : ''}
+              </p>
+            )}
             <p className="p19-evidence-text">{boundedText(record.content_text, 220)}</p>
+            {Array.isArray(record.media_assets) && record.media_assets.length > 0 && (
+              <p className="p19-meta-line">
+                真实媒体 {record.media_assets.length} 项（按顺序绑定）：{record.media_assets.slice(0, 3).map((asset) => `#${asset.order + 1} ${boundedText(asset.kind, 6)}`).join(' · ')}
+                {record.media_assets.length > 3 ? ' …' : ''}
+              </p>
+            )}
             {record.media_metadata && (
               <p className="p19-meta-line" title={record.media_metadata.sha256}>
                 媒体元数据：{boundedText(record.media_metadata.filename, 40)} · {record.media_metadata.byte_size} 字节 · {record.media_metadata.sha256.slice(0, 12)}…
@@ -330,25 +343,40 @@ export function P19AnalysisList({ project, onMakeCard, busy }) {
   return (
     <div className="p19-panel">
       <div className="p19-panel-head">
-        <h3>确定性本地分析（deterministic_local）</h3>
-        <span className="p19-panel-note">显式规则 · 无模型 · 无费用</span>
+        <h3>来源分析（多模态模型 / deterministic_local）</h3>
+        <span className="p19-panel-note">模型结果精确绑定保存 · 确定性规则补充 · 无费用隐藏项</span>
       </div>
       <p className="p19-provenance-line">
-        所有分析均由固定规则在本机计算（来源 URL 形状、文本长度、关键词频次、语气标记、媒体元数据边界、人工来源可信度），绝不调用任何模型。
+        带媒体来源的 P29 分析把服务端多模态 Qwen 结果按来源与媒体精确绑定持久化（model_analysis 扩展）；纯文本来源沿用确定性本地规则（来源 URL 形状、文本长度、关键词频次、语气标记、媒体元数据边界、人工来源可信度），绝不调用任何模型。
       </p>
-      {analyses.length === 0 && <p className="p19-empty-note">还没有分析记录。在证据卡片上点击「运行确定性分析」。</p>}
+      {analyses.length === 0 && <p className="p19-empty-note">还没有分析记录。在证据卡片上点击「运行确定性分析」，或在智能研究面板一键生成多模态分析。</p>}
       <ul className="p19-analysis-list">
         {analyses.map((analysis) => {
           const evidence = evidenceById.get(analysis.evidence_id);
+          const modelAnalysis = analysis.model_analysis;
           return (
             <li className="p19-analysis-item" key={analysis.id}>
               <div className="p19-analysis-top">
                 <strong>{boundedText(analysis.result.summary.label, 48)}</strong>
-                <P19Pill label="deterministic_local" tone="ok" icon="⚙" />
+                {modelAnalysis
+                  ? <P19Pill label={boundedText(modelAnalysis.model, 30)} tone="ok" icon="◇" />
+                  : <P19Pill label="deterministic_local" tone="ok" icon="⚙" />}
               </div>
               <p className="p19-meta-line">
                 证据：{evidence ? boundedText(evidence.label, 40) : '（证据已移除，绑定失效）'} · 规则 {analysis.rule_ids.length} 条 · {analysis.provenance.generated_by}
               </p>
+              {modelAnalysis && (
+                <div className="p19-findings">
+                  <b>多模态结论（已绑定保存，模型 {boundedText(modelAnalysis.model, 40)}）：</b>
+                  <p className="p19-evidence-text">{boundedText(modelAnalysis.result.text_expression, 240)}</p>
+                  <ul className="p19-comment-list">
+                    {(modelAnalysis.result.media_analysis || []).map((row) => (
+                      <li key={row.media_id}>画面（{row.media_id}）：{boundedText(row.visual_content, 140)}</li>
+                    ))}
+                    <li>信号：{(modelAnalysis.result.signals || []).slice(0, 3).join('；') || '无'} · 风险：{(modelAnalysis.result.risks || []).slice(0, 3).join('；') || '无'}</li>
+                  </ul>
+                </div>
+              )}
               <ul className="p19-rule-list">
                 {(analysis.result.rules || []).slice(0, 6).map((rule) => (
                   <li key={rule.rule_id}>
@@ -405,6 +433,7 @@ export function P19CardList({ project, workflow }) {
             </div>
             <p className="p19-meta-line">
               分析 {boundedText(card.analysis_id, 20)} · 信任 {card.trust_status} · 引用 {card.evidence_links.length} 条
+              {card.analysis_provenance ? ` · 模型 ${boundedText(card.analysis_provenance.model, 30)}（媒体 ${card.analysis_provenance.media_ids.length} 项）` : ''}
             </p>
             <p className="p19-evidence-text">钩子：{boundedText(card.creative_analysis.hook, 120)}</p>
             <p className="p19-meta-line">可复用特征：{card.generation_guidance.must_preserve.slice(0, 4).join('、')}</p>
@@ -426,6 +455,16 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
   const returned = Boolean(decision && decision.value === 'return_for_revision');
   const canReview = Boolean(brief) && brief.status === 'pending_review' && !stale && !approved;
   const canSubmitReview = canReview && Boolean(rationale.trim());
+  // 引用证据数（经知识卡 → 分析 → 证据的去重绑定）与媒体计数。
+  const citedEvidenceCount = useMemo(() => {
+    if (!brief) return 0;
+    const analysisById = new Map((project.analyses || []).map((row) => [row.id, row]));
+    const ids = new Set((project.knowledge_cards || [])
+      .filter((card) => brief.knowledge_citation_ids.includes(card.id))
+      .map((card) => analysisById.get(card.analysis_id)?.evidence_id)
+      .filter(Boolean));
+    return ids.size;
+  }, [brief, project.analyses, project.knowledge_cards]);
   const decide = (value) => {
     onDecide(value, rationale.trim(), comment.trim());
     setRationale('');
@@ -434,22 +473,22 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
   return (
     <div className="p19-panel">
       <div className="p19-panel-head">
-        <h3>可审核 Brief（ams_brief_review_v1）</h3>
+        <h3>内容策划草案（待你确认）</h3>
         {brief ? (
           <span className="p19-panel-note">
-            第 {brief.version} 版 · {brief.status === 'approved' ? '已批准' : brief.status === 'returned' ? '已退回' : '待审核'}
+            第 {brief.version} 版 · {brief.status === 'approved' ? '已批准' : brief.status === 'returned' ? '已退回' : '待确认'}
             {stale ? ' · 已过时' : ''}
           </span>
         ) : (
-          <span className="p19-panel-note">尚未组装</span>
+          <span className="p19-panel-note">尚未生成</span>
         )}
       </div>
       {!brief && (
         <>
-          <p className="p19-empty-note">Brief 由知识卡与项目档案确定性组装；任何上游变化都会使旧 Brief 过时并要求重建。</p>
+          <p className="p19-empty-note">草案由证据、来源分析（多模态模型结果或确定性规则）与知识卡组装；任何上游变化都会使旧草案过时并要求重新生成。</p>
           <div className="p19-form-actions">
-            <button className="p19-btn p19-btn-primary" type="button" disabled={busy || (project.knowledge_cards || []).length === 0} title={(project.knowledge_cards || []).length === 0 ? '至少需要一张知识卡' : '组装可审核 Brief（版本递增，审核重置）'} onClick={onAssemble}>
-              组装 Brief
+            <button className="p19-btn p19-btn-primary" type="button" disabled={busy || (project.knowledge_cards || []).length === 0} title={(project.knowledge_cards || []).length === 0 ? '至少需要一张知识卡' : '生成内容策划草案（版本递增，确认状态重置）'} onClick={onAssemble}>
+              生成内容策划草案
             </button>
           </div>
         </>
@@ -460,11 +499,23 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
             <strong>主题：</strong>{boundedText(brief.topic, 80)} · <strong>目标：</strong>{boundedText(brief.objective, 120)}
           </p>
           <p className="p19-provenance-line">
-            引用知识卡 {brief.knowledge_citation_ids.length} 张 · 结构建议 {brief.structural_guidance.length} 条 · {brief.version_note || ''}
+            引用知识卡 {brief.knowledge_citation_ids.length} 张 · 引用证据 {citedEvidenceCount} 条
+            {brief.analysis_provenance ? ` · 绑定媒体 ${brief.analysis_provenance.media_count} 项（${boundedText(brief.analysis_provenance.model, 40)}）` : ''}
+          </p>
+          {brief.multimodal_findings && brief.multimodal_findings.length > 0 && (
+            <div className="p19-findings">
+              <b>系统结论（来自绑定保存的多模态分析）：</b>
+              <ul className="p19-comment-list">
+                {brief.multimodal_findings.map((item, index) => <li key={index}>{boundedText(item, 220)}</li>)}
+              </ul>
+            </div>
+          )}
+          <p className="p19-meta-line">
+            批准本草案后即可派生 P5 交接包；本页不会生成内容、选择工作流、路由、创建任务或发布，四项执行标志恒为 false。
           </p>
           {stale && (
             <p className="p19-blocking-note">
-              ⛔ Brief 已过时：{workflow.brief_stale_reasons.join('；')}。请「重建 Brief」后再审核。
+              ⛔ 草案已过时：{workflow.brief_stale_reasons.join('；')}。请「重新生成草案」后再确认。
             </p>
           )}
           {decision ? (
@@ -472,7 +523,7 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
               决定：<b>{decision.value === 'approved' ? '批准' : '退回修改'}</b>（来源 {decision.source}）· {decision.decided_at} · 理由：{boundedText(decision.rationale, 100)}
             </p>
           ) : (
-            <p className="p19-meta-line">尚无审核决定。批准前必须确保 Brief 未过时。</p>
+            <p className="p19-meta-line">尚无确认决定。批准前必须确保草案未过时。</p>
           )}
           {(brief.review.comments || []).length > 0 && (
             <ul className="p19-comment-list">
@@ -480,11 +531,11 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
             </ul>
           )}
           <div className="p19-brief-actions">
-            <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={onAssemble} title="上游内容变化后必须重建 Brief 才能重新审核">
-              重建 Brief（第 {brief.version + 1} 版）
+            <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={onAssemble} title="上游内容变化后必须重新生成草案才能重新确认">
+              重新生成草案（第 {brief.version + 1} 版）
             </button>
             <label className="p19-field p19-inline-field">
-              <span>审核意见（必填，≤500 字）</span>
+              <span>确认意见（必填，≤500 字）</span>
               <textarea rows={2} value={rationale} maxLength={500} onChange={(event) => setRationale(event.target.value)} disabled={!canReview} />
             </label>
             <div className="p19-review-actions">
@@ -492,16 +543,16 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
                 className="p19-btn p19-btn-approve"
                 type="button"
                 disabled={busy || !canSubmitReview}
-                title={!canReview ? (stale ? 'Brief 已过时，先重建' : approved ? '本版已批准' : '先组装 Brief') : !rationale.trim() ? '请先填写审核意见' : '批准（approved + local_manual）后才可派生交接包'}
+                title={!canReview ? (stale ? '草案已过时，先重新生成' : approved ? '本版已批准' : '先生成草案') : !rationale.trim() ? '请先填写确认意见' : '批准（approved + local_manual）后才可派生交接包'}
                 onClick={() => decide('approved')}
               >
-                批准 Brief
+                批准草案
               </button>
               <button
                 className="p19-btn p19-btn-return"
                 type="button"
                 disabled={busy || !canSubmitReview}
-                title={!canReview ? (stale ? 'Brief 已过时，先重建' : approved ? '本版已批准' : '先组装 Brief') : '退回修改（return_for_revision）'}
+                title={!canReview ? (stale ? '草案已过时，先重新生成' : approved ? '本版已批准' : '先生成草案') : '退回修改（return_for_revision）'}
                 onClick={() => decide('return_for_revision')}
               >
                 退回修改
@@ -512,7 +563,20 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
               <textarea rows={2} value={comment} maxLength={1000} onChange={(event) => setComment(event.target.value)} disabled={busy || returned || approved} />
             </label>
           </div>
-          <p className="p19-provenance-line">{onlineMode ? '审核决定会保存到当前 staging 账号的工作区（local_manual 表示由人工作出决定，不是模型自动批准）。' : '审核决定与评论只记录在本浏览器（local_manual）；退回后请修改内容并重建 Brief。'}</p>
+          <details className="p19-details">
+            <summary>查看技术细节（id / 版本 / 来源绑定）</summary>
+            <pre className="p19-pre">{JSON.stringify({
+              brief_id: brief.id,
+              brief_version: brief.version,
+              schema_version: brief.schema_version,
+              review_schema_version: brief.review.schema_version,
+              knowledge_citation_ids: brief.knowledge_citation_ids,
+              analysis_provenance: brief.analysis_provenance,
+              evidence_provenance_fingerprint: brief.evidence_provenance_fingerprint,
+              project_fingerprint: brief.project_fingerprint,
+            }, null, 2)}</pre>
+          </details>
+          <p className="p19-provenance-line">{onlineMode ? '确认决定会保存到当前 staging 账号的工作区（local_manual 表示由人工作出决定，不是模型自动批准）。' : '确认决定与评论只记录在本浏览器（local_manual）；退回后请修改内容并重新生成草案。'}</p>
         </>
       )}
     </div>

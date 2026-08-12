@@ -1,5 +1,8 @@
 export const P22_SCHEMA_VERSION = 'p22_research_assist_v1';
-export const P22_COLLECTION_PROOF_VERSION = 'p22_collection_proof_v2';
+/** P22 采集证明 v3：绑定正文哈希 + 来源身份 + 作者/时间/互动快照 + 每条有序媒体身份/哈希。 */
+export const P22_COLLECTION_PROOF_VERSION = 'p22_collection_proof_v3';
+/** 旧版证明（无媒体绑定）；仅接受不含 P29 扩展字段的存量记录。 */
+export const P22_COLLECTION_PROOF_V2_VERSION = 'p22_collection_proof_v2';
 export const P22_LIMITS = Object.freeze({
   collect: 5,
   analyze: 2,
@@ -14,6 +17,34 @@ export const P22_LIMITS = Object.freeze({
   cost_stabilize_polls: 3,
   /** 稳定读取之间的有界等待间隔；整个稳定步骤在 apify_sequence_ms 总超时内。 */
   cost_stabilize_interval_ms: 1500,
+  /** 单帖媒体声明上限（正常 X 帖子上限）；超出必须硬失败，绝不静默截断。 */
+  max_media: 8,
+  /** 内容哈希抓取：单媒体超时。 */
+  media_fetch_timeout_ms: 15000,
+  /** 内容哈希抓取：单媒体字节上限（12 MiB，与媒体元数据边界一致）。 */
+  media_max_bytes: 12 * 1024 * 1024,
+  /** 内容哈希抓取：重定向跳数上限（每跳都必须仍是严格 X/Twitter CDN 白名单）。 */
+  media_redirect_max: 5,
+});
+
+// ---- P29 多模态证据扩展常量（与 p19-contracts.js 保持语义一致；本文件自包含以便 Deno 部署）----
+export const P29_MAX_MEDIA = 8;
+export const P29_MEDIA_KINDS = Object.freeze(['image', 'video', 'gif']);
+export const P29_HASH_KINDS = Object.freeze(['url', 'content']);
+export const P29_ENGAGEMENT_KEYS = Object.freeze(['likes', 'retweets', 'replies', 'quotes', 'views', 'bookmarks']);
+export const P29_MAX_ENGAGEMENT = 1000000000000;
+export const P29_MAX_MEDIA_BYTES = 12 * 1024 * 1024;
+export const P29_MEDIA_ID_PATTERN = /^m-[0-9a-f]{24}$/;
+export const P29_MODEL_SCHEMA_VERSION = 'p29_multimodal_model_v1';
+export const P29_MODEL = 'qwen3.5-omni-flash';
+export const P29_MODEL_PROVIDER = 'dashscope';
+export const P29_MODEL_METHOD = 'multimodal_model';
+/** 内容哈希抓取只允许的严格 X/Twitter CDN 主机（重定向目标必须再次命中白名单）。 */
+export const P22_MEDIA_CDN_ALLOWLIST = new Set(['pbs.twimg.com', 'video.twimg.com', 'abs.twimg.com']);
+const P22_ISO8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+const P22_MEDIA_EXT_MIME = Object.freeze({
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm',
 });
 export const P22_EXECUTION_FLAGS = Object.freeze({ generation_executed: false, routing_executed: false, external_job_created: false, publish_executed: false });
 /** 人民币兑美元汇率，仅用于把有界的 Apify 预留金额换算成 API 的有界成本上限。 */
@@ -25,7 +56,7 @@ const ACTION_FIELDS = Object.freeze({
   collect_url: new Set(['action', 'url']),
   analyze: new Set(['action', 'items']),
 });
-const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof']);
+const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof', 'source_metadata', 'media_assets']);
 const PROVENANCE_FIELDS = new Set(['schema_version', 'provider', 'run_id', 'collected_at', 'usage_total_usd', 'budget_reservation_id']);
 
 export class P22Error extends Error {
@@ -40,6 +71,16 @@ export class P22Error extends Error {
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function clonePlain(value) {
+  if (Array.isArray(value)) return value.map(clonePlain);
+  if (value !== null && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = clonePlain(value[key]);
+    return out;
+  }
+  return value;
 }
 
 function text(value, field, max, required = true) {
@@ -129,6 +170,17 @@ export function parseP22Request(raw) {
     const item = object(rawItem);
     if (!item) throw new P22Error('INVALID_ITEM', '分析项目必须是对象。', 400, { field: `items[${index}]` });
     exactFields(item, ITEM_FIELDS, `items[${index}]`);
+    const sourceMetadata = item.source_metadata === undefined ? undefined : (item.source_metadata === null ? null : object(item.source_metadata));
+    if (item.source_metadata !== undefined && (item.source_metadata === null ? false : !sourceMetadata)) {
+      throw new P22Error('INVALID_ITEM', '来源快照必须是对象或 null。', 400, { field: `items[${index}].source_metadata` });
+    }
+    if (sourceMetadata !== undefined && !validateSourceMetadataShape(sourceMetadata)) {
+      throw new P22Error('SOURCE_METADATA_INVALID', '来源快照形状无效（畸形作者/时间/互动已失败关闭）。', 400, { field: `items[${index}].source_metadata` });
+    }
+    const mediaAssets = item.media_assets === undefined ? undefined : item.media_assets;
+    if (mediaAssets !== undefined && !validateMediaAssetsShape(mediaAssets)) {
+      throw new P22Error('MEDIA_ASSETS_INVALID', '媒体资产形状无效（越界/重复/乱序/畸形已失败关闭）。', 400, { field: `items[${index}].media_assets` });
+    }
     const normalized = {
       id: text(item.id, `items[${index}].id`, 160),
       source_url: normalizeXUrl(text(item.source_url, `items[${index}].source_url`, 1000)),
@@ -139,6 +191,8 @@ export function parseP22Request(raw) {
       content_sha256: text(item.content_sha256, `items[${index}].content_sha256`, 64),
       provenance: normalizeCollectedProvenance(item.provenance, `items[${index}].provenance`),
       collection_proof: text(item.collection_proof, `items[${index}].collection_proof`, 256),
+      source_metadata: sourceMetadata,
+      media_assets: mediaAssets === undefined ? undefined : mediaAssets.map((asset) => clonePlain(asset)),
     };
     if (!/^[a-f0-9]{64}$/i.test(normalized.content_sha256)) throw new P22Error('INVALID_HASH', '内容哈希无效。', 400, { field: `items[${index}].content_sha256` });
     if (normalized.platform !== 'x') throw new P22Error('UNSUPPORTED_PLATFORM', '当前只支持 X 公开来源。', 400, { field: `items[${index}].platform` });
@@ -201,12 +255,485 @@ function visibleText(item) {
     .replace(/\s+https:\/\/t\.co\/\w+\s*$/i, '').trim();
 }
 
-function proofPayload(userId, item, expiresAt) {
+// ---------------------------------------------------------------------------
+// P29：有界来源快照（作者/发布时间/互动）与有序媒体资产规范化（fail-closed）
+//
+// - 接受当前官方 xquik/x-tweet-scraper 字段：media / mediaUrls / imageUrls /
+//   videoUrls / gifUrls / author（对象或扁平）/ createdAt / 互动计数；
+// - 字段缺省 → null（文本帖或旧数据），字段存在但畸形 → 硬失败，绝不静默丢弃；
+// - 媒体顺序零基、id 确定性、URL/顺序唯一；超出声明上限硬失败；
+// - 内容 SHA-256 只从严格 X/Twitter CDN 白名单抓取：重定向逐跳复验白名单、
+//   强制 content-type、超时与字节上限，任何失配/溢出一律失败关闭；
+//   未在白名单的媒体 URL 保留 url 哈希（明确区分，绝不冒充内容哈希）。
+// ---------------------------------------------------------------------------
+
+function boundedAuthorText(value, field, max) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value.trim().length === 0 || value.trim().length > max) {
+    throw new P22Error('SOURCE_METADATA_INVALID', `${field} 格式无效（缺失、非字符串或超长）。`, 422, { field });
+  }
+  return value.trim();
+}
+
+function boundedEngagementCount(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT) {
+    throw new P22Error('SOURCE_METADATA_INVALID', `${field} 必须是非负有界整数。`, 422, { field });
+  }
+  return value;
+}
+
+function normalizePublishedAt(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    const iso = new globalThis.Date(value < 100000000000 ? value * 1000 : value).toISOString();
+    if (!P22_ISO8601_PATTERN.test(iso)) throw new P22Error('SOURCE_METADATA_INVALID', '发布时间格式无效。', 422, { field: 'createdAt' });
+    return iso;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^\d{10,13}$/.test(trimmed)) return normalizePublishedAt(Number(trimmed));
+    if (!P22_ISO8601_PATTERN.test(trimmed)) throw new P22Error('SOURCE_METADATA_INVALID', '发布时间格式无效。', 422, { field: 'createdAt' });
+    return trimmed;
+  }
+  throw new P22Error('SOURCE_METADATA_INVALID', '发布时间格式无效。', 422, { field: 'createdAt' });
+}
+
+/**
+ * 从 Actor 原始行规范化作者/发布时间/互动快照。字段缺省为 null；
+ * 存在但畸形（类型错、负数、超长、不可解析时间）一律 fail closed。
+ */
+export function normalizeSourceMetadata(raw) {
+  const source = object(raw);
+  if (!source) return { author: null, published_at: null, engagement: null };
+  const authorRaw = source.author;
+  if (authorRaw !== undefined && authorRaw !== null && typeof authorRaw !== 'string' && !object(authorRaw)) {
+    throw new P22Error('SOURCE_METADATA_INVALID', 'author 字段格式无效。', 422, { field: 'author' });
+  }
+  const authorSource = typeof authorRaw === 'string' ? {} : object(authorRaw) || {};
+  const name = boundedAuthorText(
+    first(authorRaw && typeof authorRaw === 'string' ? authorRaw : null, authorSource.name, authorSource.userName, authorSource.displayName, source.name, source.authorName, source.authorUsername),
+    'author.name', 120,
+  );
+  const handleValue = boundedAuthorText(
+    first(authorSource.handle, authorSource.username, authorSource.screenName, source.handle, source.username, source.screenName, source.authorHandle, source.authorUsername, source.authorScreenName),
+    'author.handle', 80,
+  );
+  // 缺省句柄（无作者元数据）规范化为 null；存在且为字符串时精确规范化（去掉前导 @）。
+  const handle = handleValue === null ? null : handleValue.replace(/^@/, '');
+  const userId = boundedAuthorText(
+    first(authorSource.id, authorSource.userId, authorSource.rest_id, source.authorId, source.userId, source.user_id),
+    'author.user_id', 80,
+  );
+  const publishedAt = normalizePublishedAt(first(source.createdAt, source.created_at, source.timestamp, source.date, source.createdAtDate, source.publishedAt, source.tweetDate));
+  const engagement = {};
+  let engagementPresent = false;
+  for (const [canonical, keys] of [
+    ['likes', ['likeCount', 'likes', 'favoriteCount', 'favorites']],
+    ['retweets', ['retweetCount', 'retweets', 'reTweetCount']],
+    ['replies', ['replyCount', 'replies']],
+    ['quotes', ['quoteCount', 'quotes']],
+    ['views', ['viewCount', 'views', 'impressionCount']],
+    ['bookmarks', ['bookmarkCount', 'bookmarks']],
+  ]) {
+    const value = first(...keys.map((key) => source[key]), ...keys.map((key) => authorSource[key]));
+    if (value !== undefined && value !== null && value !== '') engagementPresent = true;
+    engagement[canonical] = boundedEngagementCount(value, `engagement.${canonical}`);
+  }
+  return {
+    author: name || handle || userId ? { name, handle, user_id: userId } : null,
+    published_at: publishedAt,
+    engagement: engagementPresent ? engagement : null,
+  };
+}
+
+/**
+ * Validate an Actor-provided dimension value (width or height). When present
+ * (non-null/undefined), it must be a positive integer <= 65536; malformed,
+ * negative, zero, non-integer or out-of-bounds values fail closed.
+ */
+function validateDimensionField(value, field) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65536) return value;
+  throw new P22Error('MEDIA_ASSETS_INVALID', `${field} 必须为 1–65536 之间的整数。`, 422, { field });
+}
+
+/**
+ * Validate an Actor-declared MIME type. When present it must be a non-empty
+ * ASCII-string matching type/subtype; malformed, excessively long or absent
+ * returns null. The returned value is trimmed and bounded to 100 characters.
+ */
+function validateMediaMimeType(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') {
+    throw new P22Error('MEDIA_ASSETS_INVALID', 'MIME 类型必须为字符串。', 422, { field: 'mimeType' });
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 100) {
+    throw new P22Error('MEDIA_ASSETS_INVALID', 'MIME 类型为空或超长。', 422, { field: 'mimeType' });
+  }
+  if (!/^[a-z]+\/[a-z0-9][a-z0-9.+-]*$/i.test(trimmed)) {
+    throw new P22Error('MEDIA_ASSETS_INVALID', 'MIME 类型格式无效，必须为 type/subtype。', 422, { field: 'mimeType' });
+  }
+  return trimmed;
+}
+
+/** 从 Actor 行的 media/mediaUrls/imageUrls/videoUrls/gifUrls 等官方字段收集候选媒体。 */
+function collectMediaCandidates(raw) {
+  const candidates = [];
+  const seen = new Set();
+  const push = (value, hintKind) => {
+    if (value === undefined || value === null) return;
+    let url = null;
+    let kind = hintKind;
+    let mimeType = null;
+    let width = null;
+    let height = null;
+    if (typeof value === 'string') {
+      url = value.trim();
+    } else if (object(value)) {
+      url = first(value.url, value.src, value.mediaUrl, value.contentUrl, value.previewUrl, value.thumbnailUrl);
+      if (!kind) kind = first(value.type, value.kind, value.mediaType, value.contentType);
+      // Actor-provided MIME / dimensions: strict validation. When present but
+      // malformed or out-of-bounds, fail closed instead of silently dropping.
+      mimeType = validateMediaMimeType(first(value.mimeType, value.mime_type, value.contentType, value.mediaType));
+      width = validateDimensionField(value.width, 'width');
+      height = validateDimensionField(value.height, 'height');
+      // 也接受嵌套 dimensions/size 形状（某些 Actor 版本使用）。
+      if (object(value.dimensions)) {
+        width = validateDimensionField(value.dimensions.width, 'dimensions.width');
+        height = validateDimensionField(value.dimensions.height, 'dimensions.height');
+      }
+      if (object(value.size)) {
+        width = validateDimensionField(value.size.width, 'size.width');
+        height = validateDimensionField(value.size.height, 'size.height');
+      }
+    }
+    if (!url || !/^https?:\/\//i.test(url)) {
+      throw new P22Error('MEDIA_URL_INVALID', '媒体条目缺少有效的 http(s) URL。', 422, { field: 'media' });
+    }
+    if (!kind) {
+      const match = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(url);
+      const ext = match && match[1].toLowerCase();
+      if (ext === 'gif') kind = 'gif';
+      else if (ext === 'mp4' || ext === 'mov' || ext === 'm4v' || ext === 'webm') kind = 'video';
+      else kind = 'image';
+    }
+    if (!P29_MEDIA_KINDS.includes(kind)) throw new P22Error('MEDIA_KIND_INVALID', '媒体种类必须是 image / video / gif。', 422, { field: 'media' });
+    if (seen.has(url)) return; // 同一精确 URL 去重（保持首次出现顺序）
+    seen.add(url);
+    candidates.push({ url, kind, mimeType, width, height });
+  };
+  if (raw.media !== undefined) {
+    const media = Array.isArray(raw.media) ? raw.media : [raw.media];
+    for (const entry of media) push(entry, null);
+  }
+  for (const [key, hint] of [['mediaUrls', null], ['imageUrls', 'image'], ['videoUrls', 'video'], ['gifUrls', 'gif']]) {
+    const value = raw[key];
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const entry of value) push(entry, hint);
+    } else {
+      push(value, hint);
+    }
+  }
+  return candidates;
+}
+
+function mimeForMedia(url, declared) {
+  const declaredMime = typeof declared === 'string' && declared.trim() ? declared.trim().slice(0, 100) : '';
+  if (declaredMime) return declaredMime;
+  const match = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(url);
+  const ext = match && match[1].toLowerCase();
+  return P22_MEDIA_EXT_MIME[ext] || 'application/octet-stream';
+}
+
+/**
+ * 规范化一条媒体资产：确定性 id、推文绑定、精确 URL、零基顺序、种类、MIME、
+ * 可用时尺寸、可验证时字节大小，以及明确种类（url 或 content）的 SHA-256 完整性记录。
+ */
+async function normalizeMediaAsset(candidate, index, externalId, canonicalTweetUrl, digest) {
+  if (index >= P29_MAX_MEDIA) {
+    throw new P22Error('MEDIA_BOUND_EXCEEDED', `媒体数量超过声明上限 ${P29_MAX_MEDIA} 条，已硬失败（绝不静默截断）。`, 422, { field: 'media' });
+  }
+  const url = new globalThis.URL(candidate.url);
+  if (url.protocol !== 'https:') {
+    throw new P22Error('MEDIA_URL_INVALID', '媒体 URL 必须使用 HTTPS。', 422, { field: 'media' });
+  }
+  const asset = {
+    id: `m-${(await digest(`p29-media\0${externalId || ''}\0${index}\0${candidate.url}`)).slice(0, 24)}`,
+    tweet_id: externalId || null,
+    external_id: externalId || null,
+    canonical_tweet_url: canonicalTweetUrl,
+    media_url: candidate.url,
+    order: index,
+    kind: candidate.kind,
+    mime_type: mimeForMedia(candidate.url, candidate.mimeType),
+    dimensions: null,
+    byte_size: null,
+    hash: { algorithm: 'sha256', kind: 'url', value: await digest(candidate.url) },
+  };
+  // Actor-provided dimensions (pre-validated by collectMediaCandidates).
+  // When present, they must be asserted in the resulting Evidence; any
+  // inconsistency here fails closed rather than silently dropping.
+  if (candidate.width !== null && candidate.height !== null) {
+    if (!Number.isInteger(candidate.width) || !Number.isInteger(candidate.height)
+      || candidate.width < 1 || candidate.width > 65536
+      || candidate.height < 1 || candidate.height > 65536) {
+      throw new P22Error('MEDIA_ASSETS_INVALID', '内部一致性错误：维度验证失败。', 500, { field: 'dimensions' });
+    }
+    asset.dimensions = { width: candidate.width, height: candidate.height };
+  }
+  return asset;
+}
+
+/**
+ * 只从严格 X/Twitter CDN 白名单抓取媒体内容哈希。逐跳复验重定向目标必须仍为
+ * HTTPS 白名单主机；强制 media content-type；超时与字节上限；任何失配/溢出
+ * 失败关闭。未在白名单的 URL 直接抛出 MEDIA_HOST_UNSUPPORTED（绝不抓取、绝不让
+ * 未验证 URL 进入 Qwen）。
+ */
+/**
+ * Race a reader.read() promise against the abort signal so a stream that returns
+ * headers but then hangs on body chunks is bounded by the same single timeout.
+ */
+async function readChunkWithAbort(reader, signal) {
+  if (signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+  let abortListener;
+  const abortPromise = new Promise((_, reject) => {
+    abortListener = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    signal.addEventListener('abort', abortListener, { once: true });
+  });
+  try {
+    return await Promise.race([reader.read(), abortPromise]);
+  } finally {
+    if (abortListener) signal.removeEventListener('abort', abortListener);
+  }
+}
+
+export async function fetchMediaContentHash(asset, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = P22_LIMITS.media_fetch_timeout_ms,
+  maxBytes = P22_LIMITS.media_max_bytes,
+  redirectMax = P22_LIMITS.media_redirect_max,
+} = {}) {
+  let current;
+  try {
+    current = new globalThis.URL(asset.media_url);
+  } catch {
+    throw new P22Error('MEDIA_URL_INVALID', '媒体 URL 无效。', 502, { field: 'media_url' });
+  }
+  if (current.protocol !== 'https:' || !P22_MEDIA_CDN_ALLOWLIST.has(current.hostname.toLowerCase())) {
+    throw new P22Error('MEDIA_HOST_UNSUPPORTED', '媒体主机不在严格 CDN 白名单内，已失败关闭。', 422, { field: 'media_url' });
+  }
+  // Single bounded timeout/abort across the full fetch + entire body read.
+  const controller = new globalThis.AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const seen = new Set();
+    for (let hop = 0; hop <= redirectMax; hop += 1) {
+      if (seen.has(current.href)) throw new P22Error('MEDIA_REDIRECT_REJECTED', '媒体重定向形成循环，已失败关闭。', 502, { field: 'media_url' });
+      seen.add(current.href);
+      let response;
+      try {
+        response = await fetchImpl(current.href, { redirect: 'manual', signal: controller.signal });
+      } catch (error) {
+        if (error?.name === 'AbortError') throw new P22Error('MEDIA_FETCH_TIMEOUT', '媒体内容读取超时，已失败关闭。', 504, { field: 'media_url' });
+        throw new P22Error('MEDIA_FETCH_REJECTED', '媒体内容读取失败，已失败关闭。', 502, { field: 'media_url' });
+      }
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers && typeof response.headers.get === 'function' ? response.headers.get('location') : null;
+        if (!location) throw new P22Error('MEDIA_REDIRECT_REJECTED', '媒体重定向缺少目标，已失败关闭。', 502, { field: 'media_url' });
+        let next;
+        try {
+          next = new globalThis.URL(location, current);
+        } catch {
+          throw new P22Error('MEDIA_REDIRECT_REJECTED', '媒体重定向目标无效，已失败关闭。', 502, { field: 'media_url' });
+        }
+        if (next.protocol !== 'https:' || !P22_MEDIA_CDN_ALLOWLIST.has(next.hostname.toLowerCase())) {
+          throw new P22Error('MEDIA_REDIRECT_REJECTED', '媒体重定向目标不在严格 CDN 白名单内，已失败关闭。', 502, { field: 'media_url' });
+        }
+        current = next;
+        continue;
+      }
+      if (!response.ok) throw new P22Error('MEDIA_FETCH_REJECTED', '媒体内容读取未成功完成，已失败关闭。', 502, { field: 'media_url', details: { status: response.status } });
+      const contentType = String(response.headers && typeof response.headers.get === 'function' ? response.headers.get('content-type') || '' : '').toLowerCase();
+      if (!/^(image|video|audio)\//.test(contentType)) {
+        throw new P22Error('MEDIA_CONTENT_TYPE_REJECTED', '媒体内容类型不符合 image/video/audio，已失败关闭。', 502, { field: 'media_url' });
+      }
+      // 声明大小预检：有效 Content-Length 超过上限立即拒绝，绝不开始读取。
+      const contentLengthHeader = response.headers && typeof response.headers.get === 'function' ? response.headers.get('content-length') : null;
+      if (contentLengthHeader !== null && contentLengthHeader !== undefined) {
+        const declaredBytes = Number(contentLengthHeader);
+        if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+          throw new P22Error('MEDIA_SIZE_OVERFLOW', '媒体声明大小超过上限，已失败关闭。', 502, { field: 'media_url' });
+        }
+      }
+      const reader = response.body && typeof response.body.getReader === 'function' ? response.body.getReader() : null;
+      if (!reader) throw new P22Error('MEDIA_FETCH_REJECTED', '媒体内容不可读取，已失败关闭。', 502, { field: 'media_url' });
+      const chunks = [];
+      let bytes = 0;
+      for (;;) {
+        let result;
+        try {
+          result = await readChunkWithAbort(reader, controller.signal);
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            // Cancel the reader so the stream is released on timeout.
+            try { await reader.cancel(); } catch (cancelError) { void cancelError; }
+            throw new P22Error('MEDIA_FETCH_TIMEOUT', '媒体内容读取超时，已失败关闭。', 504, { field: 'media_url' });
+          }
+          throw error;
+        }
+        const { done, value } = result;
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) throw new P22Error('MEDIA_SIZE_OVERFLOW', '媒体字节超过声明上限，已失败关闭。', 502, { field: 'media_url' });
+        chunks.push(value);
+      }
+      const digest = await sha256Hex(concatBytes(chunks));
+      return { hashValue: digest, byteSize: bytes, contentType };
+    }
+    throw new P22Error('MEDIA_REDIRECT_REJECTED', '媒体重定向超过跳数上限，已失败关闭。', 502, { field: 'media_url' });
+  } finally {
+    globalThis.clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+function concatBytes(chunks) {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength), offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+
+/**
+ * 从 Actor 行生成有序媒体资产数组（内容哈希可选抓取）。所有实际媒体保留；
+ * 超出声明上限、URL 畸形、抓取失配/溢出一律硬失败。
+ */
+export async function normalizeMediaAssets(raw, externalId, canonicalTweetUrl, digest, options = {}) {
+  const candidates = collectMediaCandidates(raw);
+  const assets = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const asset = await normalizeMediaAsset(candidate, index, externalId, canonicalTweetUrl, digest);
+    const fetched = await fetchMediaContentHash(asset, options);
+    // fetchMediaContentHash now throws MEDIA_HOST_UNSUPPORTED for non-CDN hosts
+    // instead of returning null; any successful return is a verified content hash.
+    asset.hash = { algorithm: 'sha256', kind: 'content', value: fetched.hashValue };
+    asset.byte_size = fetched.byteSize;
+    if (/^(image|video|audio)\//.test(fetched.contentType)) asset.mime_type = fetched.contentType.slice(0, 100);
+    assets.push(asset);
+  }
+  return assets;
+}
+
+/** P29 媒体资产形状校验（有界；解析 analyze 请求时使用，完整性由证明 HMAC 保证）。 */
+export function validateMediaAssetShape(asset) {
+  return asset && typeof asset === 'object' && !Array.isArray(asset)
+    && typeof asset.id === 'string' && P29_MEDIA_ID_PATTERN.test(asset.id)
+    && (asset.tweet_id === null || asset.tweet_id === undefined || (typeof asset.tweet_id === 'string' && asset.tweet_id.length <= 160))
+    && (asset.external_id === null || asset.external_id === undefined || (typeof asset.external_id === 'string' && asset.external_id.length <= 160))
+    && typeof asset.canonical_tweet_url === 'string' && asset.canonical_tweet_url.length <= 1000
+    && typeof asset.media_url === 'string' && asset.media_url.length <= 1000
+    && Number.isInteger(asset.order) && asset.order >= 0 && asset.order < P29_MAX_MEDIA
+    && P29_MEDIA_KINDS.includes(asset.kind)
+    && typeof asset.mime_type === 'string' && asset.mime_type.length <= 100
+    && (asset.byte_size === null || asset.byte_size === undefined || (Number.isInteger(asset.byte_size) && asset.byte_size >= 0 && asset.byte_size <= P29_MAX_MEDIA_BYTES))
+    && asset.hash && typeof asset.hash === 'object'
+    && asset.hash.algorithm === 'sha256' && P29_HASH_KINDS.includes(asset.hash.kind) && /^[0-9a-f]{64}$/.test(asset.hash.value);
+}
+
+export function validateMediaAssetsShape(assets) {
+  return Array.isArray(assets) && assets.length <= P29_MAX_MEDIA && assets.every(validateMediaAssetShape);
+}
+
+/** P29 来源快照形状校验（有界；畸形值失败关闭，缺省为 null 的规范对象）。 */
+export function validateSourceMetadataShape(meta) {
+  if (meta === null) return true;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return false;
+  const keys = Object.keys(meta);
+  if (keys.some((key) => !['author', 'published_at', 'engagement'].includes(key))) return false;
+  const author = meta.author;
+  if (author !== null && author !== undefined) {
+    if (!author || typeof author !== 'object' || Array.isArray(author)) return false;
+    if (Object.keys(author).some((key) => !['name', 'handle', 'user_id'].includes(key))) return false;
+    for (const [key, max] of [['name', 120], ['handle', 80], ['user_id', 80]]) {
+      const value = author[key];
+      if (value !== null && value !== undefined && (typeof value !== 'string' || value.trim().length === 0 || value.length > max)) return false;
+    }
+  }
+  if (meta.published_at !== null && meta.published_at !== undefined
+    && (typeof meta.published_at !== 'string' || meta.published_at.length > 80 || !P22_ISO8601_PATTERN.test(meta.published_at))) return false;
+  const engagement = meta.engagement;
+  if (engagement !== null && engagement !== undefined) {
+    if (!engagement || typeof engagement !== 'object' || Array.isArray(engagement)) return false;
+    if (Object.keys(engagement).some((key) => !P29_ENGAGEMENT_KEYS.includes(key))) return false;
+    for (const key of P29_ENGAGEMENT_KEYS) {
+      const value = engagement[key];
+      if (value !== null && value !== undefined && (!Number.isInteger(value) || value < 0 || value > P29_MAX_ENGAGEMENT)) return false;
+    }
+  }
+  return true;
+}
+
+function stableCanonicalJson(value) {
+  if (Array.isArray(value)) return value.map(stableCanonicalJson);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableCanonicalJson(value[key])]));
+  }
+  return value;
+}
+
+/**
+ * 每条媒体资产的证明绑定（固定位置、无损）：完整绑定媒体证据身份。
+ * id / URL / 顺序 / 种类 / 尺寸 / MIME / 字节大小 / 推文身份 / 规范推文 URL /
+ * 哈希算法 / 哈希种类 / 哈希值 —— 全部在规范固定形式中绑定，
+ * 任何字段的缺失、篡改、乱序、多余均导致验证失败关闭。
+ */
+function mediaBindingPayload(asset) {
+  const dimensions = asset.dimensions && typeof asset.dimensions === 'object'
+    ? [asset.dimensions.width, asset.dimensions.height]
+    : null;
+  return [
+    asset.id,
+    asset.media_url,
+    asset.order,
+    asset.kind,
+    asset.mime_type,
+    dimensions,
+    asset.byte_size ?? null,
+    asset.tweet_id ?? null,
+    asset.external_id ?? null,
+    asset.canonical_tweet_url,
+    asset.hash && asset.hash.algorithm,
+    asset.hash && asset.hash.kind,
+    asset.hash && asset.hash.value,
+  ];
+}
+
+/** P29 来源快照与有序媒体绑定（供 v3 证明签署；规范化 JSON 保证确定性）。 */
+function p29EvidenceBindingPayload(item) {
+  return JSON.stringify({
+    source_metadata: stableCanonicalJson(item.source_metadata !== undefined ? item.source_metadata : null),
+    media_assets: (Array.isArray(item.media_assets) ? item.media_assets : []).map(mediaBindingPayload),
+  });
+}
+
+function proofPayload(version, userId, item, expiresAt) {
   // Sign a fixed-position, lossless source identity instead of a JSON object whose
   // display-only fields can be normalized by the P19 boundary. The content body is
   // still bound because verification recomputes content_sha256 before checking HMAC.
-  return JSON.stringify([
-    P22_COLLECTION_PROOF_VERSION,
+  // v3 additionally binds the author/time/engagement snapshot and every ordered
+  // media identity/hash (canonical JSON), so mutation, deletion, reordering,
+  // duplicate ids/URLs and wrong tweet bindings all fail closed at verification.
+  const payload = [
+    version,
     userId,
     expiresAt,
     item.id,
@@ -219,15 +746,19 @@ function proofPayload(userId, item, expiresAt) {
     item.provenance.collected_at,
     item.provenance.usage_total_usd,
     item.provenance.budget_reservation_id,
-  ]);
+  ];
+  if (version === P22_COLLECTION_PROOF_VERSION) payload.push(p29EvidenceBindingPayload(item));
+  return JSON.stringify(payload);
 }
 
 async function sha256Hex(value) {
-  const bytes = await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(String(value)));
+  // Uint8Array 直接按原始字节摘要（绝不 String() 化字节数组）；字符串按 UTF-8 字节。
+  const input = value instanceof Uint8Array ? value : new globalThis.TextEncoder().encode(String(value));
+  const bytes = await globalThis.crypto.subtle.digest('SHA-256', input);
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function hmacHex(secret, payload) {
+async function hmacHex(secret, domain, payload) {
   if (typeof secret !== 'string' || secret.length < 32) throw new P22Error('SERVICE_CONFIG_MISSING', '服务端来源证明配置不可用。', 500);
   const key = await globalThis.crypto.subtle.importKey(
     'raw',
@@ -239,9 +770,14 @@ async function hmacHex(secret, payload) {
   const signature = await globalThis.crypto.subtle.sign(
     'HMAC',
     key,
-    new globalThis.TextEncoder().encode(`p22-collection-proof-v2\0${payload}`),
+    new globalThis.TextEncoder().encode(`${domain}\0${payload}`),
   );
   return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** 证明域分隔：v2 域固定（存量证明必须继续可验证）；v3 使用独立域。 */
+function proofDomain(version) {
+  return version === P22_COLLECTION_PROOF_VERSION ? 'p22-collection-proof-v3' : 'p22-collection-proof-v2';
 }
 
 function constantTimeHexEqual(left, right) {
@@ -253,10 +789,16 @@ function constantTimeHexEqual(left, right) {
 
 export async function issueCollectionProof(secret, userId, item, { nowMs = Date.now() } = {}) {
   const expiresAt = Math.floor((nowMs + P22_LIMITS.proof_ttl_ms) / 1000);
-  const signature = await hmacHex(secret, proofPayload(userId, item, expiresAt));
+  const signature = await hmacHex(secret, proofDomain(P22_COLLECTION_PROOF_VERSION), proofPayload(P22_COLLECTION_PROOF_VERSION, userId, item, expiresAt));
   return `${expiresAt}.${signature}`;
 }
 
+/**
+ * 验证 P22 采集证明。v3 绑定来源快照与媒体身份；带 P29 扩展字段（source_metadata /
+ * media_assets）的条目必须使用 v3（v2 无媒体绑定，绝不接受带媒体的 v2 证明）。
+ * 无扩展字段的存量条目显式接受 v2 证明（向后兼容），同时接受 v3。
+ * 证明字符串格式均为 <expires>.<64hex>；版本在签名载荷内部，混合/畸形版本失败关闭。
+ */
 export async function verifyCollectionProof(secret, userId, item, proof, { nowMs = Date.now() } = {}) {
   const match = /^(\d{10})\.([0-9a-f]{64})$/i.exec(String(proof || ''));
   if (!match) throw new P22Error('SOURCE_PROOF_INVALID', '来源证明无效。', 400, { field: 'collection_proof' });
@@ -268,11 +810,24 @@ export async function verifyCollectionProof(secret, userId, item, proof, { nowMs
     || await sha256Hex(item?.content_text || '') !== item.content_sha256) {
     throw new P22Error('SOURCE_PROOF_INVALID', '来源证明与正文哈希不匹配。', 400, { field: 'content_sha256' });
   }
-  const expected = await hmacHex(secret, proofPayload(userId, item, expiresAt));
-  if (!constantTimeHexEqual(expected, match[2].toLowerCase())) {
-    throw new P22Error('SOURCE_PROOF_INVALID', '来源证明与内容不匹配。', 400, { field: 'collection_proof' });
+  // 仅当存在非空扩展字段时强制 v3（null 快照 / 空媒体数组视为无扩展，
+  // 存量 v2 记录继续可验证；v3 证明始终先按 v3 载荷校验）。
+  const hasExtension = item && ((item.source_metadata !== undefined && item.source_metadata !== null)
+    || (Array.isArray(item.media_assets) && item.media_assets.length > 0));
+  if (hasExtension && !(Array.isArray(item.media_assets) && item.media_assets.length <= P22_LIMITS.max_media && item.media_assets.every(validateMediaAssetShape))) {
+    throw new P22Error('SOURCE_PROOF_INVALID', '媒体资产形状无效，已失败关闭。', 400, { field: 'media_assets' });
   }
-  return true;
+  if (hasExtension && item.source_metadata !== undefined && !validateSourceMetadataShape(item.source_metadata)) {
+    throw new P22Error('SOURCE_PROOF_INVALID', '来源快照形状无效，已失败关闭。', 400, { field: 'source_metadata' });
+  }
+  const expectedV3 = await hmacHex(secret, proofDomain(P22_COLLECTION_PROOF_VERSION), proofPayload(P22_COLLECTION_PROOF_VERSION, userId, item, expiresAt));
+  if (constantTimeHexEqual(expectedV3, match[2].toLowerCase())) return true;
+  if (!hasExtension) {
+    // 存量记录（无 P29 扩展字段）显式接受 v2 证明；带扩展字段的条目绝不接受 v2。
+    const expectedV2 = await hmacHex(secret, proofDomain(P22_COLLECTION_PROOF_V2_VERSION), proofPayload(P22_COLLECTION_PROOF_V2_VERSION, userId, item, expiresAt));
+    if (constantTimeHexEqual(expectedV2, match[2].toLowerCase())) return true;
+  }
+  throw new P22Error('SOURCE_PROOF_INVALID', '来源证明与内容不匹配（含来源快照与媒体绑定）。', 400, { field: 'collection_proof' });
 }
 
 export async function verifyAnalyzeSources(secret, userId, items, options = {}) {
@@ -285,7 +840,12 @@ export async function verifyAnalyzeSources(secret, userId, items, options = {}) 
   return true;
 }
 
-export async function normalizeCollectedItems(rawItems, context, digest) {
+/**
+ * 规范化 Actor 行：正文/身份 + 有界来源快照（作者/时间/互动）+ 有序媒体资产。
+ * 内容 SHA-256 只从严格 CDN 白名单抓取（fetchMediaContentHash 失败即整体失败关闭，
+ * 绝不把抓取失败静默降级为 url 哈希）。`options.fetchMediaImpl` 可注入供测试离线运行。
+ */
+export async function normalizeCollectedItems(rawItems, context, digest, options = {}) {
   if (!Array.isArray(rawItems)) throw new P22Error('PROVIDER_RESPONSE_INVALID', '采集响应不是数组。', 502);
   const output = [];
   const seen = new Set();
@@ -301,6 +861,7 @@ export async function normalizeCollectedItems(rawItems, context, digest) {
     const key = `${sourceUrl}|${externalId}|${contentSha256}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const mediaAssets = await normalizeMediaAssets(raw, externalId || sourceUrl.match(/\/status\/(\d+)/)?.[1] || null, sourceUrl, digest, options);
     output.push({
       id: `p22-${contentSha256.slice(0, 24)}`,
       source_url: sourceUrl,
@@ -309,6 +870,8 @@ export async function normalizeCollectedItems(rawItems, context, digest) {
       content_text: contentText,
       external_id: externalId || sourceUrl.match(/\/status\/(\d+)/)?.[1] || null,
       content_sha256: contentSha256,
+      source_metadata: normalizeSourceMetadata(raw),
+      media_assets: mediaAssets,
       provenance: {
         schema_version: 'p22_collected_source_v1',
         provider: context.provider,
@@ -407,6 +970,117 @@ export function parseQwenAnalyses(payload, items) {
       signals: boundedList(row.signals, 'signals'),
       risks: boundedList(row.risks, 'risks'),
       method: 'qwen_assisted_review',
+    };
+  });
+}
+
+/**
+ * P29 多模态请求体：来源文本 + 每个已验证媒体 URL（精确顺序）。
+ * 图片/GIF 使用 image_url 部件，视频使用 video_url 部件（OpenAI 兼容 DashScope 契约）。
+ * 仅已验证内容哈希（kind === 'content'）的媒体才能进入 Qwen 多模态请求；
+ * 存在任何未验证媒体（kind !== 'content' 或缺少哈希）一律 fail closed，
+ * 绝不将未验证 URL 泄露到文本来源 JSON 或任何请求部件中。
+ */
+export function buildMultimodalQwenContent(items) {
+  // 失败关闭：任何媒体资产缺少已验证内容哈希即整体拒绝，绝不构造请求。
+  for (const item of items) {
+    for (const asset of item.media_assets || []) {
+      if (!asset.hash || asset.hash.kind !== 'content') {
+        throw new P22Error('MEDIA_PROOF_INCOMPLETE', '媒体资产缺少已验证内容哈希，无法构造多模态请求，已失败关闭。', 422, { media_id: asset.id });
+      }
+      let mediaUrl;
+      try {
+        mediaUrl = new globalThis.URL(asset.media_url);
+      } catch {
+        throw new P22Error('MEDIA_URL_INVALID', '媒体 URL 无效，无法构造多模态请求。', 422, { media_id: asset.id });
+      }
+      if (mediaUrl.protocol !== 'https:' || !P22_MEDIA_CDN_ALLOWLIST.has(mediaUrl.hostname.toLowerCase())) {
+        throw new P22Error('MEDIA_HOST_UNSUPPORTED', '媒体主机不在严格 CDN 白名单内，无法构造多模态请求。', 422, { media_id: asset.id });
+      }
+    }
+  }
+  const sources = items.map((item, index) => ({
+    index: index + 1,
+    id: item.id,
+    url: item.source_url,
+    text: item.content_text,
+    media: (item.media_assets || []).map((asset) => ({ id: asset.id, url: asset.media_url, kind: asset.kind })),
+  }));
+  const text = [
+    '你是只读多模态内容研究助手。只分析给定公开来源与所附媒体，不补写事实。',
+    '返回严格 JSON：{"analyses":[{"source_id":"...","text_expression":"...","media_analysis":[{"media_id":"...","visual_content":"...","composition":"...","people":"...","scene":"...","emotion":"..."}],"virality_drivers":["..."],"reusable_methods":["..."],"signals":["..."],"risks":["..."]}]}',
+    'media_analysis 必须与每个来源的媒体一一对应并保持相同顺序，每项精确绑定 media_id；无媒体的来源 media_analysis 必须为空数组。',
+    'text_expression 不超过 300 字；virality_drivers/reusable_methods/signals/risks 各最多 5 项、每项最多 240 字；逐媒体字段各不超过 500 字。',
+    '不得生成营销成品、路由或发布指令。',
+    'Each media_analysis entry must bind the exact media_id in the same order as the source; missing, duplicate, reordered, foreign or extra media ids are invalid.',
+    JSON.stringify(sources),
+  ].join('\n');
+  const parts = [{ type: 'text', text }];
+  for (const item of items) {
+    for (const asset of item.media_assets || []) {
+      // 纵深防御：所有媒体在此处已知为已验证内容哈希（上游已 fail closed），
+      // 此处仅构造对应多模态部件；gif 仍使用 image_url 部件。
+      parts.push(asset.kind === 'image' || asset.kind === 'gif'
+        ? { type: 'image_url', image_url: { url: asset.media_url } }
+        : { type: 'video_url', video_url: { url: asset.media_url } });
+    }
+  }
+  return parts;
+}
+
+/**
+ * P29 多模态响应解析（严格、来源绑定、逐媒体绑定）：
+ * - analyses 与来源一一对应且唯一；
+ * - 每条 media_analysis 必须按精确顺序绑定来源媒体的精确 id —— 缺失、重复、
+ *   乱序、外来、多余 id 一律 fail closed；
+ * - 全部文本有界；未知字段静默由 JSON 结构检查失败关闭。
+ */
+export function parseQwenMultimodalAnalyses(payload, items) {
+  const rawText = String(payload?.choices?.[0]?.message?.content || '').trim();
+  let parsed;
+  try { parsed = JSON.parse(rawText); } catch { throw new P22Error('MODEL_RESPONSE_INVALID', '分析响应不是有效 JSON。', 502); }
+  if (!Array.isArray(parsed.analyses) || parsed.analyses.length !== items.length) throw new P22Error('MODEL_RESPONSE_INVALID', '分析响应与来源数量不一致。', 502);
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const seen = new Set();
+  const boundedList = (value, field) => {
+    if (!Array.isArray(value) || value.length > 5) throw new P22Error('MODEL_RESPONSE_INVALID', `${field} 无效。`, 502, { field });
+    return value.map((entry) => boundedModelText(entry, field, 240));
+  };
+  const boundedVisual = (value, field) => boundedModelText(value, field, 500);
+  return parsed.analyses.map((row) => {
+    const sourceId = text(row?.source_id, 'source_id', 160);
+    if (!byId.has(sourceId) || seen.has(sourceId)) throw new P22Error('MODEL_SOURCE_BINDING_INVALID', '分析来源绑定无效。', 502, { field: 'source_id' });
+    seen.add(sourceId);
+    const item = byId.get(sourceId);
+    const mediaIds = (item.media_assets || []).map((asset) => asset.id);
+    const mediaRows = row.media_analysis;
+    if (!Array.isArray(mediaRows) || mediaRows.length !== mediaIds.length) {
+      throw new P22Error('MODEL_MEDIA_BINDING_INVALID', '逐媒体分析与来源媒体数量不一致（含缺失/多余）。', 502, { field: 'media_analysis' });
+    }
+    const mediaAnalysis = mediaRows.map((entry, index) => {
+      if (!object(entry) || entry.media_id !== mediaIds[index]) {
+        throw new P22Error('MODEL_MEDIA_BINDING_INVALID', '逐媒体分析未按顺序绑定精确媒体 id（缺失/重复/乱序/外来均失败）。', 502, { field: 'media_analysis' });
+      }
+      return {
+        media_id: entry.media_id,
+        visual_content: boundedVisual(entry.visual_content, 'visual_content'),
+        composition: boundedVisual(entry.composition, 'composition'),
+        people: boundedVisual(entry.people, 'people'),
+        scene: boundedVisual(entry.scene, 'scene'),
+        emotion: boundedVisual(entry.emotion, 'emotion'),
+      };
+    });
+    return {
+      source_id: sourceId,
+      source_url: item.source_url,
+      content_sha256: item.content_sha256,
+      text_expression: boundedModelText(row.text_expression, 'text_expression', 300),
+      media_analysis: mediaAnalysis,
+      virality_drivers: boundedList(row.virality_drivers, 'virality_drivers'),
+      reusable_methods: boundedList(row.reusable_methods, 'reusable_methods'),
+      signals: boundedList(row.signals, 'signals'),
+      risks: boundedList(row.risks, 'risks'),
+      method: 'qwen_multimodal_assisted_review',
     };
   });
 }

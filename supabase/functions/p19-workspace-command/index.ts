@@ -60,6 +60,8 @@ async function verifyP22EvidenceRecord(proofSecret: string, userId: string, reco
     content_text: record.content_text,
     external_id: provenance.external_id,
     content_sha256: media?.sha256,
+    source_metadata: record?.source_metadata,
+    media_assets: record?.media_assets,
     provenance: {
       schema_version: 'p22_collected_source_v1',
       provider: provenance.provider,

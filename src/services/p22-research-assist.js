@@ -1,5 +1,5 @@
 import { supabase } from './supabase-client.js';
-import { sha256Hex } from './p19-contracts.js';
+import { sha256Hex, validateMediaAssets, validateSourceMetadata } from './p19-contracts.js';
 
 export const P22_ASSIST_SCHEMA_VERSION = 'p22_research_assist_v1';
 const MAX_MESSAGE = 240;
@@ -94,6 +94,8 @@ export function p22ItemFromEvidence(evidence) {
     content_text: evidence.content_text,
     external_id: provenance.external_id ?? null,
     content_sha256: provenance.content_sha256,
+    source_metadata: evidence.source_metadata !== undefined ? evidence.source_metadata : null,
+    media_assets: evidence.media_assets !== undefined ? evidence.media_assets : [],
     collection_proof: provenance.collection_proof,
     provenance: {
       schema_version: 'p22_collected_source_v1',
@@ -131,6 +133,19 @@ export async function toP19EvidenceInput(item) {
   const sourceId = requireText(item?.id, '来源 ID', 160);
   const collectionProof = requireText(item?.collection_proof, '服务端来源证明', 256);
   const externalId = item?.external_id == null ? null : requireText(item.external_id, '平台内容 ID', 160);
+  // P29 版本化扩展：来源快照与有序媒体资产随证据持久化（有界；完整性由服务端证明绑定）。
+  let sourceMetadata = null;
+  if (item.source_metadata !== undefined && item.source_metadata !== null) {
+    const snapshot = validateSourceMetadata(item.source_metadata);
+    if (!snapshot.valid) throw safeError('P22_EVIDENCE_INVALID', '来源快照不符合 P29 有界契约，已拒绝保存。');
+    sourceMetadata = item.source_metadata;
+  }
+  let mediaAssets = [];
+  if (item.media_assets !== undefined) {
+    const assets = validateMediaAssets(item.media_assets);
+    if (!assets.valid) throw safeError('P22_EVIDENCE_INVALID', '媒体资产不符合 P29 有界契约（越界/重复/乱序/畸形），已拒绝保存。');
+    mediaAssets = item.media_assets;
+  }
   return {
     source_url: sourceUrl,
     label: String(item.label || 'X 公开内容').slice(0, 200),
@@ -161,5 +176,7 @@ export async function toP19EvidenceInput(item) {
       last_modified: collectedAt,
       sha256: declaredHash,
     },
+    source_metadata: sourceMetadata,
+    media_assets: mediaAssets,
   };
 }

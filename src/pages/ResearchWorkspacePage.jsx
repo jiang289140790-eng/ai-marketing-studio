@@ -22,6 +22,7 @@ import {
   buildProjectWorkflowState,
   createProject,
   deriveHandoffPackage,
+  recordAssistedAnalysis,
   removeEvidence,
   reviewBrief,
   runAnalysis,
@@ -54,7 +55,7 @@ import {
   P21_VIEW_MODES,
 } from '../services/p21-guided-workspace.js';
 import { P22ResearchAssistPanel } from '../components/integrated-workspace/P22ResearchAssistPanel.jsx';
-import { findP22Evidence, toP19EvidenceInput } from '../services/p22-research-assist.js';
+import { createP22ResearchAssistClient, findP22Evidence, toP19EvidenceInput } from '../services/p22-research-assist.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
@@ -114,7 +115,7 @@ function buildOnlineCommand(previous, next) {
     const before = previousEvidence.get(item.id);
     if (before.fingerprint !== item.fingerprint) {
       const evidencePatch = {};
-      for (const field of ['source_url', 'label', 'platform', 'content_text', 'media_metadata']) {
+      for (const field of ['source_url', 'label', 'platform', 'content_text', 'media_metadata', 'source_metadata', 'media_assets']) {
         if (JSON.stringify(before[field]) !== JSON.stringify(item[field])) evidencePatch[field] = item[field];
       }
       return { command: 'evidence.update', payload: { project_id: previous.id, evidence_id: item.id, expected_fingerprint: before.fingerprint, patch: evidencePatch } };
@@ -178,6 +179,8 @@ export function ResearchWorkspacePage() {
   if (storeRef.current == null) storeRef.current = createP19Store();
   const onlineStoreRef = useRef(null);
   if (onlineStoreRef.current == null) onlineStoreRef.current = createP20OnlineStore();
+  const assistClientRef = useRef(null);
+  if (assistClientRef.current == null) assistClientRef.current = createP22ResearchAssistClient();
 
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState(readActiveProjectId);
@@ -437,7 +440,36 @@ export function ResearchWorkspacePage() {
       let analysis = (persistedEvidence.analyses || []).find((row) => row.evidence_id === evidence.id
         && row.evidence_fingerprint === evidence.fingerprint && row.evidence_version === evidence.version);
       if (!analysis) {
-        const afterAnalysis = await runAnalysis(persistedEvidence, evidence.id);
+        let afterAnalysis;
+        if (evidence.media_assets && evidence.media_assets.length > 0) {
+          // P29：带媒体来源必须走真实多模态 Qwen 分析（绝不静默回退到文本分析）。
+          const response = await assistClientRef.current.analyze([{
+            ...item,
+            source_metadata: evidence.source_metadata,
+            media_assets: evidence.media_assets,
+          }]);
+          const modelResult = (response.analyses || []).find((row) => row.source_id === evidence.provenance.source_id);
+          if (!modelResult) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '模型分析没有精确绑定来源身份，已停止。');
+          // 严格规范边界：result 只接受 p29_multimodal_model_v1 的模型结果子集，
+          // 顶层保留来源/模型/执行身份；持久化的就是服务端返回的精确模型结果。
+          afterAnalysis = await recordAssistedAnalysis(persistedEvidence, evidence.id, {
+            source_id: modelResult.source_id,
+            model: modelResult.model,
+            result: {
+              text_expression: modelResult.text_expression,
+              media_analysis: modelResult.media_analysis,
+              virality_drivers: modelResult.virality_drivers,
+              reusable_methods: modelResult.reusable_methods,
+              signals: modelResult.signals,
+              risks: modelResult.risks,
+            },
+            executed_at: new Date().toISOString(),
+            usage: response.usage || { total_tokens: 0 },
+          });
+        } else {
+          // 纯文本来源：确定性本地分析（既有路径）。
+          afterAnalysis = await runAnalysis(persistedEvidence, evidence.id);
+        }
         analysis = afterAnalysis.analyses.find((row) => row.evidence_id === evidence.id);
         if (!analysis) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '分析没有准确绑定到新证据，已停止。');
         persistedAnalysis = afterAnalysis;
@@ -482,7 +514,9 @@ export function ResearchWorkspacePage() {
 
       setProject(completed);
       await reloadProjects();
-      setNotice('来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card → 可审核 Brief。');
+      setNotice(evidence.media_assets && evidence.media_assets.length > 0
+        ? '来源已保存为完整性绑定的多模态证据，并完成 Evidence → 多模态分析 → Knowledge Card → 内容策划草案（待你确认）。'
+        : '来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card → 内容策划草案（待你确认）。');
       return true;
     } catch (cause) {
       if (onlineMode && project?.id) {
@@ -729,7 +763,7 @@ export function ResearchWorkspacePage() {
       <header className="p19-topbar">
         <div className="p19-topbar-left">
           <p className="p19-eyebrow">运营研究工作台 · 本地草稿模式</p>
-          <h2>研究项目 → 证据 → 确定性分析 → 知识卡 → 可审核 Brief → 交接包 → 世系审计</h2>
+          <h2>研究项目 → 证据 → 来源分析 → 知识卡 → 内容策划草案 → 交接包 → 世系审计</h2>
         </div>
         <div className="p19-topbar-right">
           <span className={`p19-storage-chip ${onlineMode ? 'online' : 'off'}`} data-testid="p20-persistence-mode">
@@ -955,7 +989,7 @@ export function ResearchWorkspacePage() {
             : '本地草稿：所有记录仅保存在本浏览器的有界本地存储（p19_store_v1），未写入任何后端；导入/导出只是本地备份，不是发布任务。'}
         </p>
         <p className="p19-footer-fine">
-          确定性分析 deterministic_local · 人工决定 local_manual · 四项执行标志均为 false · 无采集 / 无模型推理 / 无生成 / 无路由 / 无发布
+          来源分析：多模态模型结果按来源与媒体精确绑定保存（model_analysis）或确定性本地规则 · 人工决定 local_manual · 四项执行标志均为 false · 无生成 / 无路由 / 无发布
         </p>
       </footer>
     </section>

@@ -673,8 +673,12 @@ export async function deriveHandoffPackage(project, { now = () => new Date().toI
   if (staleness.brief_stale) {
     throw workbenchError('HANDOFF_BRIEF_STALE', `无法创建交接包：${staleness.brief_stale_reasons[0] || 'Brief 已过时'}。请重建 Brief 并重新批准。`);
   }
-  const cards = (project.knowledge_cards || []);
-  const cardById = new Map(cards.map((card) => [card.id, card]));
+  const evidenceBinding = resolveBriefEvidenceBindings(project, brief.knowledge_citation_ids);
+  if (!evidenceBinding.valid) {
+    throw workbenchError('HANDOFF_EVIDENCE_BINDING_INVALID', evidenceBinding.issues[0] || 'Handoff cited Evidence binding is invalid.');
+  }
+  const cardById = new Map((project.knowledge_cards || []).map((card) => [card.id, card]));
+  const cards = brief.knowledge_citation_ids.map((cardId) => cardById.get(cardId));
   const citations = brief.knowledge_citation_ids.map((cardId, index) => {
     const card = cardById.get(cardId);
     return {
@@ -720,11 +724,11 @@ export async function deriveHandoffPackage(project, { now = () => new Date().toI
     objective: brief.objective,
     knowledge_citations: citations,
     evidence_provenance: {
-      local_only: true,
-      store: 'p19_local_store_v1',
+      local_only: brief.evidence_provenance.local_only,
+      store: brief.evidence_provenance.store,
       created_from: 'approved_content_brief',
       knowledge_count: citations.length,
-      statement: '证据与知识引用全部来自本地项目，未经过任何平台验证。',
+      statement: brief.evidence_provenance.statement,
     },
     structural_guidance: {
       reusable_patterns: cards.flatMap((card) => (card.generation_guidance?.reusable_pattern ? [card.generation_guidance.reusable_pattern] : [])).slice(0, 10),

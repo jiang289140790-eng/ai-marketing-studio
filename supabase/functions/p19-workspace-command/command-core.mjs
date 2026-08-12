@@ -50,6 +50,7 @@ import {
   isPlainObject,
   issue,
   sha256Hex,
+  stableCanonicalJson,
   validateAnalysis,
   validateBrief,
   validateEvidenceRecord,
@@ -57,6 +58,7 @@ import {
   validateKnowledgeCard,
   validateProjectPackage,
 } from '../../../src/services/p19-contracts.js';
+import { deriveHandoffPackage } from '../../../src/services/p19-workspace-service.js';
 
 export const COMMAND_SCHEMA_VERSION = 'p19_command_contract_v1';
 
@@ -981,6 +983,28 @@ async function applyHandoffCreate(ctx) {
   if (!provenance || provenance.brief_id !== brief.id || provenance.brief_version !== brief.version
     || provenance.brief_schema_version !== brief.schema_version || provenance.brief_status !== brief.status) {
     return fail('HANDOFF_BINDING_INVALID', '交接包绑定的 Brief 与当前修订不一致，已拒绝。', { entity: { type: 'project', id: owned.projectId } });
+  }
+  let expected;
+  try {
+    const sourceProject = {
+      ...clonePlain(owned.project),
+      id: owned.projectId,
+      evidence: clonePlain(entities.evidence || []),
+      analyses: clonePlain(entities.analyses || []),
+      knowledge_cards: clonePlain(entities.cards || []),
+      brief: clonePlain(brief),
+      handoff: null,
+      handoffs: [],
+    };
+    expected = (await deriveHandoffPackage(sourceProject, {
+      now: () => record.created_at,
+      hasher,
+    })).handoff;
+  } catch {
+    return fail('HANDOFF_SOURCE_BINDING_INVALID', '交接包无法从持久化 Brief、知识卡和证据精确派生，已拒绝。', { entity: { type: 'project', id: owned.projectId } });
+  }
+  if (JSON.stringify(stableCanonicalJson(record)) !== JSON.stringify(stableCanonicalJson(expected))) {
+    return fail('HANDOFF_PAYLOAD_MISMATCH', '交接包与持久化来源链的精确派生结果不一致，已拒绝。', { entity: { type: 'project', id: owned.projectId } });
   }
   const { valid, issues } = validateHandoffPackageRecord(record);
   if (!valid) return fail('HANDOFF_INVALID', '交接包未通过 P5 边界校验。', { entity: { type: 'project', id: owned.projectId }, diagnostics: boundedDiagnostics(issues) });

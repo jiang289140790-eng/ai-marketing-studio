@@ -21,6 +21,7 @@ import {
 } from '../supabase/functions/p19-workspace-command/command-core.mjs';
 import { verifyJwtToken, DEFAULT_JWT_ISSUER, DEFAULT_JWT_AUDIENCE } from '../supabase/functions/p19-workspace-command/jwt-verify.mjs';
 import { clonePlain, fingerprintOf } from '../src/services/p19-contracts.js';
+import { assembleBrief, deriveHandoffPackage } from '../src/services/p19-workspace-service.js';
 
 const USER_A = '44444444-4444-4444-8444-444444444444';
 const USER_B = '55555555-5555-5555-8555-555555555555';
@@ -382,6 +383,7 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
   }, { db });
   assert.equal(evidence.ok, true);
   const evidenceId = evidence.entity.id;
+  const storedEvidence = (await db.listProjectEntities(USER_A, projectId)).evidence.find((item) => item.id === evidenceId);
 
   const analysis = await executeCommand({
     ...request('analysis.create', {
@@ -395,8 +397,8 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
         rule_ids: ['source_url_shape'],
         provenance: { method: 'deterministic_local', generated_by: 'client_engine', model: null, executed_at: '2026-08-12T00:00:00Z', statement: '确定性本地' },
         result: { summary: { label: '确定性' }, rules: [] },
-        evidence_fingerprint: 'a'.repeat(64),
-        evidence_version: 1,
+        evidence_fingerprint: storedEvidence.fingerprint,
+        evidence_version: storedEvidence.version,
         version: 1,
         created_at: '2026-08-12T00:00:00Z',
         updated_at: '2026-08-12T00:00:00Z',
@@ -472,9 +474,21 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
   }, { db });
   assert.equal(card.ok, true, JSON.stringify(card));
 
+  const entitiesBeforeBrief = await db.listProjectEntities(USER_A, projectId);
+  const exactBrief = (await assembleBrief({
+    ...(await db.getProject(USER_A, projectId)),
+    evidence: entitiesBeforeBrief.evidence,
+    analyses: entitiesBeforeBrief.analyses,
+    knowledge_cards: entitiesBeforeBrief.cards,
+    brief: null,
+    handoff: null,
+    handoffs: [],
+  }, { now: () => '2026-08-12T00:00:01Z' })).brief;
   const brief = await executeCommand({
     ...request('brief.assemble', {
       project_id: projectId,
+      brief: exactBrief,
+      /* Historical hand-authored fixture retained only as a readable contract example.
       brief: {
         schema_version: 'ams_content_brief_v1',
         id: 'brief-aaaaaaaaaaaaaaaaaaaaaaaa',
@@ -487,6 +501,7 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
         evidence_provenance: { local_only: true, store: 'p19_local_store_v1', created_from: 'selected_knowledge_cards', statement: '本地' },
         review: { schema_version: 'ams_brief_review_v1', brief_id: 'brief-aaaaaaaaaaaaaaaaaaaaaaaa', decision: null, comments: [] },
       },
+      */
     }, 'k5'),
     ...role,
   }, { db });
@@ -498,7 +513,7 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
     ...request('brief.decide', {
       project_id: projectId,
       expected_fingerprint: pendingBrief.fingerprint,
-      decision: { brief_id: 'brief-aaaaaaaaaaaaaaaaaaaaaaaa', brief_version: 99, value: 'approved', source: 'local_manual', rationale: '批准', decided_by: 'tester', decided_at: '2026-08-12T00:00:00Z' },
+      decision: { brief_id: exactBrief.id, brief_version: 99, value: 'approved', source: 'local_manual', rationale: '批准', decided_by: 'tester', decided_at: '2026-08-12T00:00:00Z' },
     }, 'k6'),
     ...role,
   }, { db });
@@ -509,7 +524,7 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
     ...request('brief.decide', {
       project_id: projectId,
       expected_fingerprint: pendingBrief.fingerprint,
-      decision: { brief_id: 'brief-aaaaaaaaaaaaaaaaaaaaaaaa', brief_version: 1, value: 'approved', source: 'local_manual', rationale: '批准', decided_by: 'tester', decided_at: '2026-08-12T00:00:00Z' },
+      decision: { brief_id: exactBrief.id, brief_version: exactBrief.version, value: 'approved', source: 'local_manual', rationale: '批准', decided_by: 'tester', decided_at: '2026-08-12T00:00:00Z' },
     }, 'k7'),
     ...role,
   }, { db });
@@ -519,7 +534,7 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
     ...request('brief.decide', {
       project_id: projectId,
       expected_fingerprint: pendingBrief.fingerprint,
-      decision: { brief_id: 'brief-aaaaaaaaaaaaaaaaaaaaaaaa', brief_version: 1, value: 'return_for_revision', source: 'local_manual', rationale: '旧快照不得覆盖', decided_by: 'racing-reviewer', decided_at: '2026-08-12T00:00:01Z' },
+      decision: { brief_id: exactBrief.id, brief_version: exactBrief.version, value: 'return_for_revision', source: 'local_manual', rationale: '旧快照不得覆盖', decided_by: 'racing-reviewer', decided_at: '2026-08-12T00:00:01Z' },
     }, 'k7-stale'),
     ...role,
   }, { db });
@@ -529,9 +544,21 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
   assert.equal(decidedBrief.status, 'approved', '旧 Brief 快照不得覆盖已落盘的人工决定');
   assert.equal(decidedBrief.review.decision.value, 'approved');
 
+  const entitiesBeforeHandoff = await db.listProjectEntities(USER_A, projectId);
+  const exactHandoff = (await deriveHandoffPackage({
+    ...(await db.getProject(USER_A, projectId)),
+    evidence: entitiesBeforeHandoff.evidence,
+    analyses: entitiesBeforeHandoff.analyses,
+    knowledge_cards: entitiesBeforeHandoff.cards,
+    brief: entitiesBeforeHandoff.brief,
+    handoff: null,
+    handoffs: [],
+  }, { now: () => '2026-08-12T00:00:02Z' })).handoff;
   const handoff = await executeCommand({
     ...request('handoff.create', {
       project_id: projectId,
+      handoff: exactHandoff,
+      /* Historical hand-authored fixture retained only as a readable contract example.
       handoff: {
         schema_version: 'ams_external_handoff_package_v1',
         id: 'handoff-pkg-aaaaaaaaaaaaaaaaaaaaaaaa',
@@ -558,11 +585,24 @@ test('命令链：project → evidence → analysis → card → brief.assemble 
         source_trace: { origin: 'local_bridge', created_from: 'approved_content_brief' },
         project_id: projectId,
       },
+      */
     }, 'k8'),
     ...role,
   }, { db });
   assert.equal(handoff.ok, true, JSON.stringify(handoff));
   assert.equal(handoff.entity.type, 'handoff');
+  const forgedHandoff = clonePlain(exactHandoff);
+  forgedHandoff.evidence_provenance.statement = 'forged provenance';
+  const forged = await executeCommand({
+    ...request('handoff.create', {
+      project_id: projectId,
+      expected_fingerprint: exactHandoff.fingerprint,
+      handoff: forgedHandoff,
+    }, 'k9'),
+    ...role,
+  }, { db });
+  assert.equal(forged.ok, false, JSON.stringify(forged));
+  assert.equal(forged.code, 'HANDOFF_PAYLOAD_MISMATCH');
 });
 
 test('handoff.create 门禁：Brief 未批准被拒绝（HANDOFF_BRIEF_NOT_APPROVED）', async () => {

@@ -1125,6 +1125,11 @@ function p22BrowserBoundary() {
         };
         return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'brief', id: project.brief.id } }, origin);
       }
+      if (body.command === 'handoff.create') {
+        const canonical = { ...body.payload.handoff, id: `handoff-pkg-${'4'.repeat(24)}`, fingerprint: '4'.repeat(64) };
+        project = { ...project, handoff: canonical, handoffs: [canonical], version: project.version + 1, fingerprint: '3'.repeat(64) };
+        return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'handoff', id: canonical.id } }, origin);
+      }
       return browserJson(response, 400, { ok: false, code: 'UNKNOWN_COMMAND', message: 'Unsupported command.' }, origin);
     }
     return browserJson(response, 404, { code: 'NOT_FOUND' }, origin);
@@ -1228,6 +1233,14 @@ test('P22 real production page clears preview state when switching projects', { 
     await browserWait(() => cdp.evaluate(`!([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief'))?.disabled)`), 'review rationale gate');
     await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief')).click()`);
     await browserWait(() => boundary.getProject()?.brief?.status === 'approved', 'online manual Brief approval');
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('#p21-step-handoff button.p19-btn-primary')) && !document.querySelector('#p21-step-handoff button.p19-btn-primary').disabled`), 'handoff action');
+    await cdp.evaluate(`document.querySelector('#p21-step-handoff button.p19-btn-primary').click()`);
+    await browserWait(() => Boolean(boundary.getProject()?.handoff), 'online handoff persistence');
+    assert.equal(boundary.getProject().handoff.brief_provenance.brief_id, boundary.getProject().brief.id);
+    assert.equal(boundary.getProject().handoff.evidence_provenance.local_only, false);
+    assert.deepEqual(boundary.getProject().handoff.execution_flags, { generation_executed: false, routing_executed: false, network_executed: false, publish_executed: false });
+    await cdp.send('Page.reload', { ignoreCache: true });
+    await browserWait(() => cdp.evaluate(`document.body.textContent.includes(${JSON.stringify(`handoff-pkg-${'4'.repeat(24)}`)})`), 'handoff survives reload');
     await browserWait(() => cdp.evaluate(`!document.querySelector('.p19-project-bar button.p19-btn-primary').disabled`), 'review save completion');
     await createProject(['Project B', 'Clean scope', 'Team B', 'Research', 'No A state']);
     await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Project B') && document.querySelectorAll('.p22-source-card').length===0`), 'B clean state');

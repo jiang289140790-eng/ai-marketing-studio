@@ -9,6 +9,7 @@ import {
   buildProjectWorkflowState,
   computeStaleness,
   createProject,
+  deriveHandoffPackage,
   reviewBrief,
   runAnalysis,
 } from '../src/services/p19-workspace-service.js';
@@ -143,4 +144,28 @@ test('P24 fails closed on complete and partial foreign-project citation chains',
   contaminated.brief.project_id = projectA.id;
   assert.equal((await computeStaleness(contaminated)).brief_stale, true);
   assert.notEqual(buildProjectLineageRow(contaminated).state, 'COMPLETE');
+});
+
+test('P25 approved Brief derives an exact non-executing handoff with cited provenance', async () => {
+  let project = await createProject({ topic: 'P25', objective: 'handoff closure', audience: 'operator', channel: 'X', constraints: [] });
+  project = await addCollectedSource(project, '25001');
+  project = await runAnalysis(project, project.evidence[0].id);
+  project = await buildKnowledgeCard(project, project.analyses[0].id);
+  project = await assembleBrief(project, { now: () => '2026-08-12T08:06:00.000Z' });
+  project = await reviewBrief(project, { decision: 'approved', rationale: 'Evidence and card bindings checked.', now: () => '2026-08-12T08:07:00.000Z' });
+  const approvedCardId = project.knowledge_cards[0].id;
+  project = await addManualSource(project, 'uncited-after-approval');
+  project = await runAnalysis(project, project.evidence[1].id);
+  project = await buildKnowledgeCard(project, project.analyses[1].id);
+  const uncitedPattern = project.knowledge_cards[1].generation_guidance.reusable_pattern;
+  project = await deriveHandoffPackage(project, { now: () => '2026-08-12T08:08:00.000Z' });
+  assert.equal(project.handoff.project_id, project.id);
+  assert.equal(project.handoff.brief_provenance.brief_id, project.brief.id);
+  assert.equal(project.handoff.evidence_provenance.local_only, false);
+  assert.equal(project.handoff.evidence_provenance.store, 'p19_workspace_v1');
+  assert.match(project.handoff.evidence_provenance.statement, /服务端来源证明/);
+  assert.deepEqual(project.handoff.execution_flags, { generation_executed: false, routing_executed: false, network_executed: false, publish_executed: false });
+  assert.deepEqual(project.handoff.knowledge_citations.map((item) => item.knowledge_id), [approvedCardId]);
+  assert.equal(project.handoff.structural_guidance.reusable_patterns.includes(uncitedPattern), false);
+  assert.equal((await buildProjectWorkflowState(project)).steps.find((step) => step.id === 'handoff').done, true);
 });

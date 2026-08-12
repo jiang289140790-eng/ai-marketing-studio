@@ -751,7 +751,7 @@ export function validateHandoffPackageRecord(record) {
   if (!isPlainObject(evidence)) {
     issue(issues, '缺少证据来源 evidence_provenance。');
   } else {
-    if (evidence.local_only !== true) issue(issues, '证据来源 local_only 不是严格布尔 true。');
+    if (typeof evidence.local_only !== 'boolean') issue(issues, '证据来源 local_only 必须是严格布尔值。');
     if (!isNonEmptyString(evidence.store) || evidence.store.length > MAX_IDENTIFIER_LENGTH) issue(issues, '证据来源存储标识缺失或超长。');
     if (!isNonEmptyString(evidence.created_from) || evidence.created_from.length > MAX_IDENTIFIER_LENGTH) issue(issues, '证据来源创建来源缺失或超长。');
     if (typeof evidence.knowledge_count !== 'number' || evidence.knowledge_count < 0) issue(issues, '证据来源 knowledge_count 必须是 >=0 的数字。');

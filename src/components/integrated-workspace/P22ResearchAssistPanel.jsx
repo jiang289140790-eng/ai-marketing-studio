@@ -56,6 +56,9 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
     finally { setWorking(false); }
   };
   const collect = () => act(async () => {
+    // A new collection attempt owns the preview area. Never leave an older
+    // source visible while a different URL/topic is loading or after it fails.
+    setItems([]);
     const response = isUrlQuery
       ? await client.collectUrl(topic.trim())
       : await client.collect(topic.trim(), 5);

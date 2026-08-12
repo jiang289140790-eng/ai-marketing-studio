@@ -42,6 +42,9 @@ export const P29_MODEL_METHOD = 'multimodal_model';
 /** 内容哈希抓取只允许的严格 X/Twitter CDN 主机（重定向目标必须再次命中白名单）。 */
 export const P22_MEDIA_CDN_ALLOWLIST = new Set(['pbs.twimg.com', 'video.twimg.com', 'abs.twimg.com']);
 const P22_ISO8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+const P22_X_CREATED_AT_PATTERN = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{2}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2}) (\d{4})$/;
+const P22_X_MONTHS = Object.freeze(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']);
+const P22_X_WEEKDAYS = Object.freeze(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
 const P22_MEDIA_EXT_MIME = Object.freeze({
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
   mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm',
@@ -293,6 +296,34 @@ function normalizePublishedAt(value) {
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (/^\d{10,13}$/.test(trimmed)) return normalizePublishedAt(Number(trimmed));
+    const xCreatedAt = P22_X_CREATED_AT_PATTERN.exec(trimmed);
+    if (xCreatedAt) {
+      const [, weekday, monthName, dayText, hourText, minuteText, secondText, offsetSign, offsetHourText, offsetMinuteText, yearText] = xCreatedAt;
+      const month = P22_X_MONTHS.indexOf(monthName);
+      const day = Number(dayText);
+      const hour = Number(hourText);
+      const minute = Number(minuteText);
+      const second = Number(secondText);
+      const year = Number(yearText);
+      const offsetHour = Number(offsetHourText);
+      const offsetMinute = Number(offsetMinuteText);
+      const offsetMinutes = (offsetSign === '+' ? 1 : -1) * ((offsetHour * 60) + offsetMinute);
+      const invalidOffset = offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0);
+      const invalidClock = hour > 23 || minute > 59 || second > 59;
+      if (!invalidOffset && !invalidClock) {
+        const utcMs = globalThis.Date.UTC(year, month, day, hour, minute, second) - (offsetMinutes * 60_000);
+        const local = new globalThis.Date(utcMs + (offsetMinutes * 60_000));
+        const exact = local.getUTCFullYear() === year
+          && local.getUTCMonth() === month
+          && local.getUTCDate() === day
+          && local.getUTCHours() === hour
+          && local.getUTCMinutes() === minute
+          && local.getUTCSeconds() === second
+          && P22_X_WEEKDAYS[local.getUTCDay()] === weekday;
+        if (exact) return new globalThis.Date(utcMs).toISOString();
+      }
+      throw new P22Error('SOURCE_METADATA_INVALID', '发布时间格式无效。', 422, { field: 'createdAt' });
+    }
     if (!P22_ISO8601_PATTERN.test(trimmed)) throw new P22Error('SOURCE_METADATA_INVALID', '发布时间格式无效。', 422, { field: 'createdAt' });
     return trimmed;
   }

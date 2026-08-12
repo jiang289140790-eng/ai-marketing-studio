@@ -299,9 +299,14 @@ test('P29 malformed author/time/engagement fail closed, never silently dropped',
   assert.throws(() => normalizeSourceMetadata({ likeCount: -1 }), (error) => error.code === 'SOURCE_METADATA_INVALID');
   assert.throws(() => normalizeSourceMetadata({ likeCount: 1.5 }), (error) => error.code === 'SOURCE_METADATA_INVALID');
   assert.throws(() => normalizeSourceMetadata({ createdAt: 'not-a-date' }), (error) => error.code === 'SOURCE_METADATA_INVALID');
+  assert.throws(() => normalizeSourceMetadata({ createdAt: 'Mon Aug 11 19:50:53 +0000 2026' }), (error) => error.code === 'SOURCE_METADATA_INVALID' && error.details?.field === 'createdAt');
+  assert.throws(() => normalizeSourceMetadata({ createdAt: 'Tue Feb 30 19:50:53 +0000 2026' }), (error) => error.code === 'SOURCE_METADATA_INVALID' && error.details?.field === 'createdAt');
+  assert.throws(() => normalizeSourceMetadata({ createdAt: 'Tue Aug 11 19:50:53 +1460 2026' }), (error) => error.code === 'SOURCE_METADATA_INVALID' && error.details?.field === 'createdAt');
   assert.throws(() => normalizeSourceMetadata({ author: { name: 'x'.repeat(200) } }), (error) => error.code === 'SOURCE_METADATA_INVALID');
   // 合法的 epoch 毫秒与无字段裸行均可规范化。
   assert.equal(normalizeSourceMetadata({ createdAt: 1723356000000 }).published_at, new Date(1723356000000).toISOString());
+  assert.equal(normalizeSourceMetadata({ createdAt: 'Tue Aug 11 19:50:53 +0000 2026' }).published_at, '2026-08-11T19:50:53.000Z');
+  assert.equal(normalizeSourceMetadata({ createdAt: 'Tue Aug 11 21:50:53 +0200 2026' }).published_at, '2026-08-11T19:50:53.000Z');
   assert.deepEqual(normalizeSourceMetadata({}), { author: null, published_at: null, engagement: null });
 });
 

@@ -1077,6 +1077,10 @@ function p22BrowserBoundary() {
         }],
       }, origin);
       if (body.action === 'collect_url') {
+        if (body.url?.endsWith('/status/1900000000000000999')) {
+          await sleep(200);
+          return browserJson(response, 422, { ok: false, code: 'SOURCE_METADATA_INVALID', message: '发布时间格式无效。', details: { field: 'createdAt' } }, origin);
+        }
         const content = 'Exact URL evidence enters the knowledge chain.';
         const contentSha = createHash('sha256').update(content).digest('hex');
         return browserJson(response, 200, {
@@ -1247,6 +1251,12 @@ test('P22 real production page clears preview state when switching projects', { 
     await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p22-query-row input')) && !document.querySelector('.p22-query-row button').disabled`), 'P22 capability');
     await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
     await browserWait(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length===1 && document.body.innerText.includes('Project A source preview')`), 'A preview');
+    await cdp.evaluate(`(() => { const input=document.querySelector('.p22-query-row input'); const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'https://x.com/example/status/1900000000000000999'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'failing exact URL mode');
+    await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length===0`), 'stale preview cleared at request start');
+    await browserWait(() => cdp.evaluate(`document.querySelector('[role="alert"]')?.textContent.includes('发布时间格式无效')`), 'bounded collection error');
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('Project A source preview')`), false);
     await cdp.evaluate(`(() => { const input=document.querySelector('.p22-query-row input'); const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'https://x.com/example/status/1900000000000000002'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
     await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'exact URL mode');
     await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
@@ -1284,7 +1294,7 @@ test('P22 real production page clears preview state when switching projects', { 
     assert.equal(await cdp.evaluate(`document.querySelector('.p22-query-row input').value`), 'Project B');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('Project A source preview')`), false);
     assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect').length, 1);
-    assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect_url').length, 1);
+    assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect_url').length, 2);
   } finally {
     cdp?.close(); await stopProcess(edge); await stopProcess(vite);
     await new Promise((resolve) => boundary.server.close(resolve));

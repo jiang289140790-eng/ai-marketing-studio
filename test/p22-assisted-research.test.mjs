@@ -401,6 +401,19 @@ test('P22 migration is service-role only, atomic and contains no new table or br
   assert.doesNotMatch(sql, /grant\s+execute[\s\S]+to\s+(anon|authenticated)/i);
 });
 
+test('P26 removes cumulative daily caps while retaining bounded, service-only cost records', () => {
+  const sql = readFileSync(join(process.cwd(), 'supabase', 'migrations', '20260812091054_p26_remove_daily_provider_caps.sql'), 'utf8');
+  assert.match(sql, /create or replace function api\.p22_reserve_daily_budget/i);
+  assert.match(sql, /daily_cap_enabled', false/i);
+  assert.match(sql, /recorded_without_daily_cap/i);
+  assert.doesNotMatch(sql, /P22_DAILY_BUDGET_EXCEEDED/);
+  assert.doesNotMatch(sql, /v_reserved\s*\+\s*p_amount_cny\s*>/i);
+  assert.match(sql, /p_amount_cny\s*>\s*10\.0000/i);
+  assert.match(sql, /revoke all on function api\.p22_reserve_daily_budget[\s\S]+from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function api\.p22_reserve_daily_budget[\s\S]+to service_role/i);
+  assert.doesNotMatch(sql, /create\s+table/i);
+});
+
 test('P22 production UI contains capability gates, explicit preview and save wording', () => {
   const component = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
@@ -410,14 +423,19 @@ test('P22 production UI contains capability gates, explicit preview and save wor
   assert.match(component, /来源预览（未保存）/);
   assert.match(component, /保存并生成可审核 Brief/);
   assert.match(component, /仅预览/);
+  assert.match(component, /按实际使用记录费用/);
+  assert.match(component, /今日已记录/);
+  assert.doesNotMatch(component, /每日各\s*[≤<]=?\s*¥?10|今日剩余/);
   assert.match(page, /onlineMode && <P22ResearchAssistPanel/);
   assert.match(page, /P22ResearchAssistPanel key=\{project\.id\}/);
   assert.match(page, /toP19EvidenceInput/);
   assert.match(component, /setItems\(\(project\.evidence \|\| \[\]\)\.map\(p22ItemFromEvidence\)\.filter\(Boolean\)\)[\s\S]+setSelected\(\[\]\)[\s\S]+setAnalyses\(\[\]\)/);
   const analyzeBody = edge.slice(edge.indexOf('async function analyze'), edge.indexOf('Deno.serve'));
+  assert.doesNotMatch(edge, /DAILY_BUDGET_EXCEEDED|今日\s*¥10\s*预算已不足/);
+  assert.match(edge, /daily_cap_enabled:false/);
   assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') >= 0);
   assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("Deno.env.get('DASHSCOPE_API_KEY')"));
-  assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("reserve(db,userId,'qwen'"));
+  assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("recordProviderCost(db,userId,'qwen'"));
 });
 
 // ---------------------------------------------------------------------------
@@ -908,7 +926,7 @@ test('P22 browser service preserves bounded code, stage and safe status on non-2
   });
 });
 
-test('P22 collect reserves before the documented Apify sequence, never refunds, and issues proofs only after success', () => {
+test('P22 records bounded cost before the documented Apify sequence and issues proofs only after success', () => {
   const edge = readFileSync(join(process.cwd(), 'supabase', 'functions', 'p22-research-assist', 'index.ts'), 'utf8');
   const core = readFileSync(join(process.cwd(), 'supabase', 'functions', 'p22-research-assist', 'assist-core.mjs'), 'utf8');
   assert.ok(!edge.includes('x-apify-actor-run-id'), 'index.ts 不得再引用未文档化响应头');
@@ -916,7 +934,7 @@ test('P22 collect reserves before the documented Apify sequence, never refunds, 
   assert.ok(!edge.includes('run-sync-get-dataset-items'));
   assert.ok(!core.includes('run-sync-get-dataset-items'));
   const collectBody = edge.slice(edge.indexOf('async function collect'), edge.indexOf('async function analyze'));
-  const reserveAt = collectBody.indexOf("reserve(db,userId,'apify'");
+  const reserveAt = collectBody.indexOf("recordProviderCost(db,userId,'apify'");
   const adapterAt = collectBody.indexOf('runApifyCollectionSequence(');
   const normalizeAt = collectBody.indexOf('normalizeCollectedItems(');
   const proofAt = collectBody.indexOf('issueCollectionProof(');
@@ -927,8 +945,8 @@ test('P22 collect reserves before the documented Apify sequence, never refunds, 
   assert.ok(!/p22_(release|refund|delete)\w*/i.test(edge), '不存在释放、退款或删除预留的调用');
   assert.ok(!/\.delete\(/.test(edge));
   const analyzeBody = edge.slice(edge.indexOf('async function analyze'), edge.indexOf('Deno.serve'));
-  assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("reserve(db,userId,'qwen'"), '分析必须先验证来源证明再预留 Qwen');
-  assert.ok(analyzeBody.indexOf("reserve(db,userId,'qwen'") < analyzeBody.indexOf('fetch('), '分析必须预留 Qwen 后再调用模型');
+  assert.ok(analyzeBody.indexOf('verifyAnalyzeSources') < analyzeBody.indexOf("recordProviderCost(db,userId,'qwen'"), '分析必须先验证来源证明再记录 Qwen 费用');
+  assert.ok(analyzeBody.indexOf("recordProviderCost(db,userId,'qwen'") < analyzeBody.indexOf('fetch('), '分析必须记录 Qwen 费用后再调用模型');
 });
 
 test('P22 Edge TypeScript parses locally without secrets or network', async () => {
@@ -1028,10 +1046,10 @@ function p22BrowserBoundary() {
       };
       if (body.action === 'status') return browserJson(response, 200, {
         ...base, capabilities: { apify_configured: true, qwen_configured: false },
-        budget: { apify: { remaining_cny: 10 }, qwen: { remaining_cny: 10 } },
+        cost_tracking: { daily_cap_enabled: false, apify: { recorded_cny: 12 }, qwen: { recorded_cny: 11 } },
       }, origin);
       if (body.action === 'collect') return browserJson(response, 200, {
-        ...base, action: 'collect', cost: { reserved_cny: 0.1 },
+        ...base, action: 'collect', cost: { recorded_cny: 0.1 },
         items: [{
           id: 'p22-browser-source-a', external_id: '1900000000000000001',
           source_url: 'https://x.com/example/status/1900000000000000001', label: 'Project A source preview',
@@ -1043,7 +1061,7 @@ function p22BrowserBoundary() {
         const content = 'Exact URL evidence enters the knowledge chain.';
         const contentSha = createHash('sha256').update(content).digest('hex');
         return browserJson(response, 200, {
-          ...base, action: 'collect_url', cost: { reserved_cny: 0.1 },
+          ...base, action: 'collect_url', cost: { recorded_cny: 0.1 },
           items: [{
             id: `p22-${contentSha.slice(0, 24)}`, external_id: '1900000000000000002',
             source_url: 'https://x.com/example/status/1900000000000000002', label: 'Exact URL source',

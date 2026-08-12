@@ -5,7 +5,6 @@ export const P22_LIMITS = Object.freeze({
   analyze: 2,
   persist_text: 5000,
   proof_ttl_ms: 15 * 60 * 1000,
-  daily_cny: 10,
   apify_reservation_cny: 2,
   qwen_reservation_cny: 1,
   apify_wait_ms: 60 * 1000,

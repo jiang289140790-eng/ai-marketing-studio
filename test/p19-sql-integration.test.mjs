@@ -73,7 +73,7 @@ test('SQL 集成：全新数据库回放 42 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 43, '迁移集必须是规范 39 + P19 + P20 + P20 ACL repair + P22 共 43 个');
+    assert.equal(migrations.length, 44, '迁移集必须是规范 39 + P19 + P20 + P20 ACL repair + P22 + P26 共 44 个');
     for (const name of migrations) {
       const sql = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', name), 'utf8');
       const run = psql(dbName, null, { stdin: sql });

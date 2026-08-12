@@ -41,7 +41,7 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
       ? await client.collectUrl(topic.trim())
       : await client.collect(topic.trim(), 5);
     setItems(response.items || []); setSelected([]); setAnalyses([]);
-    setMessage(`已找到 ${response.items?.length || 0} 条公开来源；尚未保存。Apify 本次预留 ¥${response.cost?.reserved_cny ?? 0}。`);
+    setMessage(`已找到 ${response.items?.length || 0} 条公开来源；尚未保存。Apify 本次费用记录 ¥${response.cost?.recorded_cny ?? 0}。`);
   });
   const analyze = () => act(async () => {
     const chosen = items.filter((item) => selected.includes(item.id));
@@ -58,8 +58,8 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
   return (
     <div className="p22-assist" aria-label="智能找资料">
       <div className="p22-assist-head">
-        <div><span className="p22-kicker">P22 · 有预算上限</span><h4>智能找资料</h4></div>
-        <span className="p22-budget">Apify/Qwen 每日各 ≤ ¥10</span>
+        <div><span className="p22-kicker">P22 · 智能研究</span><h4>智能找资料</h4></div>
+        <span className="p22-budget">按实际使用记录费用</span>
       </div>
       <p className="p19-panel-note">最多采集 5 条、分析 2 条；先预览，明确保存后生成待审 Brief，不自动批准、路由或发布。</p>
       {!status && !error && <p className="p19-meta-line">正在检查 staging 能力…</p>}
@@ -68,7 +68,7 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
           <span className={status.capabilities.apify_configured ? 'ready' : 'missing'}>Apify：{status.capabilities.apify_configured ? '已配置' : '尚未配置'}</span>
           <span className={status.capabilities.qwen_configured ? 'ready' : 'missing'}>Qwen：{status.capabilities.qwen_configured ? '已配置' : '尚未配置'}</span>
           <span>权限：{status.role}</span>
-          {status.budget && <span>今日剩余：Apify ¥{status.budget.apify.remaining_cny} · Qwen ¥{status.budget.qwen.remaining_cny}</span>}
+          {status.cost_tracking && <span>今日已记录：Apify ¥{status.cost_tracking.apify.recorded_cny} · Qwen ¥{status.cost_tracking.qwen.recorded_cny}</span>}
         </div>
       )}
       {status && !['operator', 'admin'].includes(status.role) && <p className="p22-missing-note">当前账号为只读角色；智能采集和分析需要 operator。</p>}

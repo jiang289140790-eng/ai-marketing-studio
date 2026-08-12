@@ -21,6 +21,7 @@ import {
   boundedText,
   clonePlain,
   evidenceProofFingerprint,
+  resolveBriefEvidenceBindings,
   deepFreeze,
   isNonEmptyString,
   isPlainObject,
@@ -219,12 +220,15 @@ export function buildProjectLineageRow(project) {
     } else {
       const cardById = new Map(cards.map((record) => [record.id, record]));
       const snapshots = isPlainObject(brief.card_fingerprints) ? brief.card_fingerprints : {};
-      const missingOrWrong = (brief.knowledge_citation_ids || []).some((cardId) => {
+      const binding = resolveBriefEvidenceBindings(project, brief.knowledge_citation_ids);
+      const missingOrWrong = !binding.valid || (brief.knowledge_citation_ids || []).some((cardId) => {
         const card = cardById.get(cardId);
         if (!card) return true;
-        return snapshots[cardId] !== card.fingerprint || brief.evidence_provenance_fingerprint !== evidenceProofFingerprint(evidence);
+        return snapshots[cardId] !== card.fingerprint;
       });
-      if (missingOrWrong) {
+      const evidenceFingerprintWrong = binding.valid
+        && brief.evidence_provenance_fingerprint !== evidenceProofFingerprint(binding.evidence);
+      if (missingOrWrong || evidenceFingerprintWrong) {
         addReason('Brief 引用的知识卡/证据快照已过时（stale 源）。');
         state = 'INVALID_SOURCE';
       }

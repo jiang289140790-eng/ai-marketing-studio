@@ -142,12 +142,14 @@ test('P23 confirmed source becomes exact Evidence, deterministic Analysis and Kn
   assert.equal(evidence.provenance.content_sha256, contentHash);
 });
 
-test('P23 production page performs the confirmed Evidence → Analysis → Knowledge chain', () => {
+test('P23/P24 production page performs confirmed Evidence → Analysis → Knowledge → Brief chain', () => {
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
   const panel = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
   assert.match(page, /addEvidence\(project, input\)/);
   assert.match(page, /runAnalysis\(persistedEvidence, evidence\.id\)/);
   assert.match(page, /buildKnowledgeCard\(persistedAnalysis, analysis\.id\)/);
+  assert.match(page, /assembleBrief\(completed\)/);
+  assert.match(page, /Knowledge Card → 可审核 Brief/);
   assert.match(panel, /collectUrl\(topic\.trim\(\)\)/);
-  assert.match(panel, /Evidence、确定性分析和 Knowledge Card/);
+  assert.match(panel, /Evidence、确定性分析、Knowledge Card 和待人工审核 Brief/);
 });

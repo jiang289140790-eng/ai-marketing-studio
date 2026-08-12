@@ -31,6 +31,7 @@ import {
   evidenceProofFingerprint,
   fingerprintOf,
   isNonEmptyString,
+  resolveBriefEvidenceBindings,
   sha256Hex,
   stableId,
   validateBrief,
@@ -555,7 +556,14 @@ export async function assembleBrief(project, { now = () => new Date().toISOStrin
   const timestamp = now();
   const cardFingerprints = {};
   for (const card of cards) cardFingerprints[card.id] = card.fingerprint;
-  const evidenceProvenanceFingerprint = evidenceProofFingerprint(project.evidence);
+  const citationIds = cards.map((card) => card.id);
+  const evidenceBinding = resolveBriefEvidenceBindings(project, citationIds);
+  if (!evidenceBinding.valid) {
+    throw workbenchError('BRIEF_EVIDENCE_BINDING_INVALID', evidenceBinding.issues[0] || 'Brief cited Evidence binding is invalid.');
+  }
+  const citedEvidence = evidenceBinding.evidence;
+  const hasCollectedEvidence = citedEvidence.some((item) => item.provenance?.manual === false);
+  const evidenceProvenanceFingerprint = evidenceProofFingerprint(citedEvidence);
   const projectFingerprint = await hasher(clonePlain({
     topic: project.topic,
     objective: project.objective,
@@ -577,13 +585,15 @@ export async function assembleBrief(project, { now = () => new Date().toISOStrin
     audience: project.audience,
     channel: project.channel,
     constraints: clonePlain(project.constraints || []),
-    knowledge_citation_ids: cards.map((card) => card.id),
+    knowledge_citation_ids: citationIds,
     structural_guidance: cards.flatMap((card) => (card.generation_guidance ? card.generation_guidance.must_preserve || [] : []).slice(0, 3)).slice(0, MAX_ARRAY_LENGTH),
     evidence_provenance: {
-      local_only: true,
-      store: 'p19_local_store_v1',
+      local_only: !hasCollectedEvidence,
+      store: hasCollectedEvidence ? 'p19_workspace_v1' : 'p19_local_store_v1',
       created_from: 'selected_knowledge_cards',
-      statement: '证据全部来自本地手工录入，未经过任何平台采集或验证。',
+      statement: hasCollectedEvidence
+        ? '证据包含经服务端来源证明绑定的公开采集记录；Brief 保留对应知识卡与证据快照。'
+        : '证据全部来自本地手工录入，未经过任何平台采集或验证。',
     },
     card_fingerprints: cardFingerprints,
     evidence_provenance_fingerprint: evidenceProvenanceFingerprint,
@@ -805,8 +815,9 @@ export async function computeStaleness(project, { hasher = fingerprintOf } = {})
       stale.brief_stale_reasons.push('存在过时的知识卡。');
     }
     if (brief.evidence_provenance_fingerprint) {
-      const current = evidenceProofFingerprint(project.evidence);
-      if (brief.evidence_provenance_fingerprint !== current) {
+      const binding = resolveBriefEvidenceBindings(project, brief.knowledge_citation_ids);
+      const current = binding.valid ? evidenceProofFingerprint(binding.evidence) : '';
+      if (!binding.valid || brief.evidence_provenance_fingerprint !== current) {
         stale.brief_stale = true;
         stale.brief_stale_reasons.push('证据溯源快照与当前证据不一致。');
       }

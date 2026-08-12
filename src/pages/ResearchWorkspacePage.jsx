@@ -467,9 +467,22 @@ export function ResearchWorkspacePage() {
         if (!saved.ok) throw workbenchError(saved.code, saved.message);
       }
 
+      const completedWorkflow = await buildProjectWorkflowState(completed);
+      if (!completed.brief || completedWorkflow.brief_stale) {
+        const afterBrief = await assembleBrief(completed);
+        if (onlineMode) {
+          const spec = buildOnlineCommand(completed, afterBrief);
+          completed = await onlineStoreRef.current.execute(spec.command, spec.payload, spec.options);
+        } else {
+          completed = afterBrief;
+          const saved = storeRef.current.putProject(completed);
+          if (!saved.ok) throw workbenchError(saved.code, saved.message);
+        }
+      }
+
       setProject(completed);
       await reloadProjects();
-      setNotice('来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card。');
+      setNotice('来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card → 可审核 Brief。');
       return true;
     } catch (cause) {
       if (onlineMode && project?.id) {
@@ -923,7 +936,7 @@ export function ResearchWorkspacePage() {
               <P19CardList project={project} workflow={workflow} />
             </section>
             <section className="p21-step-panel" id="p21-step-brief" data-p21-step="brief" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'brief'}>
-              <P19BriefSection project={project} workflow={workflow} onAssemble={handleAssembleBrief} onDecide={handleDecide} busy={busy} />
+              <P19BriefSection project={project} workflow={workflow} onAssemble={handleAssembleBrief} onDecide={handleDecide} busy={busy} onlineMode={onlineMode} />
             </section>
             <section className="p21-step-panel" id="p21-step-handoff" data-p21-step="handoff" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'handoff'}>
               <P19HandoffSection project={project} workflow={workflow} onDerive={handleDeriveHandoff} onDownload={handleExport} busy={busy} />

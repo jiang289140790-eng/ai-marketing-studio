@@ -408,7 +408,7 @@ test('P22 production UI contains capability gates, explicit preview and save wor
   assert.match(component, /Apify：.*尚未配置/s);
   assert.match(component, /Qwen：.*尚未配置/s);
   assert.match(component, /来源预览（未保存）/);
-  assert.match(component, /保存并生成知识卡/);
+  assert.match(component, /保存并生成可审核 Brief/);
   assert.match(component, /仅预览/);
   assert.match(page, /onlineMode && <P22ResearchAssistPanel/);
   assert.match(page, /P22ResearchAssistPanel key=\{project\.id\}/);
@@ -1100,6 +1100,31 @@ function p22BrowserBoundary() {
         project = { ...project, knowledge_cards: [...project.knowledge_cards.filter((row) => row.id !== canonical.id), canonical], version: project.version + 1, fingerprint: 'd'.repeat(64) };
         return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'card', id: canonical.id } }, origin);
       }
+      if (body.command === 'brief.assemble') {
+        const canonical = { ...body.payload.brief, id: `brief-${'3'.repeat(24)}`, fingerprint: '8'.repeat(64) };
+        canonical.review = { ...canonical.review, brief_id: canonical.id };
+        project = { ...project, brief: canonical, version: project.version + 1, fingerprint: '7'.repeat(64) };
+        return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'brief', id: canonical.id } }, origin);
+      }
+      if (body.command === 'brief.decide') {
+        const value = body.payload.decision.value;
+        project = {
+          ...project,
+          brief: {
+            ...project.brief,
+            status: value === 'approved' ? 'approved' : 'returned',
+            review: {
+              ...project.brief.review,
+              decision: { ...body.payload.decision, source: 'local_manual' },
+              comments: body.payload.decision.comments || [],
+            },
+            fingerprint: '6'.repeat(64),
+          },
+          version: project.version + 1,
+          fingerprint: '5'.repeat(64),
+        };
+        return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'brief', id: project.brief.id } }, origin);
+      }
       return browserJson(response, 400, { ok: false, code: 'UNKNOWN_COMMAND', message: 'Unsupported command.' }, origin);
     }
     return browserJson(response, 404, { code: 'NOT_FOUND' }, origin);
@@ -1171,7 +1196,8 @@ test('P22 real production page clears preview state when switching projects', { 
     await cdp.send('Page.navigate', { url: `${baseUrl}#/research` });
     await browserWait(() => cdp.evaluate(`Boolean([...document.querySelectorAll('button')].find((button) => button.textContent.includes('新建项目')))`), 'research page');
     const createProject = async (values) => {
-      await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('新建项目')).click()`);
+      await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-project-bar button.p19-btn-primary')) && !document.querySelector('.p19-project-bar button.p19-btn-primary').disabled`), 'new project action');
+      await cdp.evaluate(`document.querySelector('.p19-project-bar button.p19-btn-primary').click()`);
       await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-create-panel form'))`), 'project form');
       await cdp.evaluate(`(() => { const fields=[...document.querySelectorAll('.p19-create-panel input, .p19-create-panel textarea')]; const values=${JSON.stringify(values)}; fields.forEach((field,index)=>{ const proto=field.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto,'value').set.call(field,values[index]); field.dispatchEvent(new Event('input',{bubbles:true})); }); document.querySelector('.p19-create-panel button[type="submit"]').click(); })()`);
     };
@@ -1183,19 +1209,26 @@ test('P22 real production page clears preview state when switching projects', { 
     await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'exact URL mode');
     await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
     await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Exact URL source')`), 'exact URL preview');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button) => button.textContent.includes('保存并生成知识卡')).click()`);
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button) => button.textContent.includes('保存并生成可审核 Brief')).click()`);
     await browserWait(() => boundary.getProject()?.evidence.length === 1 && boundary.getProject()?.analyses.length === 0, 'partial Evidence persistence');
     await sleep(750);
     const retryState = await cdp.evaluate(`(() => { const button=document.querySelector('.p22-source-card button'); return { exists:Boolean(button), disabled:button?.disabled, cards:document.querySelectorAll('.p22-source-card').length, busy:document.body.innerText.includes('正在执行'), text:button?.textContent || '', alert:document.querySelector('[role="alert"]')?.textContent || '' }; })()`);
     assert.equal(retryState.exists, true, `partial-success source card disappeared: ${JSON.stringify(retryState)}`);
     assert.equal(retryState.disabled, false, `partial-success retry stayed disabled: ${JSON.stringify(retryState)}`);
     await cdp.evaluate(`document.querySelector('.p22-source-card button').click()`);
-    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Evidence → 确定性分析 → Knowledge Card')`), 'knowledge chain completion');
+    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Evidence → 确定性分析 → Knowledge Card → 可审核 Brief')`), 'reviewable brief chain completion');
     assert.equal(boundary.getProject().evidence.length, 1);
     assert.equal(boundary.getProject().analyses.length, 1);
     assert.equal(boundary.getProject().knowledge_cards.length, 1);
+    assert.equal(boundary.getProject().brief.status, 'pending_review');
     assert.equal(boundary.getProject().analyses[0].evidence_id, boundary.getProject().evidence[0].id);
     assert.equal(boundary.getProject().knowledge_cards[0].analysis_id, boundary.getProject().analyses[0].id);
+    await browserWait(() => cdp.evaluate(`Boolean([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief')))`), 'brief review controls');
+    await cdp.evaluate(`(() => { const field=document.querySelector('.p19-brief-actions textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(field,'来源和知识绑定已人工核对'); field.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    await browserWait(() => cdp.evaluate(`!([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief'))?.disabled)`), 'review rationale gate');
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准 Brief')).click()`);
+    await browserWait(() => boundary.getProject()?.brief?.status === 'approved', 'online manual Brief approval');
+    await browserWait(() => cdp.evaluate(`!document.querySelector('.p19-project-bar button.p19-btn-primary').disabled`), 'review save completion');
     await createProject(['Project B', 'Clean scope', 'Team B', 'Research', 'No A state']);
     await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Project B') && document.querySelectorAll('.p22-source-card').length===0`), 'B clean state');
     assert.equal(await cdp.evaluate(`document.querySelector('.p22-query-row input').value`), 'Project B');

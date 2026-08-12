@@ -252,6 +252,85 @@ export function evidenceProofFingerprint(evidence) {
     .join('|');
 }
 
+/** Resolve only the Evidence records transitively cited by a Brief's cards.
+ * The chain is fail-closed: every cited card, analysis and evidence identity must
+ * be unique and its stored version/fingerprint binding must still be exact.
+ */
+export function resolveBriefEvidenceBindings(project, citationIds) {
+  const ids = Array.isArray(citationIds) ? citationIds : [];
+  const cards = Array.isArray(project?.knowledge_cards) ? project.knowledge_cards : [];
+  const analyses = Array.isArray(project?.analyses) ? project.analyses : [];
+  const evidence = Array.isArray(project?.evidence) ? project.evidence : [];
+  const issues = [];
+  const resolved = [];
+  const seenCitations = new Set();
+  const seenAnalyses = new Set();
+  const seenEvidence = new Set();
+
+  for (const cardId of ids) {
+    if (!isNonEmptyString(cardId) || seenCitations.has(cardId)) {
+      issues.push('Brief knowledge citation identity is missing or duplicated.');
+      continue;
+    }
+    seenCitations.add(cardId);
+    const cardMatches = cards.filter((record) => record?.id === cardId);
+    if (cardMatches.length !== 1) {
+      issues.push('Brief knowledge citation does not resolve to exactly one card.');
+      continue;
+    }
+    const card = cardMatches[0];
+    if (card.project_id !== project?.id) {
+      issues.push('Brief knowledge card belongs to a different project.');
+      continue;
+    }
+    if (!isNonEmptyString(card.analysis_id) || seenAnalyses.has(card.analysis_id)) {
+      issues.push('Brief card analysis identity is missing or duplicated.');
+      continue;
+    }
+    seenAnalyses.add(card.analysis_id);
+    const analysisMatches = analyses.filter((record) => record?.id === card.analysis_id);
+    if (analysisMatches.length !== 1) {
+      issues.push('Brief card does not resolve to exactly one analysis.');
+      continue;
+    }
+    const analysis = analysisMatches[0];
+    if (analysis.project_id !== project?.id) {
+      issues.push('Brief analysis belongs to a different project.');
+      continue;
+    }
+    if (card.analysis_fingerprint !== analysis.fingerprint || card.analysis_version !== analysis.version) {
+      issues.push('Brief card analysis binding is stale or mismatched.');
+      continue;
+    }
+    if (!isNonEmptyString(analysis.evidence_id) || seenEvidence.has(analysis.evidence_id)) {
+      issues.push('Brief analysis evidence identity is missing or duplicated.');
+      continue;
+    }
+    seenEvidence.add(analysis.evidence_id);
+    const evidenceMatches = evidence.filter((record) => record?.id === analysis.evidence_id);
+    if (evidenceMatches.length !== 1) {
+      issues.push('Brief analysis does not resolve to exactly one evidence record.');
+      continue;
+    }
+    const source = evidenceMatches[0];
+    if (source.project_id !== project?.id) {
+      issues.push('Brief evidence belongs to a different project.');
+      continue;
+    }
+    if (analysis.evidence_fingerprint !== source.fingerprint || analysis.evidence_version !== source.version) {
+      issues.push('Brief analysis evidence binding is stale or mismatched.');
+      continue;
+    }
+    resolved.push(source);
+  }
+
+  return {
+    valid: ids.length > 0 && issues.length === 0 && resolved.length === ids.length,
+    evidence: resolved,
+    issues,
+  };
+}
+
 // ---- 项目 ----
 
 export function validateProject(project) {

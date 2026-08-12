@@ -416,7 +416,7 @@ export function P19CardList({ project, workflow }) {
   );
 }
 
-export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy }) {
+export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy, onlineMode = false }) {
   const [rationale, setRationale] = useState('');
   const [comment, setComment] = useState('');
   const brief = project.brief || null;
@@ -425,6 +425,7 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy 
   const approved = Boolean(decision && decision.value === 'approved');
   const returned = Boolean(decision && decision.value === 'return_for_revision');
   const canReview = Boolean(brief) && brief.status === 'pending_review' && !stale && !approved;
+  const canSubmitReview = canReview && Boolean(rationale.trim());
   const decide = (value) => {
     onDecide(value, rationale.trim(), comment.trim());
     setRationale('');
@@ -490,8 +491,8 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy 
               <button
                 className="p19-btn p19-btn-approve"
                 type="button"
-                disabled={busy || !canReview}
-                title={!canReview ? (stale ? 'Brief 已过时，先重建' : approved ? '本版已批准' : '先组装 Brief') : '批准（approved + local_manual）后才可派生交接包'}
+                disabled={busy || !canSubmitReview}
+                title={!canReview ? (stale ? 'Brief 已过时，先重建' : approved ? '本版已批准' : '先组装 Brief') : !rationale.trim() ? '请先填写审核意见' : '批准（approved + local_manual）后才可派生交接包'}
                 onClick={() => decide('approved')}
               >
                 批准 Brief
@@ -499,7 +500,7 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy 
               <button
                 className="p19-btn p19-btn-return"
                 type="button"
-                disabled={busy || !canReview}
+                disabled={busy || !canSubmitReview}
                 title={!canReview ? (stale ? 'Brief 已过时，先重建' : approved ? '本版已批准' : '先组装 Brief') : '退回修改（return_for_revision）'}
                 onClick={() => decide('return_for_revision')}
               >
@@ -511,7 +512,7 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy 
               <textarea rows={2} value={comment} maxLength={1000} onChange={(event) => setComment(event.target.value)} disabled={busy || returned || approved} />
             </label>
           </div>
-          <p className="p19-provenance-line">审核决定与评论只记录本地（local_manual），不写入任何后端；退回后请修改内容并重建 Brief。</p>
+          <p className="p19-provenance-line">{onlineMode ? '审核决定会保存到当前 staging 账号的工作区（local_manual 表示由人工作出决定，不是模型自动批准）。' : '审核决定与评论只记录在本浏览器（local_manual）；退回后请修改内容并重建 Brief。'}</p>
         </>
       )}
     </div>

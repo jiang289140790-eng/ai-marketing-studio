@@ -52,7 +52,7 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
   const toggle = (id) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : current.length < 2 ? [...current, id] : current);
   const save = async (item) => act(async () => {
     const ok = await onSaveEvidence(item);
-    if (ok) setMessage('已完成保存：Evidence、确定性分析和 Knowledge Card 均已绑定到当前项目。');
+    if (ok) setMessage('已完成保存：Evidence、确定性分析、Knowledge Card 和待人工审核 Brief 均已绑定到当前项目。');
   });
 
   return (
@@ -61,7 +61,7 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
         <div><span className="p22-kicker">P22 · 有预算上限</span><h4>智能找资料</h4></div>
         <span className="p22-budget">Apify/Qwen 每日各 ≤ ¥10</span>
       </div>
-      <p className="p19-panel-note">最多采集 5 条、分析 2 条；先预览，明确保存后才进入当前项目，不自动生成 Brief 或发布。</p>
+      <p className="p19-panel-note">最多采集 5 条、分析 2 条；先预览，明确保存后生成待审 Brief，不自动批准、路由或发布。</p>
       {!status && !error && <p className="p19-meta-line">正在检查 staging 能力…</p>}
       {status && (
         <div className="p22-capabilities">
@@ -87,7 +87,8 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
             const duplicate = isP22Duplicate(project, item);
             const existingEvidence = findP22Evidence(project, item);
             const existingAnalysis = existingEvidence && (project.analyses || []).find((row) => row.evidence_id === existingEvidence.id);
-            const pipelineComplete = Boolean(existingAnalysis && (project.knowledge_cards || []).some((row) => row.analysis_id === existingAnalysis.id));
+            const existingCard = existingAnalysis && (project.knowledge_cards || []).find((row) => row.analysis_id === existingAnalysis.id);
+            const pipelineComplete = Boolean(existingCard && project.brief?.knowledge_citation_ids?.includes(existingCard.id));
             const analysis = analysisById.get(item.id);
             return <article className="p22-source-card" key={item.id}>
               <label className="p22-select"><input type="checkbox" checked={selected.includes(item.id)} disabled={working || (!selected.includes(item.id) && selected.length >= 2)} onChange={() => toggle(item.id)} />选择分析</label>
@@ -95,7 +96,7 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
               <p>{item.content_text.slice(0, 360)}</p>
               <small>内容 SHA-256：{item.content_sha256.slice(0, 16)}… · Run：{String(item.provenance?.run_id || '未提供').slice(0, 48)}</small>
               {analysis && <div className="p22-analysis-preview"><b>Qwen 辅助分析（仅预览）</b><p>{analysis.summary}</p><small>信号：{analysis.signals.join('；') || '无'} · 风险：{analysis.risks.join('；') || '无'}</small></div>}
-              <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || pipelineComplete} onClick={() => save(item)}>{pipelineComplete ? '已进入知识库' : duplicate ? '继续生成知识卡' : '保存并生成知识卡'}</button>
+              <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || pipelineComplete} onClick={() => save(item)}>{pipelineComplete ? '已生成可审核 Brief' : duplicate ? '继续生成可审核 Brief' : '保存并生成可审核 Brief'}</button>
             </article>;
           })}
         </div>

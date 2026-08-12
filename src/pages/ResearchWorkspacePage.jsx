@@ -425,6 +425,13 @@ export function ResearchWorkspacePage() {
   }, [onlineMode, onlineStore, reloadProjects, run, selectProject, store]);
 
   const handleSaveProfile = useCallback((patch) => {
+    const fields = ['topic', 'objective', 'audience', 'channel', 'constraints'];
+    const hasChanges = fields.some((field) => JSON.stringify(project?.[field]) !== JSON.stringify(patch?.[field]));
+    if (!hasChanges) {
+      setError(null);
+      setNotice('项目档案没有修改，无需保存。');
+      return Promise.resolve(true);
+    }
     return run('保存项目档案', () => updateProjectProfile(project, patch), { notice: '项目档案已保存；下游 Brief/交接包已标记为过时。' });
   }, [run, project]);
 
@@ -1289,7 +1296,7 @@ export function ResearchWorkspacePage() {
           <P19ChainProgress workflow={workflow} onNavigateStep={handleNavigateStep} />
           <div className={`p19-grid ${viewMode === P21_VIEW_MODES.GUIDED ? 'p21-guided-grid' : ''}`}>
             <section className="p21-step-panel" id="p21-step-project" data-p21-step="project" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'project'}>
-              <P19ProjectForm project={project} onSave={handleSaveProfile} busy={busy} />
+              <P19ProjectForm key={`${project.id}:${project.version}`} project={project} onSave={handleSaveProfile} busy={busy} />
             </section>
             <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
               {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}

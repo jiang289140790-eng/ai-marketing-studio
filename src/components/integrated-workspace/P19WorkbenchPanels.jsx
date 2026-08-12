@@ -120,13 +120,25 @@ export function P19ProjectForm({ project, onSave, busy }) {
   const [audience, setAudience] = useState(project.audience);
   const [channel, setChannel] = useState(project.channel);
   const [constraintsText, setConstraintsText] = useState((project.constraints || []).join('\n'));
+  const normalizedConstraints = constraintsText
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  const hasChanges = topic.trim() !== project.topic
+    || objective.trim() !== project.objective
+    || audience.trim() !== project.audience
+    || channel.trim() !== project.channel
+    || JSON.stringify(normalizedConstraints) !== JSON.stringify(project.constraints || []);
   const save = () => {
-    const constraints = constraintsText
-      .split('\n')
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .slice(0, 20);
-    onSave({ topic: topic.trim(), objective: objective.trim(), audience: audience.trim(), channel: channel.trim(), constraints });
+    if (!hasChanges) return;
+    onSave({
+      topic: topic.trim(),
+      objective: objective.trim(),
+      audience: audience.trim(),
+      channel: channel.trim(),
+      constraints: normalizedConstraints,
+    });
   };
   return (
     <div className="p19-panel">
@@ -156,8 +168,13 @@ export function P19ProjectForm({ project, onSave, busy }) {
           <textarea rows={3} value={constraintsText} onChange={(event) => setConstraintsText(event.target.value)} />
         </label>
         <div className="p19-form-actions">
-          <button className="p19-btn p19-btn-primary" type="submit" disabled={busy}>
-            {busy ? '保存中…' : '保存项目档案'}
+          <button
+            className="p19-btn p19-btn-primary"
+            type="submit"
+            disabled={busy || !hasChanges}
+            title={!hasChanges ? '当前档案没有需要保存的修改' : '保存项目档案'}
+          >
+            {busy ? '保存中…' : hasChanges ? '保存项目档案' : '没有修改'}
           </button>
         </div>
       </form>

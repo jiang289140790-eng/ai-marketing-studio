@@ -59,7 +59,13 @@ function sanitizeDetails(details) {
 }
 
 function safeError(code, message, details = {}, status = null) {
-  const error = new Error(String(message || '智能研究服务暂时不可用。').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, MAX_MESSAGE));
+  // M2 脱敏：错误输出不得包含 Bearer 令牌、JWT 或 service_role/secret/token/
+  // password 形式的 Secret 值（与命令适配器 redactSensitiveText 同一口径）。
+  const error = new Error(String(message || '智能研究服务暂时不可用。')
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g, '[redacted-jwt]')
+    .replace(/((?:service[_-]?role|secret|token|password))\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .slice(0, MAX_MESSAGE));
   error.code = String(code || 'P22_REQUEST_FAILED').slice(0, 80);
   if (details && typeof details === 'object') error.details = sanitizeDetails(details);
   if (Number.isInteger(status) && status >= 100 && status <= 599) error.status = status;

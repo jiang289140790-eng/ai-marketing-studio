@@ -1530,6 +1530,7 @@ export function buildMultimodalQwenContent(items) {
     '返回严格 JSON：{"analyses":[{"source_id":"...","text_expression":"...","hook":"...","copy_pattern":"...","target_audience":"...","audience_need_emotion":"...","media_analysis":[{"media_id":"...","visual_content":"...","composition":"...","people":"...","scene":"...","emotion":"...","visual_selling_points":["..."],"style_pattern":"..."}],"virality_drivers":["..."],"reusable_methods":["..."],"rewrite_suggestions":["..."],"signals":["..."],"risks":["..."]}]}',
     'hook 是文本/标题钩子（≤500 字）；copy_pattern 是文案模式；target_audience 是目标受众；audience_need_emotion 是受众需求/情感。',
     'visual_selling_points 是每条媒体的视觉卖点（最多 3 项、每项 ≤240 字）；style_pattern 是风格模式（≤500 字）。rewrite_suggestions 是可复写的建议（最多 5 项、每项 ≤240 字）。',
+    '逐媒体要求（M2）：visual_content 必须包含画面内容与该媒体的叙事（发生了什么、前后语境），不限于静态画面描述；对视频媒体，composition 必须包含声音可用信息：是否存在可用音轨，以及人声/配乐/环境音分别传达什么内容；无可用音轨时明确说明。',
     'media_analysis 必须与每个来源的媒体一一对应并保持相同顺序，每项精确绑定 media_id；无媒体的来源 media_analysis 必须为空数组。',
     'text_expression/hook/copy_pattern/target_audience/audience_need_emotion 各 ≤500 字；virality_drivers/reusable_methods/rewrite_suggestions/signals/risks 各最多 5 项、每项最多 240 字；逐媒体字段各不超过 500 字。',
     '不得生成营销成品、路由或发布指令。',

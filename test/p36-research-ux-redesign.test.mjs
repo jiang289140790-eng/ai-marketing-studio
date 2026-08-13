@@ -56,6 +56,8 @@ const OWNED_PATHS = new Set([
   'test/p19-backend-command.test.mjs',
   'test/p29-multimodal-x-evidence.browser.test.mjs',
   'test/p29-multimodal-x-evidence.test.mjs',
+  // M2 staging 唯一数据源与真实多模态分析新增授权路径（本里程碑）。
+  'supabase/functions/p22-research-assist/assist-core.mjs',
   // 所有权守卫清单必须同步跟踪 P36 授权路径。
   'test/p17c-staging-preview.test.mjs',
   'test/online-integrated-preview.test.mjs',

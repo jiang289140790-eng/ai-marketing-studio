@@ -33,6 +33,7 @@ import {
   MULTIMODAL_MODEL,
   MULTIMODAL_PROVIDER,
   PROJECT_SCHEMA_VERSION,
+  SHA256_PATTERN,
   clonePlain,
   evidenceProofFingerprint,
   fingerprintOf,
@@ -1383,12 +1384,30 @@ function scrubAssertive(value) {
   return { text: cleaned, scrubbed: cleaned !== text };
 }
 
+/**
+ * M2 声音可用信息：模型逐媒体输出中声音描述的确定性判定（纯文本、有界）。
+ * 视频媒体的 composition 按 M2 提示词契约必须包含声音可用信息（是否存在可用
+ * 音轨、人声/配乐/环境音传达内容）；命中即视为模型提供了声音描述，卡片据此
+ * 继承音频字段；未命中时卡片如实说明模型未提供声音描述（绝不虚构）。
+ */
+const AUDIO_DESCRIPTION_PATTERN = /音轨|旁白|人声|解说|配乐|环境音|对白|口播|音频|声音|音乐|字幕|歌声|采访|画外音|voice[-\s]?over|narration|audio track|background music|soundtrack/i;
+
 function buildMultimodalCardFromAnalysis(analysis, evidence) {
   const extension = analysis.model_analysis;
   const result = extension.result;
   const postText = textOf(evidence.content_text);
-  const mediaById = new Map((evidence.media_assets || []).map((asset) => [asset.id, asset]));
+  const evidenceAssets = Array.isArray(evidence.media_assets) ? evidence.media_assets : [];
+  const mediaById = new Map(evidenceAssets.map((asset) => [asset.id, asset]));
   const mediaRows = Array.isArray(result.media_analysis) ? result.media_analysis : [];
+  // M2 失败关闭：知识卡构建必须精确继承证据媒体绑定与内容哈希。
+  // 逐媒体分析未按精确顺序绑定证据全部媒体 id（缺失/重复/乱序/外来）即拒绝构建；
+  // 证据媒体缺少已验证的内容 SHA-256 时同样拒绝（旧合同媒体必须先原位恢复）。
+  if (JSON.stringify(mediaRows.map((row) => row && row.media_id)) !== JSON.stringify(evidenceAssets.map((asset) => asset.id))) {
+    throw workbenchError('CARD_MEDIA_BINDING_INVALID', '知识卡构建被拒绝：逐媒体分析未按精确顺序绑定证据的全部媒体 id（缺失/重复/乱序/外来均失败）。请先重新运行 Qwen 分析并保存后再生成知识卡。');
+  }
+  if (evidenceAssets.some((asset) => !asset.hash || asset.hash.kind !== 'content' || typeof asset.hash.value !== 'string' || !SHA256_PATTERN.test(asset.hash.value))) {
+    throw workbenchError('CARD_MEDIA_HASH_MISSING', '知识卡构建被拒绝：证据媒体缺少已验证的内容 SHA-256，无法继承媒体哈希。请先重新采集媒体并分析（原位恢复）后重试。');
+  }
   let scrubbedAny = false;
   const scrubAll = (list) => list.map((value) => {
     const cleaned = scrubAssertive(value);
@@ -1400,7 +1419,13 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
     if (cleaned.scrubbed) scrubbedAny = true;
     return boundedSlice(cleaned.text, 500);
   };
-  const composition = scrubAll(mediaRows.map((row) => row.composition).filter(Boolean));
+  // 逐媒体 composition 清洗后保留顺序，供语义层与声音可用信息共用（绝不回显未清洗原文）。
+  const scrubbedCompositions = mediaRows.map((row) => {
+    const cleaned = scrubAssertive(String(row.composition || ''));
+    if (cleaned.scrubbed) scrubbedAny = true;
+    return cleaned.text.trim();
+  });
+  const composition = scrubbedCompositions.filter(Boolean);
   const scenes = scrubAll(mediaRows.map((row) => row.scene).filter(Boolean));
   const people = scrubAll(mediaRows.map((row) => row.people).filter(Boolean));
   const emotions = scrubAll(mediaRows.map((row) => row.emotion).filter(Boolean));
@@ -1410,13 +1435,19 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
   const drivers = scrubAll(Array.isArray(result.virality_drivers) ? result.virality_drivers : []);
   const textExpression = scrubAssertive(result.text_expression).text.trim() || postText;
 
+  // M2 声音可用信息（可用时）逐媒体继承：视频媒体按模型 composition 中的声音
+  // 描述填充 audio_evidence；模型未提供声音描述时如实说明（绝不虚构音轨内容）。
   const segments = mediaRows.map((row, index) => {
     const asset = mediaById.get(row.media_id);
+    const isVideo = Boolean(asset && asset.kind === 'video');
+    const audioDescribed = isVideo && AUDIO_DESCRIPTION_PATTERN.test(scrubbedCompositions[index] || '');
     return {
       stage: `media_${index + 1}`,
-      time_range: asset && asset.kind === 'video' ? 'video_media' : 'image_media',
+      time_range: isVideo ? 'video_media' : 'image_media',
       visual_evidence: boundedSlice(visual(row), 300) || '（模型未提供确定性画面描述）',
-      audio_evidence: '无音轨：媒体分析未包含音频内容。',
+      audio_evidence: isVideo
+        ? (audioDescribed ? `模型声音描述：${boundedSlice(scrubbedCompositions[index], 200)}` : '该视频媒体含音轨，但模型未提供声音内容描述。')
+        : '无音轨：静态图片媒体。',
     };
   });
   while (segments.length < 3) {
@@ -1434,6 +1465,8 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
   const firstImage = mediaRows[0];
   const firstAsset = mediaById.get(firstImage && firstImage.media_id);
   const risksText = risks.join('；');
+  // M2 完整媒体/来源继承：逐媒体内容 SHA-256 与来源 URL 以有界证据链接进入卡片
+  // （与证据身份 source_ref 精确绑定；哈希值来自已验证内容，绝不使用 URL 哈希）。
   const links = [
     { claim: boundedSlice(`来源正文首句：${firstSentence}`, 200), evidence_type: 'post_text', source_ref: evidence.id, time_range: null, confidence: 0.9 },
     ...mediaRows.map((row, index) => {
@@ -1447,6 +1480,14 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
       };
     }),
     { claim: boundedSlice(`来源含 ${mediaRows.length} 个媒体资产，全部按顺序绑定并哈希（内容或 URL 完整性）。`, 200), evidence_type: 'metadata', source_ref: evidence.id, time_range: null, confidence: 0.8 },
+    ...evidenceAssets.map((asset, index) => ({
+      claim: boundedSlice(`媒体 #${index + 1}（${asset.kind} ${asset.id}）内容 SHA-256：${asset.hash && asset.hash.value}`, 200),
+      evidence_type: 'metadata',
+      source_ref: evidence.id,
+      time_range: null,
+      confidence: 0.9,
+    })),
+    { claim: boundedSlice(`来源 URL：${evidence.source_url}`, 300), evidence_type: 'post_text', source_ref: evidence.id, time_range: null, confidence: 0.9 },
   ];
   if (links.length < 3) {
     // 内容表达作为补充断言，保证 evidence_links 至少 3 条（卡契约下限）。
@@ -1464,9 +1505,17 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
     brand_suitability: /品牌|代言|争议|负面/.test(risksText) ? 'restricted' : 'broad',
     notes: [boundedSlice(`模型风险信号：${risksText || '无'}`, 300)],
   };
+  // M2 声音可用信息（可用时）：音轨存在标记为证据媒体的事实属性（X 视频资产含
+  // 音轨）；模型提供了声音描述时，卡片继承该描述，未提供时如实说明并记入不确定项。
+  const hasVideoMedia = evidenceAssets.some((asset) => asset.kind === 'video');
+  const audioDescriptions = mediaRows
+    .map((row, index) => (evidenceAssets[index] && evidenceAssets[index].kind === 'video'
+      && AUDIO_DESCRIPTION_PATTERN.test(scrubbedCompositions[index] || '') ? scrubbedCompositions[index] : ''))
+    .filter((value) => value.trim().length > 0);
   const uncertainties = [
     '模型对画面内容的描述基于服务端多模态分析，具体视觉细节以原始媒体为准。',
     ...(scrubbedAny ? ['模型输出中的不确定措辞已移入本清单，未作为断言进入卡内。'] : []),
+    ...(hasVideoMedia && audioDescriptions.length === 0 ? ['该视频媒体含音轨；模型未提供声音内容描述，声音可用性仅依据媒体类型判定。'] : []),
   ];
   const mustPreserve = reusableMethods.slice(0, 3);
   return {
@@ -1476,7 +1525,7 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
       media: {
         duration_seconds: 0,
         resolution: firstAsset && firstAsset.dimensions ? `${firstAsset.dimensions.width}x${firstAsset.dimensions.height}` : 'local_metadata_only',
-        audio_track_present: false,
+        audio_track_present: hasVideoMedia,
         timeline: segments,
         transcript_segments: [],
       },
@@ -1489,7 +1538,9 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
       visual_impact: firstImage ? boundedSlice(visual(firstImage), 300) : '无视觉媒体。',
       seductive_tone: boundedSlice(`情感基调：${emotions[0] || '中性'}${emotions.length > 1 ? `；第二情绪：${emotions[1]}` : ''}。`, 200),
       narrative_arc: boundedSlice(textExpression, 200),
-      audio_role: '无音轨（媒体分析未包含音频判断）。',
+      audio_role: audioDescriptions.length > 0
+        ? boundedSlice(`视频声音：${audioDescriptions[0]}`, 200)
+        : hasVideoMedia ? '该视频媒体含音轨，但模型未提供声音内容描述。' : '无音轨（静态图片媒体）。',
       audience_response_mechanisms: signals.slice(0, 3),
       replicable_features: reusableMethods.slice(0, 4),
       risk_labels: riskLabels,

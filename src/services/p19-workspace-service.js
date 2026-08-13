@@ -1384,13 +1384,108 @@ function scrubAssertive(value) {
   return { text: cleaned, scrubbed: cleaned !== text };
 }
 
+// ---- M2 声音三态解析（确定性、有界、否定优先）----
+
+/** 逐媒体声音三态：present（模型明确存在可用音轨）/ absent（明确无音轨、静音）/ unknown（未说明或语义不确定）。 */
+export const MEDIA_AUDIO_STATES = Object.freeze(['present', 'absent', 'unknown']);
+
+// 音轨级否定短语：以「整条音轨/声音」为否定对象 → absent（优先级最高）。
+// 组件级否定（无背景音乐/无旁白等）不在此列：它们不能证明整条音轨缺失。
+const AUDIO_TRACK_ABSENCE_PHRASES = [
+  '无音轨', '没有音轨', '无可用音轨', '不含音轨', '没有声音', '无声音', '无任何声音',
+  '听不到声音', '听不到任何声音', '没有音频', '无音频', '无可用音频', '无可用声音',
+  '没有任何声音', '静音', '全程静音', '无声', '无声音轨', '没有声音轨',
+  'no audio track', 'no audio', 'no sound', 'no sound track', 'no soundtrack',
+  'silent', 'muted', 'soundless', 'voiceless', 'no voice', 'no available audio', 'no usable audio',
+  'no audible audio', 'no audible sound', 'without audio', 'without sound', 'without voice',
+  'without any audio', 'without any sound', 'without any voice',
+];
+const AUDIO_TRACK_ABSENCE_PATTERN = new RegExp(
+  AUDIO_TRACK_ABSENCE_PHRASES.map((phrase) => phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+  'i',
+);
+const AUDIO_TRACK_ABSENCE_PATTERN_G = new RegExp(AUDIO_TRACK_ABSENCE_PATTERN.source, 'gi');
+
+// 正向音频术语（音轨级与组件级都是「存在可用声音」的证据）。
+// 注意：字幕/captions 不是音轨证据（带字幕的静音视频绝不产生正向判断）。
+const AUDIO_POSITIVE_TERMS = [
+  '音轨', '声音', '音频', '人声', '旁白', '解说', '配音', '配乐', '背景音乐', '环境音',
+  '对白', '口播', '歌声', '画外音', '语音', '音乐', '音响', '音效', '声效', '旋律', '台词', '采访',
+  'voice', 'narration', 'audio', 'sound', 'soundtrack', 'music', 'dialogue', 'speech', 'vocal',
+  'sound effect', 'ambient sound', 'voice-over', 'voiceover',
+];
+const AUDIO_POSITIVE_PATTERN = new RegExp(
+  AUDIO_POSITIVE_TERMS.map((term) => (term === 'voice-over' || term === 'voiceover' ? 'voice[- ]?over' : term)).join('|'),
+  'i',
+);
+const AUDIO_POSITIVE_PATTERN_G = new RegExp(AUDIO_POSITIVE_PATTERN.source, 'gi');
+
+// 不确定性措辞：命中时该句不能建立任何声音断言（有界、确定性，绝不把猜测当断言）。
+const AUDIO_HEDGE_PATTERN = /应该|可能|或许|大概|似乎|不清楚|不确定|无法确定|无法判断|should|might|probably|perhaps|maybe|unclear|uncertain/i;
+
+// 正向术语前 8 个字符内的否定前缀（组件级否定，如「无背景音乐」「无明显配乐」「没有任何配乐」）。
+const AUDIO_NEGATION_PREFIX = /(?:没有任何|没有明显|无明显|没有|无可用|无任何|毫无|不含|缺少|缺乏|未提供|未|不|无|no available|no usable|no obvious|no clear|without|never|no)\s*$/i;
+
+function hasNonNegatedAudioTerm(sentence) {
+  AUDIO_POSITIVE_PATTERN_G.lastIndex = 0;
+  const matches = [...sentence.matchAll(AUDIO_POSITIVE_PATTERN_G)];
+  return matches.some((match) => {
+    // 否定优先：正向术语自身落在音轨级否定短语之内（如 audio ⊂ 'no available audio'、
+    // sound ⊂ 'soundless'、声音 ⊂ '无可用声音'）时，该命中是整条音轨否定表述的一部分，
+    // 不得建立 presence（否定前缀可能隔词出现，邻接前缀检查覆盖不到）。
+    AUDIO_TRACK_ABSENCE_PATTERN_G.lastIndex = 0;
+    for (const absence of sentence.matchAll(AUDIO_TRACK_ABSENCE_PATTERN_G)) {
+      if (match.index >= absence.index && match.index < absence.index + absence[0].length) return false;
+    }
+    return !AUDIO_NEGATION_PREFIX.test(sentence.slice(Math.max(0, match.index - 8), match.index));
+  });
+}
+
 /**
- * M2 声音可用信息：模型逐媒体输出中声音描述的确定性判定（纯文本、有界）。
- * 视频媒体的 composition 按 M2 提示词契约必须包含声音可用信息（是否存在可用
- * 音轨、人声/配乐/环境音传达内容）；命中即视为模型提供了声音描述，卡片据此
- * 继承音频字段；未命中时卡片如实说明模型未提供声音描述（绝不虚构）。
+ * M2 声音三态解析：把模型对单条媒体的 composition 表述解析为有界、确定性的
+ * present / absent / unknown。规则（纯函数，绝不猜测、绝不联网）：
+ * - 否定优先：「无音轨」「没有声音」「静音」「no available audio」等音轨级否定
+ *   直接判 absent，绝不触发正向关键词判断（否定语句优先于关键词）；
+ * - 正向术语（人声/配乐/环境音等）未被否定且未被不确定性措辞修饰时判 present；
+ * - 正向与否定并存（如「无声音，随后出现人声」）→ unknown（语义矛盾，失败关闭）；
+ * - 两者皆无（模型未说明）→ unknown；不确定措辞（应该/可能/似乎等）不建立任何断言；
+ * - 组件级否定（无背景音乐/无旁白）不证明整条音轨缺失 → 无其他信号时 unknown。
+ * description 仅在 present 时携带（清洗后、有界 200 字符）；否则为空。
  */
-const AUDIO_DESCRIPTION_PATTERN = /音轨|旁白|人声|解说|配乐|环境音|对白|口播|音频|声音|音乐|字幕|歌声|采访|画外音|voice[-\s]?over|narration|audio track|background music|soundtrack/i;
+export function resolveMediaAudioState(compositionText) {
+  const raw = textOf(compositionText);
+  if (!raw) return { state: 'unknown', description: '', note: 'model_silent' };
+  const sentences = raw.split(/[。！？；!?;\n]+/).map((part) => part.trim()).filter(Boolean);
+  let absence = false;
+  let presence = false;
+  let presenceSentence = '';
+  for (const sentence of sentences) {
+    if (AUDIO_HEDGE_PATTERN.test(sentence)) continue;
+    if (AUDIO_TRACK_ABSENCE_PATTERN.test(sentence)) absence = true;
+    if (hasNonNegatedAudioTerm(sentence)) {
+      presence = true;
+      if (!presenceSentence) presenceSentence = sentence;
+    }
+  }
+  let state;
+  let note;
+  if (absence && !presence) {
+    state = 'absent';
+    note = 'model_stated_absent';
+  } else if (presence && !absence) {
+    state = 'present';
+    note = 'model_stated_present';
+  } else if (absence && presence) {
+    state = 'unknown';
+    note = 'model_conflicting';
+  } else {
+    state = 'unknown';
+    note = 'model_silent';
+  }
+  // 描述只携带建立正向判断的那一句（清洗后、有界 200 字符），绝不回显其他句的不确定措辞。
+  const description = state === 'present' ? boundedSlice(scrubAssertive(presenceSentence).text, 200) : '';
+  return { state, description, note };
+}
 
 function buildMultimodalCardFromAnalysis(analysis, evidence) {
   const extension = analysis.model_analysis;
@@ -1419,7 +1514,7 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
     if (cleaned.scrubbed) scrubbedAny = true;
     return boundedSlice(cleaned.text, 500);
   };
-  // 逐媒体 composition 清洗后保留顺序，供语义层与声音可用信息共用（绝不回显未清洗原文）。
+  // 逐媒体 composition 清洗后保留顺序，供语义层使用（绝不回显未清洗原文）。
   const scrubbedCompositions = mediaRows.map((row) => {
     const cleaned = scrubAssertive(String(row.composition || ''));
     if (cleaned.scrubbed) scrubbedAny = true;
@@ -1435,19 +1530,35 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
   const drivers = scrubAll(Array.isArray(result.virality_drivers) ? result.virality_drivers : []);
   const textExpression = scrubAssertive(result.text_expression).text.trim() || postText;
 
-  // M2 声音可用信息（可用时）逐媒体继承：视频媒体按模型 composition 中的声音
-  // 描述填充 audio_evidence；模型未提供声音描述时如实说明（绝不虚构音轨内容）。
+  // M2 声音三态（逐媒体、按精确 media_id）：解析基于模型原始 composition 表述
+  // （否定优先、不确定措辞不建立断言），绝不根据媒体类型推断音轨；图片/GIF 格式
+  // 本身不包含音轨（格式事实），视频媒体按模型表述解析为 present/absent/unknown。
+  const mediaAudioStates = mediaRows.map((row) => {
+    const asset = mediaById.get(row.media_id);
+    const kind = asset ? asset.kind : 'media';
+    const resolved = resolveMediaAudioState(String(row.composition || ''));
+    const state = kind === 'video' ? resolved.state : 'absent';
+    return {
+      media_id: row.media_id,
+      kind,
+      state,
+      description: state === 'present' ? resolved.description : '',
+    };
+  });
   const segments = mediaRows.map((row, index) => {
     const asset = mediaById.get(row.media_id);
     const isVideo = Boolean(asset && asset.kind === 'video');
-    const audioDescribed = isVideo && AUDIO_DESCRIPTION_PATTERN.test(scrubbedCompositions[index] || '');
+    const audio = mediaAudioStates[index];
+    const audioEvidence = isVideo
+      ? (audio.state === 'present' ? `模型声音描述：${audio.description}`
+        : audio.state === 'absent' ? '模型明确表示该视频无可用音轨（静音）。'
+          : '模型未说明该视频的声音可用性，卡片未作猜测。')
+      : '无音轨：静态图片媒体（图片格式不包含音轨）。';
     return {
       stage: `media_${index + 1}`,
       time_range: isVideo ? 'video_media' : 'image_media',
       visual_evidence: boundedSlice(visual(row), 300) || '（模型未提供确定性画面描述）',
-      audio_evidence: isVideo
-        ? (audioDescribed ? `模型声音描述：${boundedSlice(scrubbedCompositions[index], 200)}` : '该视频媒体含音轨，但模型未提供声音内容描述。')
-        : '无音轨：静态图片媒体。',
+      audio_evidence: audioEvidence,
     };
   });
   while (segments.length < 3) {
@@ -1505,17 +1616,23 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
     brand_suitability: /品牌|代言|争议|负面/.test(risksText) ? 'restricted' : 'broad',
     notes: [boundedSlice(`模型风险信号：${risksText || '无'}`, 300)],
   };
-  // M2 声音可用信息（可用时）：音轨存在标记为证据媒体的事实属性（X 视频资产含
-  // 音轨）；模型提供了声音描述时，卡片继承该描述，未提供时如实说明并记入不确定项。
-  const hasVideoMedia = evidenceAssets.some((asset) => asset.kind === 'video');
-  const audioDescriptions = mediaRows
-    .map((row, index) => (evidenceAssets[index] && evidenceAssets[index].kind === 'video'
-      && AUDIO_DESCRIPTION_PATTERN.test(scrubbedCompositions[index] || '') ? scrubbedCompositions[index] : ''))
-    .filter((value) => value.trim().length > 0);
+  // M2 声音三态：音轨存在标记只由「模型明确表述有可用音轨」产生（present），
+  // 绝不根据媒体类型推断；声音状态逐媒体按 media_id 结构化继承（audio_states），
+  // 模型未说明或表述矛盾（unknown）时如实记入不确定项，绝不猜测。
+  const audioRoleText = (() => {
+    const presentAudio = mediaAudioStates.find((row) => row.state === 'present');
+    if (presentAudio) return `视频声音：${presentAudio.description}`;
+    const hasVideoMedia = mediaAudioStates.some((row) => row.kind === 'video');
+    if (!hasVideoMedia) return '无音轨（静态图片媒体）。';
+    return mediaAudioStates.some((row) => row.kind === 'video' && row.state === 'unknown')
+      ? '模型未说明该视频媒体的声音可用性，卡片未作猜测。'
+      : '模型明确表示该视频静音（无可用音轨）。';
+  })();
   const uncertainties = [
     '模型对画面内容的描述基于服务端多模态分析，具体视觉细节以原始媒体为准。',
     ...(scrubbedAny ? ['模型输出中的不确定措辞已移入本清单，未作为断言进入卡内。'] : []),
-    ...(hasVideoMedia && audioDescriptions.length === 0 ? ['该视频媒体含音轨；模型未提供声音内容描述，声音可用性仅依据媒体类型判定。'] : []),
+    ...(mediaAudioStates.some((row) => row.kind === 'video' && row.state === 'unknown')
+      ? ['模型未明确说明部分视频媒体的声音可用性（未提及或表述矛盾），卡片按未知处理，绝不根据媒体类型猜测音轨。'] : []),
   ];
   const mustPreserve = reusableMethods.slice(0, 3);
   return {
@@ -1525,7 +1642,8 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
       media: {
         duration_seconds: 0,
         resolution: firstAsset && firstAsset.dimensions ? `${firstAsset.dimensions.width}x${firstAsset.dimensions.height}` : 'local_metadata_only',
-        audio_track_present: hasVideoMedia,
+        audio_track_present: mediaAudioStates.some((row) => row.state === 'present'),
+        audio_states: mediaAudioStates.map((row) => ({ ...row })),
         timeline: segments,
         transcript_segments: [],
       },
@@ -1538,9 +1656,7 @@ function buildMultimodalCardFromAnalysis(analysis, evidence) {
       visual_impact: firstImage ? boundedSlice(visual(firstImage), 300) : '无视觉媒体。',
       seductive_tone: boundedSlice(`情感基调：${emotions[0] || '中性'}${emotions.length > 1 ? `；第二情绪：${emotions[1]}` : ''}。`, 200),
       narrative_arc: boundedSlice(textExpression, 200),
-      audio_role: audioDescriptions.length > 0
-        ? boundedSlice(`视频声音：${audioDescriptions[0]}`, 200)
-        : hasVideoMedia ? '该视频媒体含音轨，但模型未提供声音内容描述。' : '无音轨（静态图片媒体）。',
+      audio_role: boundedSlice(audioRoleText, 200),
       audience_response_mechanisms: signals.slice(0, 3),
       replicable_features: reusableMethods.slice(0, 4),
       risk_labels: riskLabels,

@@ -3,7 +3,8 @@
 // 覆盖（全部无真实网络/模型/Supabase 调用；mock 响应仍练习生产控制流）：
 // - 图片+视频证据 → 版本化 Qwen 分析 → 显式保存 → 知识卡完整继承：
 //   evidence/analysis identity、模型、逐媒体内容 SHA-256、逐媒体发现、
-//   声音可用信息（可用时）、来源 URL、版本；缺失/错绑失败关闭；
+//   逐媒体声音三态（present/absent/unknown，否定优先）、来源 URL、版本；
+//   缺失/错绑失败关闭；
 // - 多媒体顺序/重复/缺失/错绑对抗；旧版本保留与最新版本选择确定性；
 // - 刷新恢复（本地 store 与在线命令边界两条权威重载路径）identity/fingerprint 一致；
 // - 项目切换隔离；local/demo 绝不混入 staging 分析；
@@ -18,9 +19,9 @@ import {
   clonePlain, fingerprintOf, validateAnalysis, validateKnowledgeCard,
 } from '../src/services/p19-contracts.js';
 import {
-  addEvidence, buildKnowledgeCard, computeStaleness, createProject,
+  MEDIA_AUDIO_STATES, addEvidence, buildKnowledgeCard, computeStaleness, createProject,
   getAllAnalysisVersionsForEvidence, getLatestAnalysisForEvidence,
-  recordVersionedReanalysis, workbenchError,
+  recordVersionedReanalysis, resolveMediaAudioState, workbenchError,
 } from '../src/services/p19-workspace-service.js';
 import { createP19Store } from '../src/services/p19-store.js';
 import { createP20OnlineStore } from '../src/services/p20-online-store.js';
@@ -206,8 +207,14 @@ test('M2 闭环：图片+视频证据经版本化分析保存后，知识卡完�
   assert.match(json, /画面 1：产品特写居中，叙事为新品亮相前的静态展示/);
   assert.match(json, /画面 2：演示者手持产品操作，叙事为逐步展示使用过程/);
 
-  // 声音可用信息（可用时）：视频媒体含音轨 + 模型声音描述
+  // 声音三态逐媒体、按精确 media_id 结构化继承（audio_states）：
+  // 图片格式不含音轨（absent，格式事实）；有声视频 present 且继承模型声音描述。
   assert.equal(card.source_observations.media.audio_track_present, true);
+  const audioStates = card.source_observations.media.audio_states;
+  assert.deepEqual(audioStates.map((row) => row.media_id), mediaIds, 'audio_states 必须按精确顺序绑定全部媒体 id');
+  assert.equal(audioStates[0].state, 'absent');
+  assert.equal(audioStates[1].state, 'present');
+  assert.ok(audioStates[1].description.includes('人声解说'), 'present 媒体必须继承模型声音描述');
   const videoSegment = card.source_observations.media.timeline.find((segment) => segment.stage === 'media_2');
   assert.ok(videoSegment.audio_evidence.includes('模型声音描述'), `视频段必须继承模型声音描述：${videoSegment.audio_evidence}`);
   assert.ok(videoSegment.audio_evidence.includes('人声解说'), '声音描述必须包含模型输出内容');
@@ -220,19 +227,81 @@ test('M2 闭环：图片+视频证据经版本化分析保存后，知识卡完�
   assert.doesNotMatch(json, /看起来像|应该是|大概有/);
 });
 
-test('M2 闭环：模型未提供声音描述时，卡片如实说明并记入不确定项（绝不虚构音轨内容）', async () => {
+test('M2 三态：模型未说明声音时视频判 unknown，媒体类型绝不证明音轨（不猜测）', async () => {
   const { project, evidence } = await projectWithMediaEvidence();
   const mediaIds = evidence.media_assets.map((asset) => asset.id);
+  const [imageId, videoId] = mediaIds;
   const result = v2ModelResult(mediaIds, { videoAudio: '构图 2：三分法引导视线。' });
   const afterAnalysis = await recordVersionedReanalysis(project, evidence.id, result, { now, hasher: fingerprintOf });
   const withCard = await buildKnowledgeCard(afterAnalysis, getLatestAnalysisForEvidence(afterAnalysis, evidence.id).id, { now, hasher: fingerprintOf });
   const card = withCard.knowledge_cards[0];
   assert.equal(validateKnowledgeCard(card).valid, true);
-  assert.equal(card.source_observations.media.audio_track_present, true);
+  assert.equal(card.source_observations.media.audio_track_present, false, '视频类型不得证明音轨存在');
+  const videoState = card.source_observations.media.audio_states.find((row) => row.media_id === videoId);
+  assert.equal(videoState.state, 'unknown', '模型未说明时声音状态必须是 unknown');
+  assert.equal(videoState.description, '', 'unknown 不得携带声音描述');
+  assert.equal(card.source_observations.media.audio_states.find((row) => row.media_id === imageId).state, 'absent');
   const videoSegment = card.source_observations.media.timeline.find((segment) => segment.stage === 'media_2');
-  assert.match(videoSegment.audio_evidence, /该视频媒体含音轨，但模型未提供声音内容描述/);
-  assert.match(card.creative_analysis.audio_role, /该视频媒体含音轨，但模型未提供声音内容描述/);
-  assert.ok(card.source_observations.uncertainties.some((item) => item.includes('声音可用性仅依据媒体类型判定')));
+  assert.match(videoSegment.audio_evidence, /模型未说明该视频的声音可用性/);
+  assert.match(card.creative_analysis.audio_role, /模型未说明该视频媒体的声音可用性/);
+  assert.ok(card.source_observations.uncertainties.some((item) => item.includes('绝不根据媒体类型猜测音轨')));
+});
+
+test('M2 三态：静音视频（无可用音轨）判 absent，绝不标记为有音轨', async () => {
+  const { project, evidence } = await projectWithMediaEvidence();
+  const mediaIds = evidence.media_assets.map((asset) => asset.id);
+  const videoId = mediaIds[1];
+  const result = v2ModelResult(mediaIds, { videoAudio: '构图 2：三分法引导视线；无可用音轨，视频全程静音。' });
+  const afterAnalysis = await recordVersionedReanalysis(project, evidence.id, result, { now, hasher: fingerprintOf });
+  const withCard = await buildKnowledgeCard(afterAnalysis, getLatestAnalysisForEvidence(afterAnalysis, evidence.id).id, { now, hasher: fingerprintOf });
+  const card = withCard.knowledge_cards[0];
+  assert.equal(validateKnowledgeCard(card).valid, true);
+  assert.equal(card.source_observations.media.audio_track_present, false, '静音视频不得标记为有音轨');
+  const videoState = card.source_observations.media.audio_states.find((row) => row.media_id === videoId);
+  assert.equal(videoState.state, 'absent');
+  assert.equal(videoState.description, '', 'absent 不得携带声音描述');
+  const videoSegment = card.source_observations.media.timeline.find((segment) => segment.stage === 'media_2');
+  assert.match(videoSegment.audio_evidence, /模型明确表示该视频无可用音轨（静音）/);
+  assert.match(card.creative_analysis.audio_role, /模型明确表示该视频静音/);
+  assert.ok(!card.source_observations.uncertainties.some((item) => item.includes('猜测音轨')), '明确静音没有不确定性');
+});
+
+test('M2 三态解析：present/absent/unknown 互斥且否定优先（否定语句绝不触发正向判断）', () => {
+  const cases = [
+    // [composition, expected state, 说明]
+    ['存在可用音轨：人声解说介绍产品亮点，配乐为轻快电子乐。', 'present', '明确有声'],
+    ['有音轨，人声讲解清晰。', 'present', '音轨+人声'],
+    ['配乐为轻快电子乐，环境音明显。', 'present', '配乐/环境音'],
+    ['voice-over narration with background music.', 'present', '英文正向'],
+    ['无音轨。', 'absent', '否定优先（旧缺陷：音轨关键词误判正向）'],
+    ['无可用声音，视频全程静音。', 'absent', '无可用声音/静音'],
+    ['没有声音，只有字幕。', 'absent', '字幕不产生正向判断'],
+    ['视频没有音频。', 'absent', '没有音频'],
+    ['该视频为无声片段。', 'absent', '无声'],
+    ['no available audio; the video is silent.', 'absent', '英文否定（修复缺陷：audio 位于「no available audio」短语内部，不得建立 presence）'],
+    ['no usable audio; the clip is muted.', 'absent', '英文否定：隔词否定 + muted'],
+    ['without any audio.', 'absent', 'without any audio 内部的正向子串不得建立 presence'],
+    ['soundless clip.', 'absent', 'soundless 内部的正向子串（sound）不得建立 presence'],
+    ['听不到任何声音。', 'absent', '听不到任何声音 内部的正向子串不得建立 presence'],
+    ['构图 2：三分法引导视线。', 'unknown', '模型未说明'],
+    ['画面安静。', 'unknown', '安静不证明无音轨'],
+    ['无背景音乐。', 'unknown', '组件级否定不证明整条音轨缺失'],
+    ['无旁白。', 'unknown', '组件级否定'],
+    ['无声音，随后出现人声讲解。', 'unknown', '正反并存语义矛盾'],
+    ['应该有背景音乐。', 'unknown', '不确定措辞不建立断言'],
+    ['可能是静音视频。', 'unknown', '不确定措辞'],
+    ['画面无明显配乐。', 'unknown', '组件级否定且无其他信号'],
+    ['', 'unknown', '空表述'],
+  ];
+  for (const [composition, expected, reason] of cases) {
+    const resolved = resolveMediaAudioState(composition);
+    assert.equal(resolved.state, expected, `${reason}：${composition}`);
+    assert.ok(MEDIA_AUDIO_STATES.includes(resolved.state), '状态必须是三态之一');
+  }
+  // 三态互斥：present 才有描述，absent/unknown 描述为空
+  assert.equal(resolveMediaAudioState('存在可用音轨：人声。').description.length > 0, true);
+  assert.equal(resolveMediaAudioState('无音轨。').description, '');
+  assert.equal(resolveMediaAudioState('构图 1。').description, '');
 });
 
 // ---- 2. 提示词契约与解析：叙事/声音可用信息进入既有有界字段，逐媒体精确绑定 ----
@@ -249,6 +318,9 @@ test('M2 提示词契约：逐媒体叙事与视频声音可用信息被明确�
   const text = content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
   assert.match(text, /叙事（发生了什么、前后语境）/);
   assert.match(text, /声音可用信息：是否存在可用音轨/);
+  // 无可用音轨必须明确否定（静音/无音轨），不得只描述画面或按媒体类型推断音轨
+  assert.match(text, /无可用音轨或全程静音时必须使用明确否定表述/);
+  assert.match(text, /不得根据媒体类型推断存在音轨/);
   // 严格 JSON 结构保持不变：逐媒体字段集仍是已验收子集（无新增契约键）
   assert.doesNotMatch(text, /"audio"/);
   assert.ok(content.some((part) => part.type === 'video_url'), '视频媒体必须构造 video_url 多模态部件');
@@ -352,6 +424,55 @@ test('M2 对抗：伪造/腐蚀状态下知识卡构建失败关闭（错绑媒�
   );
 });
 
+test('M2 对抗：兄弟媒体隔离——同证据内静音视频与有声视频互不污染，声音三态逐媒体精确', async () => {
+  // 证据：图片 + 有声视频 + 静音视频（三个媒体资产，均带已验证内容 SHA-256）
+  const input = await mediaEvidenceInput();
+  input.media_assets = [
+    ...input.media_assets,
+    {
+      id: 'm-cccccccccccccccccccccccc',
+      tweet_id: EXTERNAL_ID, external_id: EXTERNAL_ID,
+      canonical_tweet_url: SOURCE_URL,
+      media_url: 'https://video.twimg.com/ext_tw_video/m2/silent.mp4', order: 2, kind: 'video',
+      mime_type: 'video/mp4', dimensions: { width: 720, height: 1280 },
+      byte_size: 3000000, hash: { algorithm: 'sha256', kind: 'content', value: 'c'.repeat(64) },
+    },
+  ];
+  const project = await createProject({ topic: '兄弟媒体隔离', objective: '验证逐媒体声音三态', audience: '运营', channel: 'X', now });
+  const after = await addEvidence(project, input, { now, hasher: fingerprintOf });
+  const evidence = after.evidence[0];
+  const mediaIds = evidence.media_assets.map((asset) => asset.id);
+  assert.equal(mediaIds.length, 3);
+
+  const result = v2ModelResult(mediaIds);
+  // 第三个媒体（静音视频）覆盖为明确静音表述；其余保持（图片 + 有声视频）
+  result.result.media_analysis[2] = {
+    ...result.result.media_analysis[1],
+    media_id: mediaIds[2],
+    visual_content: '画面 3：静音演示镜头。',
+    composition: '构图 3：无可用音轨，该视频全程静音。',
+  };
+  result._request_identity = 'm2-siblings:1';
+  const afterAnalysis = await recordVersionedReanalysis(after, evidence.id, result, { now, hasher: fingerprintOf });
+  const withCard = await buildKnowledgeCard(afterAnalysis, getLatestAnalysisForEvidence(afterAnalysis, evidence.id).id, { now, hasher: fingerprintOf });
+  const card = withCard.knowledge_cards[0];
+  assert.equal(validateKnowledgeCard(card).valid, true);
+
+  const states = card.source_observations.media.audio_states;
+  assert.deepEqual(states.map((row) => row.media_id), mediaIds, 'audio_states 必须按精确顺序绑定全部媒体 id');
+  assert.equal(states[0].state, 'absent', '图片媒体：格式事实不含音轨');
+  assert.equal(states[1].state, 'present', '有声视频：present');
+  assert.equal(states[2].state, 'absent', '静音视频：absent');
+  assert.equal(card.source_observations.media.audio_track_present, true, '存在有声媒体即为 true');
+
+  const audioSegment = card.source_observations.media.timeline.find((segment) => segment.stage === 'media_2');
+  const silentSegment = card.source_observations.media.timeline.find((segment) => segment.stage === 'media_3');
+  assert.ok(audioSegment.audio_evidence.includes('模型声音描述') && audioSegment.audio_evidence.includes('人声解说'));
+  assert.match(silentSegment.audio_evidence, /无可用音轨（静音）/);
+  assert.ok(!silentSegment.audio_evidence.includes('模型声音描述'), '静音兄弟不得继承有声兄弟的描述');
+  assert.ok(card.creative_analysis.audio_role.includes('人声解说'), 'audio_role 只继承有声媒体描述');
+});
+
 // ---- 4. 旧版本保留与最新版本确定性 ----
 
 test('M2 版本：同一证据多次显式保存产生不可变版本链，旧版本保留且最新选择确定', async () => {
@@ -384,6 +505,39 @@ test('M2 版本：同一证据多次显式保存产生不可变版本链，旧�
   assert.equal(dedup.evidence[0].fingerprint, evidence.fingerprint);
 });
 
+test('M2 版本：旧版有声/新版静音分别保留，各自知识卡继承各自声音三态（绝不互相覆写）', async () => {
+  const { project, evidence } = await projectWithMediaEvidence();
+  const mediaIds = evidence.media_assets.map((asset) => asset.id);
+  const videoId = mediaIds[1];
+
+  const v1 = v2ModelResult(mediaIds, { videoAudio: '存在可用音轨：第一版人声。' });
+  v1._request_identity = 'm2-version-audio:1';
+  const afterV1 = await recordVersionedReanalysis(project, evidence.id, v1, { now, hasher: fingerprintOf });
+  const analysisV1 = getLatestAnalysisForEvidence(afterV1, evidence.id);
+  const cardV1 = (await buildKnowledgeCard(afterV1, analysisV1.id, { now, hasher: fingerprintOf })).knowledge_cards[0];
+
+  const v2 = v2ModelResult(mediaIds, { videoAudio: '无可用音轨，第二版为静音剪辑。' });
+  v2._request_identity = 'm2-version-audio:2';
+  const afterV2 = await recordVersionedReanalysis(afterV1, evidence.id, v2, { now, hasher: fingerprintOf });
+  const versions = getAllAnalysisVersionsForEvidence(afterV2, evidence.id);
+  assert.equal(versions.length, 2);
+  const analysisV2 = getLatestAnalysisForEvidence(afterV2, evidence.id);
+  const cardV2 = (await buildKnowledgeCard(afterV2, analysisV2.id, { now, hasher: fingerprintOf })).knowledge_cards[0];
+
+  const stateOf = (card) => card.source_observations.media.audio_states.find((row) => row.media_id === videoId).state;
+  assert.equal(stateOf(cardV1), 'present', '旧版卡保留有声三态');
+  assert.equal(stateOf(cardV2), 'absent', '新版卡继承静音三态');
+  assert.equal(cardV1.source_observations.media.audio_track_present, true);
+  assert.equal(cardV2.source_observations.media.audio_track_present, false);
+  // 旧版本与其分析/卡不可变保留（P32-A：新分析不使旧版卡自动过时）
+  assert.equal(versions[1].id, analysisV1.id);
+  assert.equal(versions[1].fingerprint, analysisV1.fingerprint);
+  assert.equal(cardV1.analysis_version, analysisV1.version);
+  assert.equal(cardV2.analysis_version, analysisV2.version);
+  // 最新卡绝不包含旧版声音描述
+  assert.ok(!JSON.stringify(cardV2).includes('第一版人声'), '新版卡不得携带旧版声音描述');
+});
+
 // ---- 5. 刷新恢复：本地 store 与在线命令边界两条权威重载路径 ----
 
 test('M2 刷新恢复：store 往返后 Evidence/媒体/分析版本/知识卡 identity 与 fingerprint 完全一致', async () => {
@@ -411,6 +565,9 @@ test('M2 刷新恢复：store 往返后 Evidence/媒体/分析版本/知识卡 i
   assert.deepEqual(reloadedAnalysis.model_analysis.media_ids, mediaIds);
   const reloadedCard = reloaded.knowledge_cards.find((row) => row.id === withCard.knowledge_cards[0].id);
   assert.equal(reloadedCard.fingerprint, withCard.knowledge_cards[0].fingerprint);
+  // 刷新恢复后声音三态逐媒体一致（audio_states 与音轨标记原样恢复）
+  assert.deepEqual(reloadedCard.source_observations.media.audio_states, withCard.knowledge_cards[0].source_observations.media.audio_states);
+  assert.equal(reloadedCard.source_observations.media.audio_track_present, withCard.knowledge_cards[0].source_observations.media.audio_track_present);
   // 旧版本同样恢复
   assert.equal(getAllAnalysisVersionsForEvidence(reloaded, evidence.id).length, 1);
   assert.equal(getLatestAnalysisForEvidence(reloaded, evidence.id).id, analysis.id);

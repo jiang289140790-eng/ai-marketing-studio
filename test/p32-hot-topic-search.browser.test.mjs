@@ -763,9 +763,9 @@ test('P32-B real production build: hot-topic search, five deterministic sorts, b
     await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('读取这条帖子'))`), { label: 'url read button' });
     await cdp.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('读取这条帖子')).click()`);
     await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('.p22-source-card')].length > 0`), { label: 'single post preview rendered' });
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((b) => b.textContent.includes('保存图文证据并生成分析')).click()`);
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((b) => b.textContent.trim() === '保存证据').click()`);
     try {
-      await waitFor(() => cdp.evaluate(`document.body.innerText.includes('来源已保存为完整性绑定的多模态证据')`), { label: 'single post pipeline saved' });
+      await waitFor(() => cdp.evaluate(`document.body.innerText.includes('来源证据已保存。下一步可分析帖子/视频')`), { label: 'single post evidence saved' });
     } catch (error) {
       const diagnostic = await cdp.evaluate(`({
         banners: [...document.querySelectorAll('.p19-error-banner, .p19-notice-banner')].map((el) => el.innerText),

@@ -26,7 +26,6 @@ import {
   createProject,
   deriveHandoffPackage,
   generateSynthesisInsight,
-  recordAssistedAnalysis,
   recordVersionedReanalysis,
   recordVersionedTextReanalysis,
   removeEvidence,
@@ -66,6 +65,7 @@ import {
 } from '../services/p21-guided-workspace.js';
 import { P22ResearchAssistPanel } from '../components/integrated-workspace/P22ResearchAssistPanel.jsx';
 import { createP22ResearchAssistClient, evidenceMatchesSearchIdentity, findP22Evidence, importSearchSelection, toP19EvidenceInput } from '../services/p22-research-assist.js';
+import { saveContentDraftV2 } from '../services/content-creation-service.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
@@ -183,7 +183,7 @@ function buildOnlineCommand(previous, next) {
 }
 
 export function ResearchWorkspacePage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, loading: authLoading, userId } = useAuth();
   const onlineMode = isAuthenticated && isServerWriteEnabled();
   // 稳定客户端实例：useState 惰性初始化（渲染期间绝不读写 ref.current）。
   // 三个实例只创建一次且跨渲染稳定；项目切换由 key 与 activeId effect 隔离，
@@ -449,121 +449,22 @@ export function ResearchWorkspacePage() {
     setNotice(null);
     try {
       const input = await toP19EvidenceInput(item);
-      let persistedEvidence = project;
       let evidence = findP22Evidence(project, item);
-      if (!evidence) {
-        const afterEvidence = await addEvidence(project, input);
-        evidence = findP22Evidence(afterEvidence, item);
-        if (!evidence) throw workbenchError('EVIDENCE_IDENTITY_MISSING', '无法绑定新证据身份，已拒绝继续分析。');
-        persistedEvidence = afterEvidence;
-        if (onlineMode) {
-          const spec = buildOnlineCommand(project, afterEvidence);
-          persistedEvidence = await onlineStore.execute(spec.command, spec.payload, spec.options);
-          evidence = findP22Evidence(persistedEvidence, item);
-          setProject(persistedEvidence);
-        }
-      }
-      if (!evidence) throw workbenchError('EVIDENCE_IDENTITY_MISSING', '保存后无法重新读取准确证据，已停止。');
-
-      let persistedAnalysis = persistedEvidence;
-      let analysis = (persistedEvidence.analyses || []).find((row) => row.evidence_id === evidence.id
-        && row.evidence_fingerprint === evidence.fingerprint && row.evidence_version === evidence.version);
-      if (!analysis) {
-        let afterAnalysis;
-        if (evidence.media_assets && evidence.media_assets.length > 0) {
-          // P29：带媒体来源必须走真实多模态 Qwen 分析（绝不静默回退到文本分析）。
-          const response = await assistClient.analyze([{
-            ...item,
-            source_metadata: evidence.source_metadata,
-            media_assets: evidence.media_assets,
-          }]);
-          const modelResult = (response.analyses || []).find((row) => row.source_id === evidence.provenance.source_id);
-          if (!modelResult) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '模型分析没有精确绑定来源身份，已停止。');
-          // 严格规范边界：result 只接受 p29_multimodal_model_v1 的模型结果子集，
-          // 顶层保留来源/模型/执行身份；服务端逐媒体行携带的 v2 扩展字段
-          // （visual_selling_points/style_pattern）不属于 v1 子集，绝不带入 v1
-          // 持久化路径（v2 字段只出现在 P32-A 版本化重分析路径），逐媒体行
-          // 只保留 v1 声明的精确字段。
-          afterAnalysis = await recordAssistedAnalysis(persistedEvidence, evidence.id, {
-            source_id: modelResult.source_id,
-            model: modelResult.model,
-            result: {
-              text_expression: modelResult.text_expression,
-              media_analysis: (modelResult.media_analysis || []).map((row) => ({
-                media_id: row.media_id,
-                visual_content: row.visual_content,
-                composition: row.composition,
-                people: row.people,
-                scene: row.scene,
-                emotion: row.emotion,
-              })),
-              virality_drivers: modelResult.virality_drivers,
-              reusable_methods: modelResult.reusable_methods,
-              signals: modelResult.signals,
-              risks: modelResult.risks,
-            },
-            executed_at: new Date().toISOString(),
-            usage: response.usage || { total_tokens: 0 },
-          });
-        } else {
-          // 纯文本来源：确定性本地分析（既有路径）。
-          afterAnalysis = await runAnalysis(persistedEvidence, evidence.id);
-        }
-        analysis = afterAnalysis.analyses.find((row) => row.evidence_id === evidence.id);
-        if (!analysis) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '分析没有准确绑定到新证据，已停止。');
-        persistedAnalysis = afterAnalysis;
-        if (onlineMode) {
-          const spec = buildOnlineCommand(persistedEvidence, afterAnalysis);
-          persistedAnalysis = await onlineStore.execute(spec.command, spec.payload, spec.options);
-          analysis = persistedAnalysis.analyses.find((row) => row.evidence_id === evidence.id
-            && row.evidence_fingerprint === evidence.fingerprint && row.evidence_version === evidence.version);
-          setProject(persistedAnalysis);
-        }
-      }
-      if (!analysis) throw workbenchError('ANALYSIS_IDENTITY_MISSING', '保存后无法重新读取准确分析，已停止。');
-
-      let completed = persistedAnalysis;
-      const card = (persistedAnalysis.knowledge_cards || []).find((row) => row.analysis_id === analysis.id
-        && row.analysis_fingerprint === analysis.fingerprint && row.analysis_version === analysis.version);
-      if (!card) {
-        const afterCard = await buildKnowledgeCard(persistedAnalysis, analysis.id);
-        completed = afterCard;
-        if (onlineMode) {
-          const spec = buildOnlineCommand(persistedAnalysis, afterCard);
-          completed = await onlineStore.execute(spec.command, spec.payload, spec.options);
-        }
-      }
-      if (!onlineMode) {
-        const saved = store.putProject(completed);
+      if (evidence) return true;
+      const afterEvidence = await addEvidence(project, input);
+      evidence = findP22Evidence(afterEvidence, item);
+      if (!evidence) throw workbenchError('EVIDENCE_IDENTITY_MISSING', '无法绑定新证据身份，已拒绝保存。');
+      let persisted = afterEvidence;
+      if (onlineMode) {
+        const spec = buildOnlineCommand(project, afterEvidence);
+        persisted = await onlineStore.execute(spec.command, spec.payload, spec.options);
+      } else {
+        const saved = store.putProject(afterEvidence);
         if (!saved.ok) throw workbenchError(saved.code, saved.message);
       }
-
-      const completedWorkflow = await buildProjectWorkflowState(completed);
-      if (!completed.brief || completedWorkflow.brief_stale) {
-        const afterBrief = await assembleBrief(completed);
-        if (onlineMode) {
-          const spec = buildOnlineCommand(completed, afterBrief);
-          completed = await onlineStore.execute(spec.command, spec.payload, spec.options);
-        } else {
-          completed = afterBrief;
-          const saved = store.putProject(completed);
-          if (!saved.ok) throw workbenchError(saved.code, saved.message);
-        }
-      }
-
-      setProject(completed);
+      setProject(persisted);
       await reloadProjects();
-      setNotice(evidence.media_assets && evidence.media_assets.length > 0
-        ? '来源已保存为完整性绑定的多模态证据，并完成 Evidence → 多模态分析 → Knowledge Card → 内容策划草案（待你确认）。'
-        : '来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card → 内容策划草案（待你确认）。');
-      setSelectedStep('review');
-      globalThis.setTimeout(() => {
-        const briefPanel = globalThis.document?.getElementById('p21-step-brief');
-        if (!briefPanel) return;
-        briefPanel.setAttribute('tabindex', '-1');
-        briefPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        briefPanel.focus({ preventScroll: true });
-      }, 160);
+      setNotice('来源证据已保存。下一步可分析帖子/视频；分析结果由你确认后才会保存。');
       return true;
     } catch (cause) {
       if (onlineMode && project?.id) {
@@ -580,7 +481,48 @@ export function ResearchWorkspacePage() {
     } finally {
       setBusy(false);
     }
-  }, [assistClient, onlineMode, onlineStore, project, reloadProjects, store]);
+  }, [onlineMode, onlineStore, project, reloadProjects, store]);
+
+  const handleSaveAnalysisPreview = useCallback(async (evidenceId, modelResult, usage) => {
+    if (!project) return null;
+    const evidence = project.evidence.find((item) => item.id === evidenceId);
+    if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要保存分析的证据不存在。');
+    const recorder = evidence.media_assets?.length ? recordVersionedReanalysis : recordVersionedTextReanalysis;
+    const afterAnalysis = await recorder(project, evidenceId, {
+      source_id: modelResult.source_id,
+      model: modelResult.model,
+      result: {
+        text_expression: modelResult.text_expression || '', hook: modelResult.hook || '', copy_pattern: modelResult.copy_pattern || '',
+        target_audience: modelResult.target_audience || '', audience_need_emotion: modelResult.audience_need_emotion || '',
+        media_analysis: modelResult.media_analysis || [], virality_drivers: modelResult.virality_drivers || [], reusable_methods: modelResult.reusable_methods || [],
+        rewrite_suggestions: modelResult.rewrite_suggestions || [], signals: modelResult.signals || [], risks: modelResult.risks || [],
+      },
+      executed_at: new Date().toISOString(), usage: usage || { total_tokens: 0 }, _request_identity: `analysis-preview:${evidenceId}:${Date.now()}`,
+    });
+    let persisted = afterAnalysis;
+    if (onlineMode) {
+      const spec = buildOnlineCommand(project, afterAnalysis);
+      persisted = await onlineStore.execute(spec.command, spec.payload, spec.options);
+    } else {
+      const saved = store.putProject(afterAnalysis); if (!saved.ok) throw workbenchError(saved.code, saved.message);
+    }
+    setProject(persisted); await reloadProjects();
+    setNotice('分析结果已保存为新版本；原证据和旧分析保持不变。');
+    return (persisted.analyses || []).filter((row) => row.evidence_id === evidenceId).sort((a, b) => b.version - a.version)[0] || null;
+  }, [onlineMode, onlineStore, project, reloadProjects, store]);
+
+  const handleSaveSimilarDraft = useCallback(async (draft, evidence, analysis) => {
+    if (!userId) throw workbenchError('AUTH_REQUIRED', '请先登录后保存草稿。');
+    if (draft.evidence_id !== evidence.id || draft.evidence_version !== evidence.version || draft.evidence_fingerprint !== evidence.fingerprint
+      || draft.analysis_id !== analysis.id || draft.analysis_version !== analysis.version || draft.analysis_fingerprint !== analysis.fingerprint) {
+      throw workbenchError('DRAFT_SOURCE_BINDING_MISMATCH', '草稿与保存时的证据/分析版本不一致，请重新生成。');
+    }
+    const result = { title: draft.title, main_copy: draft.main_copy, cta: draft.cta, hashtags: draft.hashtags, visual_description: draft.media_idea, platform: evidence.provenance?.source_platform || 'x', content_format: 'text_only' };
+    const intent = { platform: evidence.provenance?.source_platform || 'x', content_format: 'text_only', language_mode: 'zh-cn', length_profile: 'short', tone: 'engaging', cta_policy: draft.cta ? 'required' : 'none', hashtag_policy: draft.hashtags?.length ? 'required_3_5' : 'none' };
+    const saved = await saveContentDraftV2(userId, result, intent, { source: 'p35_saved_analysis_similar_post', model: draft.model, usage: draft.usage || {}, evidenceReferences: [{ evidence_id: evidence.id, fingerprint: evidence.fingerprint }], knowledgeReferences: { analysis_id: analysis.id, analysis_version: analysis.version, fingerprint: analysis.fingerprint } });
+    setNotice('相似帖子草稿已保存到内容库；未审核、未路由、未发布。');
+    return saved;
+  }, [userId]);
 
   const handleUpdateEvidence = useCallback((evidenceId, patch) => {
     return run('编辑证据', () => updateEvidence(project, evidenceId, patch), { notice: '证据已更新；下游分析/知识卡/Brief 已标记为过时。' });
@@ -1307,7 +1249,7 @@ export function ResearchWorkspacePage() {
               <P19ProjectForm key={`${project.id}:${project.version}`} project={project} onSave={handleSaveProfile} busy={busy} />
             </section>
             <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
-              {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} workflow={workflow} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}
+              {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} workflow={workflow} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} onSaveAnalysis={handleSaveAnalysisPreview} onSaveDraft={handleSaveSimilarDraft} />}
               {onlineMode && (
                 <P32HotTopicSearchPanel
                   key={project.id}

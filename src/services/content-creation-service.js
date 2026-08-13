@@ -391,6 +391,27 @@ export async function saveContentDraftV2(userId, result, intent, context = {}) {
     delete referenceProvenance.image_metadata.base64;
     delete referenceProvenance.image_metadata.content;
   }
+  if (context.evidenceReferences !== undefined) {
+    if (!Array.isArray(context.evidenceReferences) || context.evidenceReferences.length < 1 || context.evidenceReferences.length > 5) {
+      throw new Error('证据引用必须包含 1–5 条准确记录。');
+    }
+    referenceProvenance.evidence_references = context.evidenceReferences.map((reference) => {
+      const evidenceId = String(reference?.evidence_id || '').trim();
+      const fingerprint = String(reference?.fingerprint || '').trim().toLowerCase();
+      if (!evidenceId || evidenceId.length > 200 || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error('证据引用身份无效，已拒绝保存。');
+      return { evidence_id: evidenceId, fingerprint };
+    });
+  }
+  if (context.knowledgeReferences !== undefined) {
+    const reference = context.knowledgeReferences;
+    const analysisId = String(reference?.analysis_id || '').trim();
+    const version = Number(reference?.analysis_version);
+    const fingerprint = String(reference?.fingerprint || '').trim().toLowerCase();
+    if (!analysisId || analysisId.length > 200 || !Number.isInteger(version) || version < 1 || !/^[a-f0-9]{64}$/.test(fingerprint)) {
+      throw new Error('分析引用身份无效，已拒绝保存。');
+    }
+    referenceProvenance.analysis_reference = { analysis_id: analysisId, analysis_version: version, fingerprint };
+  }
 
   const row = {
     user_id: userId,

@@ -397,7 +397,7 @@ test('P29 production page collects the two-image example post, renders real medi
         mediaSrcs: images.map((img) => img.getAttribute('src')),
         mediaOrders: images.map((img) => img.getAttribute('data-media-order')),
         loaded: images.every((img) => img.complete && img.naturalWidth > 0),
-        previewUnsaved: card.innerText.includes('预览未保存'),
+        previewUnsaved: card.innerText.includes('来源预览 · 未保存'),
         action: card.querySelector('button').textContent,
       };
     })()`);
@@ -406,24 +406,22 @@ test('P29 production page collects the two-image example post, renders real medi
     assert.deepEqual(sourceCard.mediaOrders, ['0', '1']);
     assert.equal(sourceCard.loaded, true, 'both real media images must render their bytes');
     assert.equal(sourceCard.previewUnsaved, true, 'preview must clearly read 预览未保存');
-    assert.equal(sourceCard.action, '保存图文证据并生成分析', 'main action renamed per P29');
+    assert.equal(sourceCard.action, '保存证据', 'saving Evidence is an explicit first step');
     assert.match(sourceCard.text, /Example Author/);
     assert.match(sourceCard.text, /@example_handle/);
     assert.match(sourceCard.text, /点赞 128/);
     assert.match(sourceCard.text, /浏览 4567/);
 
-    // 一次点击：保存证据 → 多模态分析 → 知识卡 → 内容策划草案。
+    // 第一步只保存证据；分析与后续产物必须由用户分别确认。
     await cdp.evaluate(`document.querySelector('.p22-source-card button').click()`);
     await waitFor(() => {
       const state = boundary.getProject();
-      return Boolean(state && state.evidence.length === 1 && state.analyses.length === 1
-        && state.knowledge_cards.length === 1 && state.brief && state.brief.status === 'pending_review');
-    }, { label: 'full persisted chain' });
+      return Boolean(state && state.evidence.length === 1 && state.analyses.length === 0
+        && state.knowledge_cards.length === 0 && state.brief === null);
+    }, { label: 'evidence-only persistence' });
 
     const persisted = boundary.getProject();
     const evidence = persisted.evidence[0];
-    const analysis = persisted.analyses[0];
-    const card = persisted.knowledge_cards[0];
     // Evidence：来源快照 + 两条媒体身份/哈希。
     assert.equal(evidence.media_assets.length, 2);
     assert.deepEqual(evidence.media_assets.map((asset) => asset.media_url), [`${mediaBase}/media/p29-1.jpg`, `${mediaBase}/media/p29-2.jpg`]);
@@ -431,28 +429,9 @@ test('P29 production page collects the two-image example post, renders real medi
     assert.equal(evidence.media_assets[0].hash.value, createHash('sha256').update(IMAGE_1_BYTES).digest('hex'));
     assert.equal(evidence.media_assets[1].hash.value, createHash('sha256').update(IMAGE_2_BYTES).digest('hex'));
     assert.deepEqual(evidence.source_metadata.author, { name: 'Example Author', handle: 'example_handle', user_id: 'u-2087047011753467912' });
-    // 分析：持久化的就是服务端返回的多模态结果（逐媒体视觉发现 + 模型身份）。
-    assert.equal(analysis.model_analysis.model, 'qwen3.5-omni-flash');
-    assert.equal(analysis.model_analysis.result.text_expression, TEXT_EXPRESSION);
-    assert.deepEqual(analysis.model_analysis.result.media_analysis.map((row) => row.visual_content), [VISUAL_1, VISUAL_2]);
-    assert.deepEqual(analysis.model_analysis.media_ids, evidence.media_assets.map((asset) => asset.id));
-    // 知识卡包含返回的视觉发现（不是本地文本替代）。
-    assert.match(JSON.stringify(card), new RegExp(VISUAL_1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(JSON.stringify(card), /multimodal_model/);
-    assert.equal(card.analysis_provenance.model, 'qwen3.5-omni-flash');
-    // Brief：纯语言发现 + 模型身份 + 媒体计数。
-    assert.match(persisted.brief.multimodal_findings.join('|'), /画面（媒体 #1）/);
-    assert.match(persisted.brief.multimodal_findings.join('|'), new RegExp(VISUAL_1.slice(0, 20)));
-    assert.equal(persisted.brief.analysis_provenance.media_count, 2);
-    assert.equal(persisted.brief.analysis_provenance.model, 'qwen3.5-omni-flash');
-    // 模型请求收到两条精确 URL（按顺序）——服务端据此构造多模态内容部件。
-    assert.equal(boundary.analyzeRequests.length, 1);
-    const analyzeBody = boundary.analyzeRequests[0];
-    assert.equal(analyzeBody.action, 'analyze');
-    assert.equal(analyzeBody.items.length, 1);
-    assert.deepEqual(analyzeBody.items[0].media_assets.map((asset) => asset.media_url), [`${mediaBase}/media/p29-1.jpg`, `${mediaBase}/media/p29-2.jpg`]);
+    assert.equal(boundary.analyzeRequests.length, 0, 'saving Evidence must not invoke analysis automatically');
 
-    // 硬刷新：Evidence / Knowledge / Brief 的媒体、哈希、分析身份保持一致。
+    // 硬刷新：Evidence 的媒体、哈希和来源身份保持一致。
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('在线工作区 · 已同步') && document.body.innerText.includes('P29 双图示例')`), { label: 'reload recovery' });
     // 引导视图只展示当前建议步骤的面板；切换到完整视图再核对全部面板。
@@ -461,24 +440,21 @@ test('P29 production page collects the two-image example post, renders real medi
     const reloaded = await cdp.evaluate(`(() => {
       const card = document.querySelector('.p22-source-card');
       return {
-        saved: card.innerText.includes('已保存为证据'),
-        complete: card.querySelector('button').textContent.includes('已生成内容策划草案'),
+        saved: card.innerText.includes('证据已保存'),
+        analysisReady: card.querySelector('button').textContent.includes('分析此帖子'),
         mediaCount: card.querySelectorAll('.p22-media-gallery img').length,
-        previewShowsModel: card.innerText.includes('多模态分析（已绑定保存）'),
-        findingsShown: document.body.innerText.includes('内容策划草案（待你确认）'),
       };
     })()`);
     assert.deepEqual(reloaded, {
-      saved: true, complete: true, mediaCount: 2, previewShowsModel: true, findingsShown: true,
+      saved: true, analysisReady: true, mediaCount: 2,
     });
     const persistedAfterReload = boundary.getProject();
     assert.equal(persistedAfterReload.evidence[0].id, evidence.id);
-    assert.equal(persistedAfterReload.analyses[0].id, analysis.id);
-    assert.equal(persistedAfterReload.analyses[0].model_analysis.result.media_analysis[0].visual_content, VISUAL_1);
-    assert.deepEqual(persistedAfterReload.brief.multimodal_findings, persisted.brief.multimodal_findings);
+    assert.equal(persistedAfterReload.analyses.length, 0);
+    assert.equal(persistedAfterReload.brief, null);
 
     // 未保存预览在收集后出现；保存后的证据卡不再显示 预览未保存。
-    assert.equal(await cdp.evaluate(`document.querySelector('.p22-source-card').innerText.includes('预览未保存')`), false);
+    assert.equal(await cdp.evaluate(`document.querySelector('.p22-source-card').innerText.includes('来源预览 · 未保存')`), false);
   } finally {
     cdp?.close();
     await killTree(edge);

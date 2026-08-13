@@ -65,6 +65,8 @@ const ACTION_FIELDS = Object.freeze({
   search: new Set(['action', 'keyword', 'count', 'sort']),
   search_reddit: new Set(['action', 'keyword', 'count', 'sort', 'subreddit', 'time_filter']),
   analyze: new Set(['action', 'items']),
+  analyze_persisted: new Set(['action', 'project_id', 'evidence_id']),
+  generate_similar: new Set(['action', 'project_id', 'evidence_id', 'analysis_id']),
 });
 const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof', 'source_metadata', 'media_assets']);
 const PROVENANCE_FIELDS = new Set(['schema_version', 'provider', 'run_id', 'collected_at', 'usage_total_usd', 'budget_reservation_id']);
@@ -217,6 +219,13 @@ export function parseP22Request(raw) {
     }
     return { action, keyword, count, sort, subreddit, time_filter: timeFilter };
   }
+  if (action === 'analyze_persisted' || action === 'generate_similar') {
+    const projectId = text(input.project_id, 'project_id', 28);
+    if (!/^prj-[0-9a-f]{24}$/.test(projectId)) throw new P22Error('PROJECT_ID_INVALID', '项目身份格式无效。', 400, { field: 'project_id' });
+    const evidenceId = text(input.evidence_id, 'evidence_id', 200);
+    if (action === 'analyze_persisted') return { action, project_id: projectId, evidence_id: evidenceId };
+    return { action, project_id: projectId, evidence_id: evidenceId, analysis_id: text(input.analysis_id, 'analysis_id', 200) };
+  }
   if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > P22_LIMITS.analyze) {
     throw new P22Error('ITEM_COUNT_OUT_OF_RANGE', '分析项目必须为 1–2 条。', 400, { field: 'items' });
   }
@@ -256,6 +265,87 @@ export function parseP22Request(raw) {
     return normalized;
   });
   return { action, items };
+}
+
+export async function persistedEvidenceToAnalyzeItem(evidence, { hasher = async (value) => {
+  const bytes = await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(value));
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+} } = {}) {
+  const row = object(evidence);
+  if (!row || row.schema_version !== 'p19_evidence_record_v1') throw new P22Error('PERSISTED_EVIDENCE_INVALID', '已保存证据合同无效。', 409, { field: 'schema_version' });
+  const provenance = object(row.provenance);
+  if (!provenance || provenance.schema_version !== 'p22_apify_evidence_provenance_v1' || provenance.manual !== false) {
+    throw new P22Error('PERSISTED_EVIDENCE_UNSUPPORTED', '该证据不是可供模型分析的已验证采集来源。', 409, { field: 'provenance' });
+  }
+  const platform = text(provenance.source_platform, 'provenance.source_platform', 40).toLowerCase();
+  if (!['x', 'reddit'].includes(platform)) throw new P22Error('UNSUPPORTED_PLATFORM', '当前只支持 X 或 Reddit 已保存来源。', 409, { field: 'provenance.source_platform' });
+  const contentText = text(row.content_text, 'content_text', P22_LIMITS.persist_text);
+  const contentHash = text(provenance.content_sha256, 'provenance.content_sha256', 64).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(contentHash) || await hasher(contentText) !== contentHash) {
+    throw new P22Error('PERSISTED_EVIDENCE_HASH_MISMATCH', '已保存证据正文哈希不一致。', 409, { field: 'provenance.content_sha256' });
+  }
+  if (row.source_metadata != null && !validateSourceMetadataShape(row.source_metadata)) {
+    throw new P22Error('SOURCE_METADATA_INVALID', '已保存来源快照形状无效。', 409, { field: 'source_metadata' });
+  }
+  const mediaAssets = row.media_assets ?? [];
+  if (!validateMediaAssetsShape(mediaAssets)) throw new P22Error('MEDIA_ASSETS_INVALID', '已保存媒体资产形状无效。', 409, { field: 'media_assets' });
+  return {
+    id: text(provenance.source_id, 'provenance.source_id', 160),
+    source_url: normalizeSourceUrl(text(row.source_url, 'source_url', 1000), platform),
+    label: text(row.label, 'label', 200),
+    platform,
+    content_text: contentText,
+    external_id: text(provenance.external_id, 'provenance.external_id', 160, false),
+    content_sha256: contentHash,
+    provenance: {
+      schema_version: 'p22_collected_source_v1',
+      provider: text(provenance.provider, 'provenance.provider', 120),
+      run_id: text(provenance.run_id, 'provenance.run_id', 200),
+      collected_at: text(provenance.collected_at, 'provenance.collected_at', 80),
+      usage_total_usd: Number(provenance.usage_total_usd || 0),
+      budget_reservation_id: text(provenance.budget_reservation_id, 'provenance.budget_reservation_id', 80),
+    },
+    collection_proof: text(provenance.collection_proof, 'provenance.collection_proof', 256),
+    source_metadata: row.source_metadata ?? null,
+    media_assets: mediaAssets.map((asset) => clonePlain(asset)),
+  };
+}
+
+export function buildSimilarPostPrompt(evidence, analysis) {
+  const result = analysis?.model_analysis?.result;
+  if (!result || typeof result !== 'object') throw new P22Error('ANALYSIS_NOT_GENERATIVE', '所选分析不包含可用于内容草稿的模型结果。', 409, { field: 'analysis_id' });
+  const compact = JSON.stringify({
+    text_expression: result.text_expression,
+    hook: result.hook,
+    copy_pattern: result.copy_pattern,
+    target_audience: result.target_audience,
+    audience_need_emotion: result.audience_need_emotion,
+    media_analysis: result.media_analysis,
+    virality_drivers: result.virality_drivers,
+    reusable_methods: result.reusable_methods,
+    rewrite_suggestions: result.rewrite_suggestions,
+    risks: result.risks,
+  }).slice(0, 12000);
+  return `你是社交内容策划师。基于下列已保存来源的分析方法，创作一条全新的相似风格帖子草稿。学习结构、Hook、受众和视觉方法，但禁止复制原文、冒充原作者或虚构事实。\n平台：${evidence.provenance?.source_platform || 'x'}\n分析：${compact}\n严格返回 JSON，且只能包含 title、main_copy、cta、hashtags、media_idea。hashtags 为 0-8 个字符串；其他字段均为字符串。`;
+}
+
+export function parseSimilarPostDraft(payload) {
+  let raw;
+  try { raw = typeof payload === 'string' ? JSON.parse(payload) : payload; }
+  catch { throw new P22Error('MODEL_RESPONSE_INVALID', '相似帖子草稿不是有效 JSON。', 502, { field: 'draft' }); }
+  const value = object(raw);
+  if (!value) throw new P22Error('MODEL_RESPONSE_INVALID', '相似帖子草稿格式无效。', 502);
+  exactFields(value, new Set(['title', 'main_copy', 'cta', 'hashtags', 'media_idea']), 'draft');
+  if (!Array.isArray(value.hashtags) || value.hashtags.length > 8) throw new P22Error('MODEL_RESPONSE_INVALID', '草稿标签格式无效。', 502, { field: 'hashtags' });
+  const hashtags = value.hashtags.map((tag, index) => text(tag, `hashtags[${index}]`, 80));
+  return {
+    schema_version: 'p35_similar_post_draft_v1',
+    title: text(value.title, 'title', 200),
+    main_copy: text(value.main_copy, 'main_copy', 3000),
+    cta: text(value.cta, 'cta', 200, false) || '',
+    hashtags,
+    media_idea: text(value.media_idea, 'media_idea', 800),
+  };
 }
 
 export function normalizeXUrl(value) {
@@ -352,7 +442,7 @@ function visibleText(item) {
 // - 媒体顺序零基、id 确定性、URL/顺序唯一；超出声明上限硬失败；
 // - 内容 SHA-256 只从严格 X/Twitter CDN 白名单抓取：重定向逐跳复验白名单、
 //   强制 content-type、超时与字节上限，任何失配/溢出一律失败关闭；
-//   未在白名单的媒体 URL 保留 url 哈希（明确区分，绝不冒充内容哈希）。
+//   未在白名单的媒体 URL 直接失败关闭，绝不以 URL 哈希冒充内容哈希。
 // ---------------------------------------------------------------------------
 
 function boundedAuthorText(value, field, max) {

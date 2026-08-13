@@ -91,6 +91,8 @@ export function createP22ResearchAssistClient({ client = supabase } = {}) {
       action: 'search_reddit', keyword, count, sort, subreddit, time_filter: timeFilter,
     }),
     analyze: (items) => invoke({ action: 'analyze', items }),
+    analyzePersisted: (projectId, evidenceId) => invoke({ action: 'analyze_persisted', project_id: projectId, evidence_id: evidenceId }),
+    generateSimilar: (projectId, evidenceId, analysisId) => invoke({ action: 'generate_similar', project_id: projectId, evidence_id: evidenceId, analysis_id: analysisId }),
   });
 }
 

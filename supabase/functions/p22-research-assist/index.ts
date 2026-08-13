@@ -1,8 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 import {
   P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, P22_SCHEMA_VERSION, P22Error, buildMultimodalQwenContent, buildQwenPrompt,
+  buildSimilarPostPrompt,
   assertUniqueRawCollectedPost, assertUniqueSearchResults, bindExactCollectedPost, issueCollectionProof, normalizeCollectedItems, normalizeRedditSearchItems, parseP22Request, parseQwenAnalyses, parseQwenMultimodalAnalyses, publicError,
-  redditSearchBatchId, runApifyCollectionSequence, searchBatchId, verifyAnalyzeSources,
+  parseSimilarPostDraft, persistedEvidenceToAnalyzeItem, redditSearchBatchId, runApifyCollectionSequence, searchBatchId, verifyAnalyzeSources,
 } from './assist-core.mjs';
 
 const ORIGINS = new Set(['https://jiang289140790-eng.github.io','http://localhost:3000','http://127.0.0.1:3000','http://127.0.0.1:5173','http://127.0.0.1:5174']);
@@ -113,11 +114,11 @@ async function collect(db, userId: string, input, proofSecret: string) {
   finally { clearTimeout(timer); }
 }
 
-async function analyze(db,userId:string,items,proofSecret:string) {
+async function analyze(db,userId:string,items,proofSecret:string,{persisted=false}={}) {
   // 按媒体分组调用模型：带媒体来源 → qwen3.5-omni-flash 多模态契约（逐媒体绑定，
   // 绝不静默回退到纯文本分析）；纯文本来源 → 既有 qwen-plus 文本契约。
   // 每组独立记录有界费用；全部组的结果合并为一个 analyses 数组。
-  await verifyAnalyzeSources(proofSecret,userId,items);
+  if (!persisted) await verifyAnalyzeSources(proofSecret,userId,items);
   const key=Deno.env.get('DASHSCOPE_API_KEY');
   if (!key) throw new P22Error('QWEN_NOT_CONFIGURED','Qwen 尚未配置。',503);
   const groups=[];
@@ -149,6 +150,47 @@ async function analyze(db,userId:string,items,proofSecret:string) {
   return {analyses,usage:{total_tokens:usageTotal},cost:{recorded_cny:costRecords.reduce((sum,row)=>sum+row.recorded_cny,0),tracking:costRecords.map((row)=>row.tracking)}};
 }
 
+async function loadPersistedProjectEntity(db,userId:string,projectId:string,evidenceId:string) {
+  const [{data:project,error:projectError},{data:entities,error:entityError}]=await Promise.all([
+    db.schema('api').rpc('p19_get_project',{p_user_id:userId,p_project_id:projectId}),
+    db.schema('api').rpc('p19_list_project_entities',{p_user_id:userId,p_project_id:projectId}),
+  ]);
+  if(projectError||entityError) throw new P22Error('PERSISTED_EVIDENCE_LOOKUP_FAILED','无法安全读取已保存证据。',503);
+  if(!project||project.id!==projectId||project.status!=='active') throw new P22Error('PROJECT_NOT_ACTIVE','项目不存在或不可编辑。',409,{field:'project_id'});
+  const matches=(Array.isArray(entities?.evidence)?entities.evidence:[]).filter((row)=>row?.id===evidenceId&&row?.project_id===projectId);
+  if(matches.length!==1) throw new P22Error(matches.length?'EVIDENCE_NOT_UNIQUE':'EVIDENCE_NOT_FOUND','找不到唯一且属于当前项目的已保存证据。',409,{field:'evidence_id'});
+  return {project,entities,evidence:matches[0]};
+}
+
+async function analyzePersisted(db,userId:string,input,proofSecret:string) {
+  const loaded=await loadPersistedProjectEntity(db,userId,input.project_id,input.evidence_id);
+  const item=await persistedEvidenceToAnalyzeItem(loaded.evidence,{hasher:sha256});
+  const result=await analyze(db,userId,[item],proofSecret,{persisted:true});
+  return {...result,evidence_id:input.evidence_id,project_id:input.project_id};
+}
+
+async function generateSimilar(db,userId:string,input) {
+  const loaded=await loadPersistedProjectEntity(db,userId,input.project_id,input.evidence_id);
+  const item=await persistedEvidenceToAnalyzeItem(loaded.evidence,{hasher:sha256});
+  const matches=(Array.isArray(loaded.entities?.analyses)?loaded.entities.analyses:[]).filter((row)=>row?.id===input.analysis_id&&row?.project_id===input.project_id&&row?.evidence_id===input.evidence_id);
+  if(matches.length!==1) throw new P22Error(matches.length?'ANALYSIS_NOT_UNIQUE':'ANALYSIS_NOT_FOUND','找不到唯一且绑定该证据的已保存分析。',409,{field:'analysis_id'});
+  const analysis=matches[0];
+  if(analysis.evidence_fingerprint!==loaded.evidence.fingerprint||analysis.evidence_version!==loaded.evidence.version) throw new P22Error('ANALYSIS_EVIDENCE_MISMATCH','分析与当前证据版本不一致。',409,{field:'analysis_id'});
+  const key=Deno.env.get('DASHSCOPE_API_KEY');
+  if(!key) throw new P22Error('QWEN_NOT_CONFIGURED','Qwen 尚未配置。',503);
+  const costRecord=await recordProviderCost(db,userId,'qwen',P22_LIMITS.qwen_reservation_cny);
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),60000);
+  try {
+    const response=await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:'qwen-plus',temperature:0.5,max_tokens:1800,response_format:{type:'json_object'},messages:[{role:'user',content:buildSimilarPostPrompt(loaded.evidence,analysis)}]}),signal:controller.signal});
+    if(!response.ok) throw new P22Error('QWEN_REQUEST_FAILED','相似帖子草稿生成失败。',502);
+    const payload=await response.json(); const totalTokens=Number(payload?.usage?.total_tokens);
+    if(!Number.isFinite(totalTokens)||totalTokens<=0) throw new P22Error('QWEN_COST_UNVERIFIABLE','无法验证草稿生成用量。',502);
+    const draft=parseSimilarPostDraft(payload?.choices?.[0]?.message?.content);
+    return {draft:{...draft,evidence_id:input.evidence_id,evidence_version:loaded.evidence.version,evidence_fingerprint:loaded.evidence.fingerprint,analysis_id:input.analysis_id,analysis_version:analysis.version,analysis_fingerprint:analysis.fingerprint,model:'qwen-plus',generated_at:new Date().toISOString(),execution_flags:P22_EXECUTION_FLAGS},usage:{total_tokens:totalTokens},cost:{recorded_cny:P22_LIMITS.qwen_reservation_cny,tracking:costRecord},project_id:input.project_id};
+  } catch(error) { if(error?.name==='AbortError') throw new P22Error('QWEN_TIMEOUT','相似帖子草稿生成超时。',504); throw error; }
+  finally { clearTimeout(timer); }
+}
+
 Deno.serve(async (request)=>{
   if(request.method==='OPTIONS') return new Response('ok',{headers:headers(request)});
   if(request.method!=='POST') return respond(request,{ok:false,code:'METHOD_NOT_ALLOWED',message:'只接受 POST。'},405);
@@ -159,7 +201,9 @@ Deno.serve(async (request)=>{
     if(!['operator','admin'].includes(role)) throw new P22Error('OPERATOR_REQUIRED','智能研究仅向 operator 开放。',403);
     const result=(input.action==='collect'||input.action==='collect_url'||input.action==='search'||input.action==='search_reddit')
       ? await collect(db,userId,input,proofSecret)
-      : await analyze(db,userId,input.items,proofSecret);
+      : input.action==='analyze_persisted' ? await analyzePersisted(db,userId,input,proofSecret)
+        : input.action==='generate_similar' ? await generateSimilar(db,userId,input)
+          : await analyze(db,userId,input.items,proofSecret);
     return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,action:input.action,...result,execution_flags:P22_EXECUTION_FLAGS});
   } catch(error) {
     const safe=publicError(error);

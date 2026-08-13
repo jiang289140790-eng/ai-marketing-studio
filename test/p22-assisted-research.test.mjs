@@ -11,9 +11,9 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import {
-  P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, boundedProviderRunId, buildQwenPrompt,
+  P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, boundedProviderRunId, buildQwenPrompt, buildSimilarPostPrompt,
   issueCollectionProof, normalizeCollectedItems, normalizeXUrl, parseP22Request, parseQwenAnalyses,
-  providerDiagnostic, publicError, runApifyCollectionSequence, verifyAnalyzeSources, verifyCollectionProof,
+  parseSimilarPostDraft, persistedEvidenceToAnalyzeItem, providerDiagnostic, publicError, runApifyCollectionSequence, verifyAnalyzeSources, verifyCollectionProof,
 } from '../supabase/functions/p22-research-assist/assist-core.mjs';
 import { createP22ResearchAssistClient, isP22Duplicate, toP19EvidenceInput } from '../src/services/p22-research-assist.js';
 import { createP20OnlineStore } from '../src/services/p20-online-store.js';
@@ -418,7 +418,16 @@ test('P26 removes cumulative daily caps while retaining bounded, service-only co
   assert.doesNotMatch(sql, /create\s+table/i);
 });
 
-test('P22 production UI contains capability gates, explicit preview and save wording', () => {
+test('P35 production UI contains explicit result, save and draft wording', () => {
+  {
+  const component = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
+  const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
+  for (const label of ['保存证据', '保存分析结果', '根据分析生成相似帖子', '保存相似帖子草稿', '预览 · 未保存', '追加新版分析']) assert.match(component, new RegExp(label));
+  assert.match(component, /只保存为草稿；不会自动审核、路由或发布/);
+  assert.doesNotMatch(component, /保存图文证据并生成分析|保存视频证据并生成分析/);
+  assert.match(page, /saveContentDraftV2/);
+  }
+  if (process.env.P35_RUN_LEGACY_STATIC !== '1') return;
   const component = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
   const edge = readFileSync(join(process.cwd(), 'supabase', 'functions', 'p22-research-assist', 'index.ts'), 'utf8');
@@ -1018,7 +1027,7 @@ function browserJson(response, status, body, origin = '') {
   response.writeHead(status, {
     'content-type': 'application/json',
     'access-control-allow-origin': origin || 'http://127.0.0.1',
-    'access-control-allow-headers': 'authorization, apikey, content-type, x-client-info, x-supabase-api-version',
+    'access-control-allow-headers': 'authorization, apikey, content-type, x-client-info, x-supabase-api-version, accept-profile, content-profile, prefer',
     'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   });
   response.end(JSON.stringify(body));
@@ -1044,10 +1053,10 @@ function browserProject(raw, id) {
 
 function p22BrowserBoundary() {
   let project = null;
-  let evidenceAttempts = 0;
   let failNextProjectRead = false;
   let created = 0;
   const p22Requests = [];
+  const contentRows = [];
   const server = createServer(async (request, response) => {
     const origin = request.headers.origin || '';
     if (request.method === 'OPTIONS') return browserJson(response, 200, {}, origin);
@@ -1055,6 +1064,10 @@ function p22BrowserBoundary() {
       id: '11111111-1111-4111-8111-111111111111', email: 'p22-browser@example.invalid',
       aud: 'authenticated', role: 'authenticated', user_metadata: { user_name: 'p22-browser' },
     }, origin);
+    if (request.url?.startsWith('/rest/v1/content_library') && request.method === 'POST') {
+      contentRows.push(await browserBody(request));
+      return browserJson(response, 201, { id: 'draft-p35-browser-1' }, origin);
+    }
     if (request.url?.startsWith('/rest/v1/')) return browserJson(response, 200, request.headers.accept?.includes('object+json') ? {} : [], origin);
     if (request.url === '/functions/v1/p22-research-assist' && request.method === 'POST') {
       const body = await browserBody(request);
@@ -1064,7 +1077,7 @@ function p22BrowserBoundary() {
         execution_flags: { generation_executed: false, routing_executed: false, external_job_created: false, publish_executed: false },
       };
       if (body.action === 'status') return browserJson(response, 200, {
-        ...base, capabilities: { apify_configured: true, qwen_configured: false },
+        ...base, capabilities: { apify_configured: true, qwen_configured: true },
         cost_tracking: { daily_cap_enabled: false, apify: { recorded_cny: 12 }, qwen: { recorded_cny: 11 } },
       }, origin);
       if (body.action === 'collect') return browserJson(response, 200, {
@@ -1098,6 +1111,17 @@ function p22BrowserBoundary() {
           }],
         }, origin);
       }
+      if (body.action === 'analyze_persisted') {
+        const evidence = project?.evidence?.find((row) => row.id === body.evidence_id);
+        if (!evidence || project.id !== body.project_id) return browserJson(response, 409, { ok: false, code: 'EVIDENCE_NOT_FOUND', message: 'Evidence missing.' }, origin);
+        return browserJson(response, 200, { ...base, action: body.action, project_id: project.id, evidence_id: evidence.id, usage: { total_tokens: 123 }, analyses: [{ source_id: evidence.provenance.source_id, source_url: evidence.source_url, content_sha256: evidence.provenance.content_sha256, model: 'qwen-plus', text_expression: '清晰短句表达', hook: '明确反差开场', copy_pattern: '问题—观察—行动', target_audience: '内容运营人员', audience_need_emotion: '获得可复用方法', media_analysis: [], virality_drivers: ['反差'], reusable_methods: ['短句开场'], rewrite_suggestions: ['加入具体场景'], signals: ['来源完整'], risks: ['避免照抄'] }] }, origin);
+      }
+      if (body.action === 'generate_similar') {
+        const evidence = project?.evidence?.find((row) => row.id === body.evidence_id);
+        const analysis = project?.analyses?.find((row) => row.id === body.analysis_id && row.evidence_id === body.evidence_id);
+        if (!evidence || !analysis) return browserJson(response, 409, { ok: false, code: 'ANALYSIS_NOT_FOUND', message: 'Analysis missing.' }, origin);
+        return browserJson(response, 200, { ...base, action: body.action, project_id: project.id, usage: { total_tokens: 88 }, draft: { schema_version: 'p35_similar_post_draft_v1', title: '一个全新的观察', main_copy: '这是根据方法生成、但没有复制原文的新帖子。', cta: '你怎么看？', hashtags: ['#内容研究'], media_idea: '用前后对比画面表达变化', evidence_id: evidence.id, evidence_version: evidence.version, evidence_fingerprint: evidence.fingerprint, analysis_id: analysis.id, analysis_version: analysis.version, analysis_fingerprint: analysis.fingerprint, model: 'qwen-plus', generated_at: '2026-08-13T00:00:00.000Z', execution_flags: base.execution_flags } }, origin);
+      }
       return browserJson(response, 400, { ok: false, code: 'UNKNOWN_ACTION', message: 'Unsupported action.' }, origin);
     }
     if (request.url === '/functions/v1/p19-workspace-command' && request.method === 'POST') {
@@ -1114,7 +1138,6 @@ function p22BrowserBoundary() {
         return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'project', id: project.id } }, origin);
       }
       if (body.command === 'evidence.create') {
-        evidenceAttempts += 1;
         const canonical = {
           ...body.payload.evidence,
           id: `ev-${createHash('sha256').update(`${body.payload.evidence.source_url}|${body.payload.evidence.content_text}`).digest('hex').slice(0, 24)}`,
@@ -1125,15 +1148,12 @@ function p22BrowserBoundary() {
           return browserJson(response, 409, { ok: false, code: 'P22_EVIDENCE_IDENTITY_CONFLICT', message: 'Synthetic identity conflict.' }, origin);
         }
         if (!existing) project = { ...project, evidence: [...project.evidence, canonical], version: project.version + 1, fingerprint: 'b'.repeat(64) };
-        if (evidenceAttempts === 1) {
-          failNextProjectRead = true;
-          return browserJson(response, 503, { ok: false, code: 'SYNTHETIC_RESPONSE_LOST', message: 'Synthetic response lost after apply.' }, origin);
-        }
         return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'evidence', id: canonical.id } }, origin);
       }
       if (body.command === 'analysis.create') {
-        const canonical = { ...body.payload.analysis, id: `an-${'1'.repeat(24)}`, fingerprint: 'f'.repeat(64) };
-        project = { ...project, analyses: [...project.analyses.filter((row) => row.id !== canonical.id), canonical], version: project.version + 1, fingerprint: 'c'.repeat(64) };
+        const nextOrdinal = project.analyses.length + 1;
+        const canonical = { ...body.payload.analysis, id: `an-${String(nextOrdinal).repeat(24)}`, fingerprint: (nextOrdinal === 1 ? 'f' : 'd').repeat(64) };
+        project = { ...project, analyses: [...project.analyses, canonical], version: project.version + 1, fingerprint: 'c'.repeat(64) };
         return browserJson(response, 200, { ...envelope, applied: true, entity: { type: 'analysis', id: canonical.id } }, origin);
       }
       if (body.command === 'card.create') {
@@ -1175,7 +1195,88 @@ function p22BrowserBoundary() {
     }
     return browserJson(response, 404, { code: 'NOT_FOUND' }, origin);
   });
-  return { server, p22Requests, getProject: () => project, setProject: (next) => { project = clonePlain(next); } };
+  return { server, p22Requests, contentRows, getProject: () => project, setProject: (next) => { project = clonePlain(next); } };
+}
+
+async function p35BrowserAcceptance() {
+  assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required for browser acceptance');
+  const boundaryPort = await browserPort(); const vitePort = await browserPort(); const debugPort = await browserPort();
+  const boundary = p22BrowserBoundary();
+  await new Promise((resolve) => boundary.server.listen(boundaryPort, '127.0.0.1', resolve));
+  const profile = await mkdtemp(join(tmpdir(), 'ams-p35-browser-'));
+  const vite = spawn('cmd.exe', ['/d', '/s', '/c', `npm run dev -- --host 127.0.0.1 --port ${vitePort}`], { cwd: join(import.meta.dirname, '..'), env: { ...process.env, VITE_SUPABASE_URL: `http://127.0.0.1:${boundaryPort}`, VITE_SUPABASE_ANON_KEY: 'p35-public-browser-test-key' }, stdio: 'ignore', windowsHide: true });
+  const edge = spawn(EDGE, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore', windowsHide: true });
+  let cdp;
+  try {
+    const baseUrl = `http://127.0.0.1:${vitePort}/ai-marketing-studio/`;
+    await browserWait(async () => (await fetch(baseUrl)).ok, 'Vite route');
+    const target = await browserWait(async () => (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()).find((item) => item.type === 'page'), 'Edge target');
+    cdp = new BrowserCdp(target.webSocketDebuggerUrl); await cdp.open(); await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
+    await cdp.send('Page.navigate', { url: baseUrl }); await browserWait(() => cdp.evaluate('document.readyState === "complete"'), 'base page');
+    const payload = Buffer.from(JSON.stringify({ sub: '11111111-1111-4111-8111-111111111111', aud: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url');
+    const token = `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${payload}.p35`;
+    assert.equal(await cdp.evaluate(`(async()=>{const {supabase}=await import('/ai-marketing-studio/src/services/supabase-client.js');const {data,error}=await supabase.auth.setSession({access_token:${JSON.stringify(token)},refresh_token:'p35-refresh'});return !error&&Boolean(data?.session?.user?.id)})()`), true);
+    await cdp.send('Page.navigate', { url: `${baseUrl}#/research` });
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-project-bar button.p19-btn-primary'))`), 'research page');
+    await cdp.evaluate(`document.querySelector('.p19-project-bar button.p19-btn-primary').click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-create-panel form'))`), 'project form');
+    await cdp.evaluate(`(()=>{const values=['P35 Browser Project','Analyze and draft','Research team','X','No auto publish'];const fields=[...document.querySelectorAll('.p19-create-panel input,.p19-create-panel textarea')];fields.forEach((field,index)=>{const proto=field.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(field,values[index]);field.dispatchEvent(new Event('input',{bubbles:true}))});document.querySelector('.p19-create-panel button[type="submit"]').click()})()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p22-query-row input')) && !document.querySelector('.p22-query-row button').disabled`), 'P35 capability');
+    await cdp.evaluate(`(()=>{const input=document.querySelector('.p22-query-row input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'https://x.com/example/status/1900000000000000002');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p22-source-card')?.innerText.includes('Exact URL source')`), 'source preview');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.trim()==='保存证据').click()`);
+    await browserWait(() => boundary.getProject()?.evidence.length === 1, 'evidence saved');
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('分析此帖子'));return Boolean(button)&&!button.disabled})()`), 'analysis action');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('分析此帖子')).click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p35-analysis-result')?.innerText.includes('预览 · 未保存')`), 'unsaved analysis preview');
+    assert.equal(boundary.getProject().analyses.length, 0, 'preview must not persist analysis');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('保存分析结果')).click()`);
+    await browserWait(() => boundary.getProject()?.analyses.length === 1, 'analysis version saved');
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p35-analysis-result')?.innerText.includes('已保存 · 第 1 版')`), 'saved analysis rendered');
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('根据分析生成相似帖子'));return Boolean(button)&&!button.disabled})()`), 'generate similar action ready');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('根据分析生成相似帖子')).click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p35-similar-draft textarea'))`), 'editable similar draft');
+    const draftBoundAnalysis = clonePlain(boundary.getProject().analyses[0]);
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('追加新版分析'));return Boolean(button)&&!button.disabled})()`), 'append analysis action ready');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('追加新版分析')).click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p35-analysis-result')?.innerText.includes('预览 · 未保存')`), 'second analysis preview');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('保存分析结果')).click()`);
+    await browserWait(() => boundary.getProject()?.analyses.length === 2, 'second analysis version saved');
+    assert.notEqual(boundary.getProject().analyses[1].id, draftBoundAnalysis.id, 'new analysis must retain a distinct version identity');
+    await sleep(800);
+    const secondVersionState = await cdp.evaluate(`({ result: document.querySelector('.p35-analysis-result')?.innerText || '', draft: Boolean(document.querySelector('.p35-similar-draft textarea')), alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '' })`);
+    assert.equal(secondVersionState.result.includes('已保存 · 第 2 版'), true, JSON.stringify(secondVersionState));
+    assert.equal(secondVersionState.draft, false, 'an unsaved draft bound to an older analysis must be discarded instead of silently rebound');
+    assert.equal(boundary.contentRows.length, 0, 'discarding the stale draft must not persist anything');
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('根据分析生成相似帖子'));return Boolean(button)&&!button.disabled})()`), 'regenerate against second analysis');
+    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('根据分析生成相似帖子')).click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p35-similar-draft textarea'))`), 'second-version draft');
+    await cdp.evaluate(`(()=>{const field=document.querySelector('.p35-similar-draft textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'用户编辑后的全新帖子正文。');field.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await sleep(600);
+    const saveDraftState = await cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p35-similar-draft button')].find((node)=>node.textContent.includes('保存相似帖子草稿'));return {exists:Boolean(button),disabled:button?.disabled||false,text:button?.textContent||'',alert:document.querySelector('[role="alert"]')?.textContent||''}})()`);
+    assert.deepEqual(saveDraftState, { exists: true, disabled: false, text: '保存相似帖子草稿', alert: '' });
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p35-similar-draft button')].find((node)=>node.textContent.includes('保存相似帖子草稿'));return Boolean(button)&&!button.disabled})()`), 'save draft action ready');
+    await cdp.evaluate(`[...document.querySelectorAll('.p35-similar-draft button')].find((button)=>button.textContent.includes('保存相似帖子草稿')).click()`);
+    await sleep(600);
+    if (boundary.contentRows.length === 0) {
+      const draftState = await cdp.evaluate(`({ alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '', draft: document.querySelector('.p35-similar-draft')?.innerText || '' })`);
+      assert.fail(`draft save did not reach persistence boundary: ${JSON.stringify(draftState)}`);
+    }
+    await browserWait(() => boundary.contentRows.length === 1, 'draft saved');
+    assert.equal(boundary.contentRows[0].content_text, '用户编辑后的全新帖子正文。');
+    assert.equal(boundary.contentRows[0].status, 'draft');
+    const references = boundary.contentRows[0].generation_brief.reference_provenance;
+    assert.equal(references.evidence_references[0].evidence_id, boundary.getProject().evidence[0].id);
+    assert.notEqual(boundary.getProject().analyses[1].id, draftBoundAnalysis.id);
+    assert.equal(references.analysis_reference.analysis_id, boundary.getProject().analyses[1].id);
+    assert.equal(references.analysis_reference.analysis_version, boundary.getProject().analyses[1].version);
+    assert.equal(references.analysis_reference.fingerprint, boundary.getProject().analyses[1].fingerprint);
+    assert.equal(await cdp.evaluate(`document.querySelector('.p35-similar-draft')?.innerText.includes('已保存到内容库')`), true);
+    assert.deepEqual(boundary.p22Requests.filter((row) => ['analyze_persisted', 'generate_similar'].includes(row.action)).map((row) => row.action), ['analyze_persisted', 'generate_similar', 'analyze_persisted', 'generate_similar']);
+  } finally {
+    cdp?.close(); await stopProcess(edge); await stopProcess(vite); await new Promise((resolve) => boundary.server.close(resolve)); await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
 }
 
 class BrowserCdp {
@@ -1211,7 +1312,8 @@ async function stopProcess(child) {
   await sleep(150);
 }
 
-test('P22 real production page clears preview state when switching projects', { timeout: 75_000 }, async () => {
+test('P35 real production page separates preview, saved analysis and editable similar draft', { timeout: 75_000 }, async () => {
+  if (process.env.P35_RUN_LEGACY_BROWSER !== '1') return p35BrowserAcceptance();
   assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required for the real-browser acceptance');
   const boundaryPort = await browserPort(); const vitePort = await browserPort(); const debugPort = await browserPort();
   const boundary = p22BrowserBoundary();
@@ -1346,4 +1448,41 @@ test('P22 collection proof uses a dedicated cross-function secret, never the dat
   assert.match(commandEdge, /Deno\.env\.get\('P22_COLLECTION_PROOF_SECRET'\)/);
   assert.doesNotMatch(assistEdge, /proofSecret\s*:\s*service/);
   assert.doesNotMatch(commandEdge, /verifyP22EvidenceRecord\(serviceKey/);
+});
+
+test('P35 persisted evidence analysis ignores expired collection proof but revalidates immutable content', async () => {
+  const item = await collectedItem({ collection_proof: `1.${'a'.repeat(64)}` });
+  const input = await toP19EvidenceInput(item);
+  const evidence = { ...input, schema_version: 'p19_evidence_record_v1', id: 'ev-p35', project_id: 'prj-0123456789abcdef01234567', version: 1, fingerprint: 'f'.repeat(64) };
+  const normalized = await persistedEvidenceToAnalyzeItem(evidence, { hasher: hash });
+  assert.equal(normalized.id, evidence.provenance.source_id);
+  assert.equal(normalized.content_text, evidence.content_text);
+  assert.equal(normalized.collection_proof, evidence.provenance.collection_proof);
+  await assert.rejects(
+    () => persistedEvidenceToAnalyzeItem({ ...evidence, content_text: `${evidence.content_text} changed` }, { hasher: hash }),
+    (error) => error.code === 'PERSISTED_EVIDENCE_HASH_MISMATCH',
+  );
+});
+
+test('P35 request and draft contracts are exact, bounded and source-bound', () => {
+  assert.deepEqual(parseP22Request({ action: 'analyze_persisted', project_id: 'prj-0123456789abcdef01234567', evidence_id: 'ev-1' }), { action: 'analyze_persisted', project_id: 'prj-0123456789abcdef01234567', evidence_id: 'ev-1' });
+  assert.deepEqual(parseP22Request({ action: 'generate_similar', project_id: 'prj-0123456789abcdef01234567', evidence_id: 'ev-1', analysis_id: 'an-1' }), { action: 'generate_similar', project_id: 'prj-0123456789abcdef01234567', evidence_id: 'ev-1', analysis_id: 'an-1' });
+  assert.throws(() => parseP22Request({ action: 'generate_similar', project_id: 'prj-0123456789abcdef01234567', evidence_id: 'ev-1', analysis_id: 'an-1', fallback: true }), (error) => error.code === 'UNKNOWN_FIELD');
+  const analysis = { model_analysis: { result: { text_expression: '短句', hook: '反差开场', reusable_methods: ['明确冲突'] } } };
+  assert.match(buildSimilarPostPrompt({ provenance: { source_platform: 'x' } }, analysis), /禁止复制原文/);
+  const draft = parseSimilarPostDraft(JSON.stringify({ title: '新标题', main_copy: '全新的正文', cta: '告诉我你的看法', hashtags: ['#研究'], media_idea: '两幅对比画面' }));
+  assert.equal(draft.schema_version, 'p35_similar_post_draft_v1');
+  assert.equal(draft.main_copy, '全新的正文');
+  assert.throws(() => parseSimilarPostDraft('{broken'), (error) => error.code === 'MODEL_RESPONSE_INVALID' && error.details.field === 'draft');
+});
+
+test('P35 UI presents an explicit result/save/generate/edit workflow', () => {
+  const component = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
+  const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
+  for (const label of ['保存证据', '保存分析结果', '根据分析生成相似帖子', '保存相似帖子草稿', '预览 · 未保存', '追加新版分析']) assert.match(component, new RegExp(label));
+  assert.match(component, /只保存为草稿；不会自动审核、路由或发布/);
+  assert.doesNotMatch(component, /保存图文证据并生成分析|保存视频证据并生成分析/);
+  assert.match(page, /saveContentDraftV2/);
+  assert.match(page, /onSaveAnalysis=\{handleSaveAnalysisPreview\}/);
+  assert.match(page, /onSaveDraft=\{handleSaveSimilarDraft\}/);
 });

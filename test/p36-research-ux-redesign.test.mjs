@@ -57,6 +57,16 @@ function readSource(relativePath) {
   return readFileSync(join(REPO_ROOT, relativePath), 'utf8');
 }
 
+test('P37 analysis trust labels and knowledge-card navigation fail closed', () => {
+  const dest = readSource('src/components/integrated-workspace/P36ResearchDestinations.jsx');
+  assert.ok(dest.includes('基础检测（未理解视频画面/声音）'));
+  assert.ok(dest.includes('不能作为全面的视频分析'));
+  assert.ok(dest.includes('Qwen 多模态分析'));
+  assert.match(dest, /card\.analysis_id === latest\.id[\s\S]*card\.analysis_fingerprint === latest\.fingerprint[\s\S]*card\.analysis_version === latest\.version/);
+  assert.match(dest, /cardForLatest \? onViewCard\(cardForLatest\.id\) : onMakeCard\(latest\.id\)/);
+  assert.match(dest, /setSelectedCardId\(cardId\)[\s\S]*setOutputSection\('cards'\)[\s\S]*setDestination\(P36_DESTINATIONS\.OUTPUTS\)/);
+});
+
 function delay(ms) { return sleep(ms); }
 
 // ---- 确定性源码契约 ------------------------------------------------------------
@@ -741,8 +751,10 @@ test('P36 生产构建浏览器验收：三档视口无溢出无空列 + 完整�
     assert.equal(storedAnalysis.model_analysis.result.media_analysis.length, 1, '逐媒体分析必须持久化');
 
     // 5) 生成知识卡（次级操作）→ 产物 → 知识卡完整详情。
+    const cardWritesBefore = boundary.requests.filter((request) => request.command === 'card.create').length;
     await cdp.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent === '生成知识卡').click()`);
     await waitFor(() => ([...boundary.projects.values()][0].knowledge_cards || []).length === 1, { label: 'knowledge card persisted' });
+    assert.equal(boundary.requests.filter((request) => request.command === 'card.create').length, cardWritesBefore + 1, '生成知识卡必须恰好写入一次');
     await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), { label: 'outputs destination' });
     await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p19-card-item'))`), { label: 'card list rendered' });
@@ -785,6 +797,16 @@ test('P36 生产构建浏览器验收：三档视口无溢出无空列 + 完整�
     for (const needle of ['qwen-mock-v2', evidenceId.slice(0, 8), 'media_ids', '分析指纹', storedAnalysis.fingerprint]) {
       assert.ok(technicalText.includes(needle), `来源与技术信息必须包含 ${needle}`);
     }
+
+    // P37：已有知识卡时，“查看知识卡”只能导航到准确卡，绝不能再次写入或触发空命令。
+    await cdp.evaluate(`document.querySelector('[data-destination-tab="analyze"]').click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), { label: 'return to analyze' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="p36-analysis-quality"]')?.innerText.includes('Qwen 多模态分析')`), true);
+    const requestCountBeforeView = boundary.requests.length;
+    await cdp.evaluate(`document.querySelector('.p36-card-action').click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs' && Boolean(document.querySelector('.p36-card-detail'))`), { label: 'view exact card without write' });
+    assert.equal(boundary.requests.length, requestCountBeforeView, '查看知识卡必须零在线写命令');
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('无法将本次修改绑定到唯一在线命令')`), false);
 
     // 6) 创作：从已保存分析生成相似帖子 → 编辑 → 显式保存草稿。
     await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="create"]')][0].click()`);

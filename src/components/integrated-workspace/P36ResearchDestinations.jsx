@@ -228,6 +228,7 @@ export function P36AnalyzeDestination({
   onDiscardPreview,
   onRunDeterministic,
   onMakeCard,
+  onViewCard,
   onGoCreate,
   onGoCollect,
   workingKey,
@@ -245,7 +246,14 @@ export function P36AnalyzeDestination({
   const previewFresh = Boolean(preview && preview.evidenceVersion === selected.version && preview.evidenceFingerprint === selected.fingerprint);
   const hasModel = Boolean(latest && latest.model_analysis);
   const evidenceFresh = Boolean(latest && latest.evidence_fingerprint === selected.fingerprint && latest.evidence_version === selected.version);
-  const cardForLatest = latest && (project.knowledge_cards || []).find((card) => card.analysis_id === latest.id);
+  const cardsForLatest = latest ? (project.knowledge_cards || []).filter((card) => (
+    card.analysis_id === latest.id
+    && card.analysis_fingerprint === latest.fingerprint
+    && card.analysis_version === latest.version
+  )) : [];
+  const cardForLatest = cardsForLatest.length === 1 ? cardsForLatest[0] : null;
+  const cardBindingAmbiguous = cardsForLatest.length > 1;
+  const sourceHasMedia = Array.isArray(selected?.media_assets) && selected.media_assets.length > 0;
   const allVersions = selected ? getAllAnalysisVersionsForEvidence(project, selected.id) : [];
   const isCollected = Boolean(selected && selected.provenance && selected.provenance.source_id);
 
@@ -293,9 +301,26 @@ export function P36AnalyzeDestination({
         </button>
       );
     }
+    if (cardBindingAmbiguous) {
+      return <button className="p19-btn p19-btn-primary p36-cta-primary" type="button" disabled>知识卡绑定异常</button>;
+    }
+    if (cardForLatest) {
+      return (
+        <button className="p19-btn p19-btn-primary p36-cta-primary" type="button" disabled={busy} onClick={() => onViewCard(cardForLatest.id)} title="打开这份分析精确绑定的知识卡详情；不会再次写入">
+          查看知识卡
+        </button>
+      );
+    }
+    if (isCollected && sourceHasMedia && canUseAi) {
+      return (
+        <button className="p19-btn p19-btn-primary p36-cta-primary" type="button" disabled={busy || Boolean(workingKey)} onClick={() => onStartAnalysis(selected.id)} title="使用 Qwen 多模态模型理解媒体内容；结果预览后由你确认保存">
+          用 Qwen 分析此来源
+        </button>
+      );
+    }
     return (
-      <button className="p19-btn p19-btn-primary p36-cta-primary" type="button" disabled={busy} onClick={() => onMakeCard(latest.id)} title="把这份确定性分析转为知识卡">
-        {cardForLatest ? '查看知识卡' : '生成知识卡'}
+      <button className="p19-btn p19-btn-primary p36-cta-primary" type="button" disabled={busy} onClick={() => onMakeCard(latest.id)} title="把这份确定性基础检测转为知识卡">
+        生成知识卡
       </button>
     );
   })();
@@ -384,6 +409,19 @@ export function P36AnalyzeDestination({
             )}
             {!preview && latest && (
               <>
+                <div className={`p36-analysis-quality ${hasModel ? 'model' : 'basic'}`} data-testid="p36-analysis-quality" role="status">
+                  <strong>{hasModel ? 'Qwen 多模态分析' : '基础检测（未理解视频画面/声音）'}</strong>
+                  <span>
+                    {hasModel
+                      ? `已保存模型结果；覆盖文本与 ${latest.model_analysis?.result?.media_analysis?.length || 0} 项逐媒体分析，并保留模型、来源和执行身份。`
+                      : '仅检查来源 URL、文字表面特征和媒体元数据；不包含镜头、人物动作、字幕、声音、叙事或情绪理解，不能作为全面的视频分析。'}
+                  </span>
+                  {!hasModel && isCollected && sourceHasMedia && canUseAi && (
+                    <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || Boolean(workingKey)} onClick={() => onStartAnalysis(selected.id)}>
+                      用 Qwen 分析视频/图片
+                    </button>
+                  )}
+                </div>
                 {hasModel ? (
                   <P36AnalysisResultView analysis={latest} evidence={selected} />
                 ) : (
@@ -429,9 +467,14 @@ export function P36AnalyzeDestination({
           <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || Boolean(workingKey)} onClick={() => onRunDeterministic(selected.id)} title="运行确定性本地分析（deterministic_local，不调用模型）">
             运行确定性分析
           </button>
-          {!preview && latest && !cardForLatest && (
-            <button className="p19-btn p19-btn-ghost" type="button" disabled={busy} onClick={() => onMakeCard(latest.id)}>
-              生成知识卡
+          {!preview && latest && !cardBindingAmbiguous && (
+            <button
+              className="p19-btn p19-btn-ghost p36-card-action"
+              type="button"
+              disabled={busy}
+              onClick={() => (cardForLatest ? onViewCard(cardForLatest.id) : onMakeCard(latest.id))}
+            >
+              {cardForLatest ? '查看知识卡' : '生成知识卡'}
             </button>
           )}
           <details className="p36-version-menu">
@@ -1072,6 +1115,17 @@ export function P36Destinations({
     setDestination(P36_DESTINATIONS.CREATE);
   }, []);
 
+  const viewKnowledgeCard = useCallback((cardId) => {
+    const matches = (project.knowledge_cards || []).filter((card) => card.id === cardId);
+    if (matches.length !== 1) {
+      setAnalyzeError('知识卡身份缺失或不唯一，已拒绝打开。');
+      return;
+    }
+    setSelectedCardId(cardId);
+    setOutputSection('cards');
+    setDestination(P36_DESTINATIONS.OUTPUTS);
+  }, [project.knowledge_cards]);
+
   // ---- 创作动作 ----
   const generateDraft = useCallback(async (analysis) => {
     const evidence = (project.evidence || []).find((item) => item.id === analysis.evidence_id);
@@ -1226,6 +1280,7 @@ export function P36Destinations({
           onDiscardPreview={discardPreview}
           onRunDeterministic={onRunDeterministic}
           onMakeCard={onMakeCard}
+          onViewCard={viewKnowledgeCard}
           onGoCreate={goToCreate}
           onGoCollect={() => setDestination(P36_DESTINATIONS.COLLECT)}
           workingKey={workingKey}

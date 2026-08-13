@@ -1015,14 +1015,49 @@ export function P36Destinations({
   const [selectedCardId, setSelectedCardId] = useState(null);
 
   const [workingKey, setWorkingKey] = useState('');
-  const [canUseAi, setCanUseAi] = useState(false);
+  const [aiCapability, setAiCapability] = useState({ state: 'checking', role: null, qwenConfigured: false });
+  const canUseAi = aiCapability.state === 'ready';
 
   useEffect(() => {
     let mounted = true;
-    assistClient.status().then((next) => {
-      if (mounted && next?.role && ['operator', 'admin'].includes(next.role)) setCanUseAi(true);
-    }).catch(() => { /* 能力探测失败只影响模型类按钮可用性，页面其余功能不受影响 */ });
-    return () => { mounted = false; };
+    let retryTimer = null;
+    let inFlight = false;
+
+    const probe = async (attempt = 0) => {
+      if (!mounted || inFlight) return;
+      inFlight = true;
+      // 后台复核不得撤销已经确认的能力；否则用户仅切回标签页就会看到可用按钮重新变灰。
+      setAiCapability((previous) => (previous.state === 'ready' ? previous : { ...previous, state: 'checking' }));
+      try {
+        const next = await assistClient.status();
+        if (!mounted) return;
+        const role = typeof next?.role === 'string' ? next.role : null;
+        const qwenConfigured = next?.capabilities?.qwen_configured === true;
+        setAiCapability({
+          state: ['operator', 'admin'].includes(role) && qwenConfigured ? 'ready' : 'unavailable',
+          role,
+          qwenConfigured,
+        });
+      } catch {
+        if (!mounted) return;
+        if (attempt < 2) {
+          retryTimer = window.setTimeout(() => probe(attempt + 1), 800 * (attempt + 1));
+        } else {
+          setAiCapability({ state: 'error', role: null, qwenConfigured: false });
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const probeOnFocus = () => probe(0);
+    probe(0);
+    window.addEventListener('focus', probeOnFocus);
+    return () => {
+      mounted = false;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      window.removeEventListener('focus', probeOnFocus);
+    };
   }, [assistClient]);
 
   // 已保存来源也作为来源卡显示（与采集结果同列表并标注已保存），刷新后仍可见：

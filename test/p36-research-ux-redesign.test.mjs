@@ -396,6 +396,7 @@ function makeDraftFor(evidence, analysis) {
 function p36Boundary() {
   const projects = new Map();
   const requests = [];
+  let statusFailuresRemaining = 2;
   let _mediaBase = '';
   const server = createServer(async (request, response) => {
     requests.push({ method: request.method, url: request.url, requestedHeaders: request.headers['access-control-request-headers'] || null });
@@ -426,6 +427,13 @@ function p36Boundary() {
         execution_flags: { generation_executed: false, routing_executed: false, external_job_created: false, publish_executed: false },
       };
       if (body.action === 'status') {
+        if (statusFailuresRemaining > 0) {
+          statusFailuresRemaining -= 1;
+          return json(response, 503, {
+            ok: false, schema_version: 'p22_research_assist_v1',
+            code: 'P22_UPSTREAM_UNAVAILABLE', message: 'transient capability probe failure',
+          }, origin);
+        }
         return json(response, 200, {
           ...base, capabilities: { apify_configured: true, qwen_configured: true },
           cost_tracking: { daily_cap_enabled: false, apify: { recorded_cny: 0.01 }, qwen: { recorded_cny: 0.01 } },
@@ -719,7 +727,7 @@ test('P36 生产构建浏览器验收：三档视口无溢出无空列 + 完整�
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'https://x.com/p36author/status/19000000000000001');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
-    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('读取这条帖子'))`), { label: 'URL mode button' });
+    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('读取这条帖子') && !b.disabled)`), { label: 'URL mode button after capability retry' });
     await cdp.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('读取这条帖子')).click()`);
     await waitFor(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length === 1`), { label: 'source preview' });
     await waitFor(() => cdp.evaluate(`(() => { const img = document.querySelector('.p22-source-card .p22-media-gallery img'); return Boolean(img && img.complete && img.naturalWidth > 0); })()`), { label: 'media bytes rendered' });
@@ -986,6 +994,7 @@ test('P36 生产构建浏览器验收：三档视口无溢出无空列 + 完整�
       generation_executed: false, routing_executed: false, network_executed: false, publish_executed: false,
     });
     const p22Actions = boundary.requests.filter((item) => item.fn === 'p22').map((item) => item.action);
+    assert.ok(p22Actions.filter((action) => action === 'status').length >= 3, '登录恢复期间的临时 status 失败必须自动重试，而不是永久禁用 Qwen');
     assert.ok(p22Actions.includes('collect_url'), '必须发生一次单帖读取');
     assert.ok(p22Actions.includes('analyze_persisted'), '必须发生一次分析');
     assert.ok(p22Actions.includes('generate_similar'), '必须发生一次相似帖生成');

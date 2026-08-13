@@ -96,8 +96,35 @@ export function P22CollectPanel({
 
   useEffect(() => {
     let mounted = true;
-    client.status().then((next) => { if (mounted) setStatus(next); }).catch((cause) => { if (mounted) setCapabilityError(String(cause?.message || cause)); });
-    return () => { mounted = false; };
+    let retryTimer = null;
+    let inFlight = false;
+    const probe = async (attempt = 0) => {
+      if (!mounted || inFlight) return;
+      inFlight = true;
+      try {
+        const next = await client.status();
+        if (!mounted) return;
+        setStatus(next);
+        setCapabilityError('');
+      } catch (cause) {
+        if (!mounted) return;
+        if (attempt < 2) {
+          retryTimer = window.setTimeout(() => probe(attempt + 1), 800 * (attempt + 1));
+        } else {
+          setCapabilityError(String(cause?.message || cause));
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const probeOnFocus = () => probe(0);
+    probe(0);
+    window.addEventListener('focus', probeOnFocus);
+    return () => {
+      mounted = false;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      window.removeEventListener('focus', probeOnFocus);
+    };
   }, [client]);
 
   const isUrlQuery = looksLikePublicUrl(topic);

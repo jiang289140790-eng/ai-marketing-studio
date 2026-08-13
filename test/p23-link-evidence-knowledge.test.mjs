@@ -146,6 +146,7 @@ test('P23 confirmed source becomes exact Evidence, deterministic Analysis and Kn
 test('P23/P24 production page performs confirmed Evidence → Analysis → Knowledge → Brief chain', () => {
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
   const panel = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
+  const pageCss = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.css'), 'utf8');
   assert.match(page, /addEvidence\(project, input\)/);
   assert.match(page, /runAnalysis\(persistedEvidence, evidence\.id\)/);
   assert.match(page, /buildKnowledgeCard\(persistedAnalysis, analysis\.id\)/);
@@ -153,5 +154,15 @@ test('P23/P24 production page performs confirmed Evidence → Analysis → Knowl
   assert.match(page, /Knowledge Card → 内容策划草案/);
   assert.match(page, /recordAssistedAnalysis\(persistedEvidence, evidence\.id/);
   assert.match(panel, /collectUrl\(topic\.trim\(\)\)/);
-  assert.match(panel, /保存图文证据并生成分析/);
+  assert.match(panel, /`保存\$\{sourceKind\}证据并生成分析`/);
+  assert.match(panel, /data-testid="p22-next-action"/);
+  assert.match(panel, /getLatestAnalysisForEvidence\(project, existingEvidence\.id\)/);
+  assert.match(panel, /row\.analysis_version === existingAnalysis\.version/);
+  assert.match(panel, /workflow\?\.brief_stale === false/);
+  assert.match(panel, /下一步：\{nextAction\}/);
+  assert.match(panel, /分析\$\{sourceKind\}并生成草案/);
+  assert.match(page, /setSelectedStep\('review'\)/);
+  assert.match(page, /briefPanel\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(page, /'p21-full-grid'/);
+  assert.match(pageCss, /p21-full-grid > #p21-step-project[\s\S]*p21-full-grid > #p21-step-evidence[\s\S]*grid-column: 1 \/ -1/);
 });

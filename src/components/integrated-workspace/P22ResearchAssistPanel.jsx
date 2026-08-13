@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createP22ResearchAssistClient, findP22Evidence, looksLikePublicUrl, p22ItemFromEvidence } from '../../services/p22-research-assist.js';
+import { getLatestAnalysisForEvidence } from '../../services/p19-workspace-service.js';
 
 /** 有界时间显示：ISO-8601 → UTC 紧凑文本；失败显示「时间未知」。 */
 function formatPublishedAt(value) {
@@ -26,7 +27,7 @@ function MediaNode({ asset }) {
   return <img src={asset.media_url} alt={`媒体 ${asset.order + 1}`} loading="lazy" {...common} />;
 }
 
-export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
+export function P22ResearchAssistPanel({ project, workflow, busy, onSaveEvidence }) {
   const client = useMemo(() => createP22ResearchAssistClient(), []);
   const [status, setStatus] = useState(null);
   const [topic, setTopic] = useState(project.topic || '');
@@ -99,16 +100,28 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
           <div className="p22-result-toolbar"><b>来源预览（未保存）</b><span className="p22-preview-note">保存后生成多模态分析并进入内容策划草案</span></div>
           {items.map((item) => {
             const existingEvidence = findP22Evidence(project, item);
-            const existingAnalysis = existingEvidence && (project.analyses || []).find((row) => row.evidence_id === existingEvidence.id
-              && row.evidence_fingerprint === existingEvidence.fingerprint && row.evidence_version === existingEvidence.version);
+            const existingAnalysis = existingEvidence && getLatestAnalysisForEvidence(project, existingEvidence.id);
             const existingCard = existingAnalysis && (project.knowledge_cards || []).find((row) => row.analysis_id === existingAnalysis.id
-              && row.analysis_fingerprint === existingAnalysis.fingerprint);
-            const pipelineComplete = Boolean(existingCard && project.brief?.knowledge_citation_ids?.includes(existingCard.id));
+              && row.analysis_fingerprint === existingAnalysis.fingerprint
+              && row.analysis_version === existingAnalysis.version);
+            const pipelineComplete = Boolean(
+              existingCard
+              && project.brief
+              && project.brief.status !== 'returned'
+              && workflow?.brief_stale === false
+              && project.brief.knowledge_citation_ids?.includes(existingCard.id),
+            );
             const metadata = item.source_metadata || {};
             const author = metadata.author || {};
             const engagement = engagementLine(metadata.engagement);
             const media = item.media_assets || [];
+            const sourceKind = media.some((asset) => asset.kind === 'video' || String(asset.mime_type || '').startsWith('video/'))
+              ? '视频'
+              : '图文';
             const modelAnalysis = existingAnalysis && existingAnalysis.model_analysis;
+            const nextAction = !existingAnalysis
+              ? `分析${sourceKind}并生成草案`
+              : !existingCard ? '生成知识卡与草案' : '更新内容策划草案';
             return <article className="p22-source-card" key={item.id}>
               <div className="p22-source-head">
                 <span className="p22-source-author">
@@ -156,8 +169,14 @@ export function P22ResearchAssistPanel({ project, busy, onSaveEvidence }) {
                   <small>信号：{(existingAnalysis.result.rules || []).map((rule) => rule.label).slice(0, 3).join('；')}</small>
                 </div>
               )}
+              {existingEvidence && !pipelineComplete && (
+                <div className="p22-next-action" role="status" data-testid="p22-next-action">
+                  <b>证据已保存</b>
+                  <span>下一步：{nextAction}。完成后会自动定位到下方待审核草案。</span>
+                </div>
+              )}
               <button className="p19-btn p19-btn-primary" type="button" disabled={busy || working || pipelineComplete} onClick={() => save(item)} title={pipelineComplete ? '草案已生成，可在下方审核' : '一次点击：保存证据 → 多模态分析 → 知识卡 → 内容策划草案'}>
-                {pipelineComplete ? '已生成内容策划草案' : existingEvidence ? '继续生成分析并完成草案' : '保存图文证据并生成分析'}
+                {pipelineComplete ? '已生成内容策划草案' : existingEvidence ? `下一步：${nextAction}` : `保存${sourceKind}证据并生成分析`}
               </button>
               {pipelineComplete && <small className="p22-preview-note">已保存为完整性绑定的多模态证据；草案待你确认（批准仅进入交接包，不生成、不路由、不发布）。</small>}
             </article>;

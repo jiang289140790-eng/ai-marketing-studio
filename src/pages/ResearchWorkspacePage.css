@@ -419,6 +419,14 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 完整视图按工作流分段，而不是把短项目表单与超长证据区绑在同一网格行。 */
+.p19-grid.p21-full-grid > #p21-step-project,
+.p19-grid.p21-full-grid > #p21-step-evidence,
+.p19-grid.p21-full-grid > #p21-step-compare,
+.p19-grid.p21-full-grid > #p21-step-brief {
+  grid-column: 1 / -1;
+}
+
 .p21-step-panel {
   min-width: 0;
   scroll-margin-top: 18px;
@@ -816,6 +824,8 @@
 .p22-message { color:#a7f3d0; font-size:12px; }
 .p22-results { display:grid; gap:10px; margin-top:14px; }
 .p22-source-card { display:grid; gap:8px; padding:12px; border:1px solid rgba(148,163,184,.2); border-radius:11px; background:rgba(2,6,23,.54); }
+.p22-next-action { display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap; padding:10px 12px; border:1px solid rgba(139,92,246,.55); border-radius:9px; background:rgba(109,40,217,.14); color:#ddd6fe; }
+.p22-next-action b { color:#f5f3ff; }
 .p22-source-card a { color:#67e8f9; font-size:12px; }.p22-source-card p { margin:0; line-height:1.55; }.p22-source-card small { color:#94a3b8; overflow-wrap:anywhere; }
 .p22-select { display:flex; gap:7px; align-items:center; color:#cbd5e1; font-size:12px; }
 .p22-analysis-preview { padding:10px; border-left:3px solid #8b5cf6; background:rgba(76,29,149,.16); }

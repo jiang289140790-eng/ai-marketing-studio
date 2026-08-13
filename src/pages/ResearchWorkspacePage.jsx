@@ -556,6 +556,14 @@ export function ResearchWorkspacePage() {
       setNotice(evidence.media_assets && evidence.media_assets.length > 0
         ? '来源已保存为完整性绑定的多模态证据，并完成 Evidence → 多模态分析 → Knowledge Card → 内容策划草案（待你确认）。'
         : '来源已保存，并完成 Evidence → 确定性分析 → Knowledge Card → 内容策划草案（待你确认）。');
+      setSelectedStep('review');
+      globalThis.setTimeout(() => {
+        const briefPanel = globalThis.document?.getElementById('p21-step-brief');
+        if (!briefPanel) return;
+        briefPanel.setAttribute('tabindex', '-1');
+        briefPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        briefPanel.focus({ preventScroll: true });
+      }, 160);
       return true;
     } catch (cause) {
       if (onlineMode && project?.id) {
@@ -1294,12 +1302,12 @@ export function ResearchWorkspacePage() {
         // 项目的表单值（A 项目的值绝不会覆盖 B 项目）。
         <div className="p19-project-scope" key={`${project.id}:${project.version}`}>
           <P19ChainProgress workflow={workflow} onNavigateStep={handleNavigateStep} />
-          <div className={`p19-grid ${viewMode === P21_VIEW_MODES.GUIDED ? 'p21-guided-grid' : ''}`}>
+          <div className={`p19-grid ${viewMode === P21_VIEW_MODES.GUIDED ? 'p21-guided-grid' : 'p21-full-grid'}`}>
             <section className="p21-step-panel" id="p21-step-project" data-p21-step="project" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'project'}>
               <P19ProjectForm key={`${project.id}:${project.version}`} project={project} onSave={handleSaveProfile} busy={busy} />
             </section>
             <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
-              {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}
+              {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} workflow={workflow} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} />}
               {onlineMode && (
                 <P32HotTopicSearchPanel
                   key={project.id}

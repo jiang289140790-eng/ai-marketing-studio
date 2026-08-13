@@ -425,7 +425,7 @@ test('P22 production UI contains capability gates, explicit preview and save wor
   assert.match(component, /Apify：.*尚未配置/s);
   assert.match(component, /Qwen 多模态：.*尚未配置/s);
   assert.match(component, /来源预览（未保存）/);
-  assert.match(component, /保存图文证据并生成分析/);
+  assert.match(component, /`保存\$\{sourceKind\}证据并生成分析`/);
   assert.match(component, /多模态分析（已绑定保存）/);
   assert.doesNotMatch(component, /仅预览/);
   assert.match(component, /按实际使用记录费用/);
@@ -1175,7 +1175,7 @@ function p22BrowserBoundary() {
     }
     return browserJson(response, 404, { code: 'NOT_FOUND' }, origin);
   });
-  return { server, p22Requests, getProject: () => project };
+  return { server, p22Requests, getProject: () => project, setProject: (next) => { project = clonePlain(next); } };
 }
 
 class BrowserCdp {
@@ -1269,12 +1269,49 @@ test('P22 real production page clears preview state when switching projects', { 
     assert.equal(retryState.disabled, false, `partial-success retry stayed disabled: ${JSON.stringify(retryState)}`);
     await cdp.evaluate(`document.querySelector('.p22-source-card button').click()`);
     await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Evidence → 确定性分析 → Knowledge Card → 内容策划草案')`), 'reviewable brief chain completion');
+    await browserWait(() => cdp.evaluate(`document.activeElement?.id === 'p21-step-brief'`), 'brief focused after pipeline completion');
     assert.equal(boundary.getProject().evidence.length, 1);
     assert.equal(boundary.getProject().analyses.length, 1);
     assert.equal(boundary.getProject().knowledge_cards.length, 1);
     assert.equal(boundary.getProject().brief.status, 'pending_review');
     assert.equal(boundary.getProject().analyses[0].evidence_id, boundary.getProject().evidence[0].id);
     assert.equal(boundary.getProject().knowledge_cards[0].analysis_id, boundary.getProject().analyses[0].id);
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('完整视图')).click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p19-grid')?.classList.contains('p21-full-grid')`), 'compact full view');
+    const fullLayout = await cdp.evaluate(`(() => {
+      const grid = document.querySelector('.p19-grid');
+      const project = document.getElementById('p21-step-project');
+      const evidence = document.getElementById('p21-step-evidence');
+      const projectRect = project.getBoundingClientRect();
+      const evidenceRect = evidence.getBoundingClientRect();
+      const gridRect = grid.getBoundingClientRect();
+      return { projectWidth: projectRect.width, evidenceWidth: evidenceRect.width, gridWidth: gridRect.width, projectBottom: projectRect.bottom, evidenceTop: evidenceRect.top };
+    })()`);
+    assert.ok(fullLayout.projectWidth >= fullLayout.gridWidth - 2, `project panel must span full workflow width: ${JSON.stringify(fullLayout)}`);
+    assert.ok(fullLayout.evidenceWidth >= fullLayout.gridWidth - 2, `evidence panel must span full workflow width: ${JSON.stringify(fullLayout)}`);
+    assert.ok(fullLayout.evidenceTop >= fullLayout.projectBottom, `evidence must follow project instead of sharing its tall grid row: ${JSON.stringify(fullLayout)}`);
+
+    const completedSnapshot = clonePlain(boundary.getProject());
+    const previousAnalysis = completedSnapshot.analyses[0];
+    boundary.setProject({
+      ...completedSnapshot,
+      analyses: [...completedSnapshot.analyses, {
+        ...previousAnalysis,
+        id: `an-${'5'.repeat(24)}`,
+        version: previousAnalysis.version + 1,
+        fingerprint: '1'.repeat(64),
+        created_at: '2026-08-12T01:00:00.000Z',
+        updated_at: '2026-08-12T01:00:00.000Z',
+      }],
+      version: completedSnapshot.version + 1,
+      fingerprint: '2'.repeat(64),
+    });
+    await cdp.send('Page.reload', { ignoreCache: true });
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p22-source-card button')?.textContent.includes('下一步：')`), 'newer analysis remains pending');
+    assert.equal(await cdp.evaluate(`document.querySelector('.p22-source-card button')?.textContent.includes('已生成内容策划草案')`), false, 'old Brief must not complete a newer analysis');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="p22-next-action"]')?.textContent.includes('生成知识卡与草案')`), true, 'newer analysis must request its exact card and Brief chain');
+    boundary.setProject(completedSnapshot);
+    await cdp.send('Page.reload', { ignoreCache: true });
     await browserWait(() => cdp.evaluate(`Boolean([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准草案')))`), 'brief review controls');
     await cdp.evaluate(`(() => { const field=document.querySelector('.p19-brief-actions textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(field,'来源和知识绑定已人工核对'); field.dispatchEvent(new Event('input',{bubbles:true})); })()`);
     await browserWait(() => cdp.evaluate(`!([...document.querySelectorAll('button')].find((button) => button.textContent.includes('批准草案'))?.disabled)`), 'review rationale gate');

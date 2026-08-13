@@ -535,6 +535,44 @@ function normalizeMediaKind(value) {
 function collectMediaCandidates(raw) {
   const candidates = [];
   const seen = new Set();
+  const flatVideoUrls = [raw.videoUrls, raw.video_urls]
+    .flatMap((entry) => (Array.isArray(entry) ? entry : []));
+  const flatGifUrls = [raw.gifUrls, raw.gif_urls]
+    .flatMap((entry) => (Array.isArray(entry) ? entry : []));
+  let videoCursor = 0;
+  let gifCursor = 0;
+  const playableVideoVariant = (value) => {
+    if (!object(value)) return null;
+    const containers = [
+      value.variants,
+      value.videoVariants,
+      value.video_variants,
+      object(value.videoInfo) ? value.videoInfo.variants : null,
+      object(value.video_info) ? value.video_info.variants : null,
+    ];
+    const variants = containers.flatMap((entry) => (Array.isArray(entry) ? entry : []));
+    const normalized = variants.map((variant) => {
+      if (typeof variant === 'string') return { url: variant.trim(), mimeType: null, bitrate: 0 };
+      if (!object(variant)) return null;
+      const url = first(variant.url, variant.mediaUrl, variant.media_url, variant.src);
+      const mimeType = first(variant.contentType, variant.content_type, variant.mimeType, variant.mime_type);
+      const bitrateValue = Number(first(variant.bitrate, variant.bit_rate, 0));
+      return {
+        url: typeof url === 'string' ? url.trim() : '',
+        mimeType: typeof mimeType === 'string' ? mimeType.trim() : null,
+        bitrate: Number.isFinite(bitrateValue) && bitrateValue >= 0 ? bitrateValue : 0,
+      };
+    }).filter((variant) => (
+      variant
+      && /^https?:\/\//i.test(variant.url)
+      && (
+        /^video\//i.test(variant.mimeType || '')
+        || /\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i.test(variant.url)
+      )
+    ));
+    normalized.sort((left, right) => right.bitrate - left.bitrate);
+    return normalized[0] || null;
+  };
   const push = (value, hintKind) => {
     if (value === undefined || value === null) return;
     let url = null;
@@ -545,12 +583,39 @@ function collectMediaCandidates(raw) {
     if (typeof value === 'string') {
       url = value.trim();
     } else if (object(value)) {
+      const mediaTypeValue = value.mediaType;
+      const contentTypeValue = value.contentType;
+      const mediaTypeIsMime = typeof mediaTypeValue === 'string' && mediaTypeValue.includes('/');
+      const contentTypeIsMime = typeof contentTypeValue === 'string' && contentTypeValue.includes('/');
+      if (!kind) kind = first(
+        value.type,
+        value.kind,
+        mediaTypeIsMime ? null : mediaTypeValue,
+        contentTypeIsMime ? null : contentTypeValue,
+      );
+      const normalizedKind = kind ? normalizeMediaKind(kind) : null;
+      const nestedVideoVariant = normalizedKind === 'video' || normalizedKind === 'gif'
+        ? playableVideoVariant(value)
+        : null;
+      const topLevelVideoVariant = normalizedKind === 'video' && videoCursor === 0
+        ? playableVideoVariant(raw)
+        : null;
+      const videoVariant = nestedVideoVariant || topLevelVideoVariant;
+      const flatPlaybackUrl = normalizedKind === 'video'
+        ? flatVideoUrls[videoCursor++]
+        : (normalizedKind === 'gif' ? flatGifUrls[gifCursor++] : null);
       // Rich xquik rows carry both a generic post/link URL (`url`, commonly
       // t.co) and the actual CDN binary URL (`mediaUrl`).  Only the latter is
       // suitable for content hashing and multimodal input.  Keep generic URL
       // as a last-resort compatibility field for providers that expose no
       // media-specific URL at all.
       url = first(
+        videoVariant && videoVariant.url,
+        normalizedKind === 'video' || normalizedKind === 'gif' ? value.videoUrl : null,
+        normalizedKind === 'video' || normalizedKind === 'gif' ? value.video_url : null,
+        normalizedKind === 'video' || normalizedKind === 'gif' ? value.playbackUrl : null,
+        normalizedKind === 'video' || normalizedKind === 'gif' ? value.playback_url : null,
+        flatPlaybackUrl,
         value.mediaUrl,
         value.media_url,
         value.contentUrl,
@@ -564,19 +629,10 @@ function collectMediaCandidates(raw) {
         value.thumbnail,
         value.url,
       );
-      const mediaTypeValue = value.mediaType;
-      const contentTypeValue = value.contentType;
-      const mediaTypeIsMime = typeof mediaTypeValue === 'string' && mediaTypeValue.includes('/');
-      const contentTypeIsMime = typeof contentTypeValue === 'string' && contentTypeValue.includes('/');
-      if (!kind) kind = first(
-        value.type,
-        value.kind,
-        mediaTypeIsMime ? null : mediaTypeValue,
-        contentTypeIsMime ? null : contentTypeValue,
-      );
       // Actor-provided MIME / dimensions: strict validation. When present but
       // malformed or out-of-bounds, fail closed instead of silently dropping.
       mimeType = validateMediaMimeType(first(
+        videoVariant && videoVariant.mimeType,
         value.mimeType,
         value.mime_type,
         contentTypeIsMime ? contentTypeValue : null,
@@ -614,7 +670,12 @@ function collectMediaCandidates(raw) {
     const media = Array.isArray(raw.media) ? raw.media : [raw.media];
     for (const entry of media) push(entry, null);
   }
-  for (const [key, hint] of [['mediaUrls', null], ['imageUrls', 'image'], ['videoUrls', 'video'], ['gifUrls', 'gif']]) {
+  for (const [key, hint] of [
+    ['mediaUrls', null], ['media_urls', null],
+    ['imageUrls', 'image'], ['image_urls', 'image'],
+    ['videoUrls', 'video'], ['video_urls', 'video'],
+    ['gifUrls', 'gif'], ['gif_urls', 'gif'],
+  ]) {
     const value = raw[key];
     if (value === undefined) continue;
     if (Array.isArray(value)) {

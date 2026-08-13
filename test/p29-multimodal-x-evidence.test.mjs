@@ -191,6 +191,113 @@ test('P29 maps official X Actor media type aliases without weakening unknown-typ
   ));
 });
 
+test('P33 selects the highest-bitrate playable X video variant instead of its JPEG poster', async () => {
+  const VIDEO_LOW = 'https://video.twimg.com/ext_tw_video/123/pu/vid/avc1/360x640/low.mp4';
+  const harness = mediaHarness({
+    [VIDEO_1]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 24, 1]) },
+    [VIDEO_LOW]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 24, 2]) },
+  });
+  const [item] = await normalizeCollectedItems([{
+    id: '2087399629650000000',
+    url: 'https://x.com/example/status/2087399629650000000',
+    text: 'video with actor poster and playback variants',
+    media: [{
+      type: 'video',
+      mediaUrl: IMAGE_1,
+      width: 720,
+      height: 1280,
+      videoInfo: {
+        variants: [
+          { url: 'https://video.twimg.com/ext_tw_video/123/pu/pl/playlist.m3u8', contentType: 'application/x-mpegURL' },
+          { url: VIDEO_LOW, contentType: 'video/mp4', bitrate: 256000 },
+          { url: VIDEO_1, contentType: 'video/mp4', bitrate: 2176000 },
+        ],
+      },
+    }],
+  }], CONTEXT, hash, { fetchImpl: harness.fetchImpl });
+
+  assert.equal(item.media_assets.length, 1);
+  assert.equal(item.media_assets[0].kind, 'video');
+  assert.equal(item.media_assets[0].media_url, VIDEO_1);
+  assert.equal(item.media_assets[0].mime_type, 'video/mp4');
+  assert.deepEqual(item.media_assets[0].dimensions, { width: 720, height: 1280 });
+  assert.equal(item.media_assets[0].hash.kind, 'content');
+  assert.deepEqual(harness.calls.map((call) => call.url), [VIDEO_1]);
+  assert.equal(buildMultimodalQwenContent([item])[1].video_url.url, VIDEO_1);
+});
+
+test('P33 supports direct Actor videoUrl while preserving fail-closed poster-only behavior', async () => {
+  const harness = mediaHarness({
+    [VIDEO_1]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 24, 3]) },
+  });
+  const [item] = await normalizeCollectedItems([{
+    id: 'direct-video-url',
+    url: 'https://x.com/example/status/2087399629650000001',
+    text: 'direct actor video URL',
+    media: [{ type: 'native_video', mediaUrl: IMAGE_1, videoUrl: VIDEO_1, width: 1920, height: 1080 }],
+  }], CONTEXT, hash, { fetchImpl: harness.fetchImpl });
+  assert.equal(item.media_assets[0].media_url, VIDEO_1);
+  assert.equal(item.media_assets[0].kind, 'video');
+  assert.deepEqual(item.media_assets[0].dimensions, { width: 1920, height: 1080 });
+
+  await assert.rejects(() => normalizeCollectedItems([{
+    id: 'poster-only-video',
+    url: 'https://x.com/example/status/2087399629650000002',
+    text: 'poster only must not masquerade as video',
+    media: [{ type: 'video', mediaUrl: IMAGE_1 }],
+  }], CONTEXT, hash, { fetchImpl: mediaHarness().fetchImpl }), (error) => (
+    error.code === 'MEDIA_KIND_MIME_MISMATCH' && error.details?.field === 'media_url'
+  ));
+});
+
+test('P33 binds official flat videoUrls to nested video poster rows and supports snake_case output', async () => {
+  for (const videoField of ['videoUrls', 'video_urls']) {
+    const harness = mediaHarness({
+      [VIDEO_1]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 24, 4]) },
+    });
+    const [item] = await normalizeCollectedItems([{
+      id: `flat-${videoField}`,
+      url: 'https://x.com/example/status/2087399629650000003',
+      text: `flat ${videoField} actor output`,
+      media: [{ type: 'video', url: IMAGE_1, width: 1280, height: 720 }],
+      [videoField]: [VIDEO_1],
+    }], CONTEXT, hash, { fetchImpl: harness.fetchImpl });
+    assert.equal(item.media_assets.length, 1, videoField);
+    assert.equal(item.media_assets[0].media_url, VIDEO_1, videoField);
+    assert.equal(item.media_assets[0].kind, 'video', videoField);
+    assert.deepEqual(item.media_assets[0].dimensions, { width: 1280, height: 720 }, videoField);
+    assert.deepEqual(harness.calls.map((call) => call.url), [VIDEO_1], videoField);
+  }
+});
+
+test('P33 binds top-level Actor videoInfo and video_info variants before nested JPEG posters', async () => {
+  for (const videoInfoField of ['videoInfo', 'video_info']) {
+    const mimeField = videoInfoField === 'videoInfo' ? 'contentType' : 'content_type';
+    const harness = mediaHarness({
+      [VIDEO_1]: { contentType: 'video/mp4', bytes: new Uint8Array([0, 0, 0, 24, 5]) },
+    });
+    const [item] = await normalizeCollectedItems([{
+      id: `top-level-${videoInfoField}`,
+      url: 'https://x.com/example/status/2087399629650000004',
+      text: `top-level ${videoInfoField} actor output`,
+      media: [{ type: 'video', mediaUrl: IMAGE_1, width: 1080, height: 1920 }],
+      [videoInfoField]: {
+        variants: [
+          { url: 'https://video.twimg.com/ext_tw_video/123/pu/pl/playlist.m3u8', [mimeField]: 'application/x-mpegURL' },
+          { url: VIDEO_1, [mimeField]: 'video/mp4', bitrate: 832000 },
+        ],
+      },
+    }], CONTEXT, hash, { fetchImpl: harness.fetchImpl });
+    assert.equal(item.media_assets.length, 1, videoInfoField);
+    assert.equal(item.media_assets[0].media_url, VIDEO_1, videoInfoField);
+    assert.equal(item.media_assets[0].kind, 'video', videoInfoField);
+    assert.equal(item.media_assets[0].mime_type, 'video/mp4', videoInfoField);
+    assert.deepEqual(item.media_assets[0].dimensions, { width: 1080, height: 1920 }, videoInfoField);
+    assert.deepEqual(harness.calls.map((call) => call.url), [VIDEO_1], videoInfoField);
+    assert.equal(buildMultimodalQwenContent([item])[1].video_url.url, VIDEO_1, videoInfoField);
+  }
+});
+
 test('P29 uses the real Actor mediaUrl instead of the accompanying t.co post link', async () => {
   const harness = mediaHarness({
     [IMAGE_1]: { contentType: 'image/jpeg', bytes: routeBytesFor(0) },

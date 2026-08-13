@@ -1,44 +1,18 @@
-/* global WebSocket, fetch */
+/* global fetch */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { setTimeout as sleep } from 'node:timers/promises';
+import {
+  EDGE, freePort, waitFor, waitForPageTarget, CdpClient, createPageTracker,
+  navigateAndWait, reloadAndWait, waitForSelector, click, captureDiagnostics,
+  makeTempProfile, removeTempProfile, shutdownEdge, killProcessTree,
+} from './helpers/cdp-browser-harness.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-
-function delay(ms) {
-  return sleep(ms);
-}
-
-async function freePort() {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
-async function waitFor(check, { timeout = 20_000, interval = 100, label = 'condition' } = {}) {
-  const deadline = Date.now() + timeout;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const value = await check();
-      if (value) return value;
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(interval);
-  }
-  throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ''}`);
-}
 
 function json(response, status, body, origin = '') {
   response.writeHead(status, {
@@ -146,54 +120,6 @@ function createBoundary() {
   };
 }
 
-class CdpClient {
-  constructor(url) {
-    this.socket = new WebSocket(url);
-    this.nextId = 1;
-    this.pending = new Map();
-  }
-
-  async open() {
-    await new Promise((resolve, reject) => {
-      this.socket.addEventListener('open', resolve, { once: true });
-      this.socket.addEventListener('error', reject, { once: true });
-    });
-    this.socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      if (!message.id || !this.pending.has(message.id)) return;
-      const { resolve, reject } = this.pending.get(message.id);
-      this.pending.delete(message.id);
-      if (message.error) reject(new Error(message.error.message));
-      else resolve(message.result);
-    });
-  }
-
-  send(method, params = {}) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  async evaluate(expression) {
-    const result = await this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'Browser evaluation failed');
-    return result.result?.value;
-  }
-
-  close() {
-    this.socket.close();
-  }
-}
-
-async function killTree(child) {
-  if (!child || child.exitCode !== null) return;
-  const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-  await new Promise((resolve) => killer.once('close', resolve));
-  await delay(150);
-}
-
 test('real production route persists online create across reload and surfaces a bounded conflict', { timeout: 75_000 }, async () => {
   assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required for the real-browser acceptance');
   const boundaryPort = await freePort();
@@ -201,8 +127,7 @@ test('real production route persists online create across reload and surfaces a 
   const debugPort = await freePort();
   const boundary = createBoundary();
   await new Promise((resolve) => boundary.server.listen(boundaryPort, '127.0.0.1', resolve));
-  const profile = await mkdtemp(join(tmpdir(), 'ams-p20-browser-'));
-  assert.equal(profile.startsWith(tmpdir()), true);
+  const profile = await makeTempProfile('ams-p20-browser-');
 
   const vite = spawn('cmd.exe', ['/d', '/s', '/c', `npm run dev -- --host 127.0.0.1 --port ${vitePort}`], {
     cwd: ROOT,
@@ -219,20 +144,17 @@ test('real production route persists online create across reload and surfaces a 
     `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, 'about:blank',
   ], { stdio: 'ignore', windowsHide: true });
   let cdp;
+  let tracker;
   try {
     const baseUrl = `http://127.0.0.1:${vitePort}/ai-marketing-studio/`;
     await waitFor(async () => (await fetch(baseUrl)).ok, { label: 'Vite route' });
-    const target = await waitFor(async () => {
-      const response = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
-      if (!response.ok) return null;
-      return (await response.json()).find((item) => item.type === 'page');
-    }, { label: 'Edge DevTools target' });
+    const target = await waitForPageTarget(debugPort);
     cdp = new CdpClient(target.webSocketDebuggerUrl);
     await cdp.open();
+    tracker = createPageTracker(cdp);
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
-    await cdp.send('Page.navigate', { url: baseUrl });
-    await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: 'base page' });
+    await navigateAndWait(cdp, tracker, baseUrl, { label: 'base page' });
 
     const payload = Buffer.from(JSON.stringify({
       sub: '11111111-1111-4111-8111-111111111111', aud: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600,
@@ -255,8 +177,8 @@ test('real production route persists online create across reload and surfaces a 
       throw new Error(`${error.message}; browser=${JSON.stringify(diagnostic)}`);
     }
 
-    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('新建项目')).click()`);
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p19-create-panel form'))`), { label: 'new project form' });
+    await click(cdp, { text: '新建项目', label: 'new project button' });
+    await waitForSelector(cdp, '.p19-create-panel form', { label: 'new project form' });
     const values = ['P20 跨浏览器研究', '验证在线保存与重新读取', '运营团队', 'GitHub Pages', '只读来源'];
     await cdp.evaluate(`(() => {
       const fields = [...document.querySelectorAll('.p19-create-panel input, .p19-create-panel textarea')];
@@ -267,18 +189,18 @@ test('real production route persists online create across reload and surfaces a 
         field.dispatchEvent(new Event('input', { bubbles: true }));
       });
     })()`);
-    await waitFor(() => cdp.evaluate(`!document.querySelector('.p19-create-panel button[type="submit"]').disabled`), { label: 'valid project form' });
-    await cdp.evaluate(`document.querySelector('.p19-create-panel button[type="submit"]').click()`);
+    await waitForSelector(cdp, '.p19-create-panel button[type="submit"]', { enabled: true, label: 'valid project form' });
+    await click(cdp, { selector: '.p19-create-panel button[type="submit"]', label: 'submit new project' });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('项目已保存到在线工作区')`), { label: 'online save confirmation' });
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('P20 跨浏览器研究')`), true);
 
-    await cdp.send('Page.reload', { ignoreCache: true });
+    await reloadAndWait(cdp, tracker, { label: 'hard refresh' });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('在线工作区 · 已同步') && document.body.innerText.includes('P20 跨浏览器研究')`), { label: 'server project after reload' });
     // P36 渐进式重设计：项目档案位于「更多」菜单的抽屉中，先打开抽屉。
-    await cdp.evaluate(`[...document.querySelectorAll('.p36-more summary')].find((s) => s.textContent.includes('更多')).click()`);
-    await delay(150);
-    await cdp.evaluate(`[...document.querySelectorAll('.p36-more-menu button')].find((b) => b.textContent.includes('项目档案')).click()`);
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]'))`), { label: 'project profile form after reload' });
+    // 菜单按钮可见后才点击（details 打开即渲染为可见），无需固定 sleep。
+    await click(cdp, { selector: '.p36-more summary', text: '更多', label: 'more menu' });
+    await click(cdp, { selector: '.p36-more-menu button', text: '项目档案', label: 'project profile entry' });
+    await waitForSelector(cdp, '.p36-settings-drawer .p19-form button[type="submit"]', { enabled: false, label: 'project profile form after reload' });
 
     // 未修改的档案是明确 no-op：按钮禁用并显示原因，不生成空 project.update，
     // 更不能落入 ONLINE_COMMAND_MISSING 的误报。
@@ -299,8 +221,8 @@ test('real production route persists online create across reload and surfaces a 
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, '验证在线保存、刷新读取和无修改 no-op');
       field.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
-    await waitFor(() => cdp.evaluate(`!document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]').disabled`), { label: 'project profile dirty' });
-    await cdp.evaluate(`document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]').click()`);
+    await waitForSelector(cdp, '.p36-settings-drawer .p19-form button[type="submit"]', { enabled: true, label: 'project profile dirty' });
+    await click(cdp, { selector: '.p36-settings-drawer .p19-form button[type="submit"]', label: 'save project profile' });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('项目档案已保存')`), { label: 'project update saved' });
     assert.equal(boundary.requests.filter((item) => item.body.command === 'project.update').length, 1);
     assert.equal(await cdp.evaluate(`document.querySelector('.p36-settings-drawer .p19-form textarea').value`), '验证在线保存、刷新读取和无修改 no-op');
@@ -323,13 +245,17 @@ test('real production route persists online create across reload and surfaces a 
       assert.equal(Object.hasOwn(request.body, 'user_id'), false);
       assert.equal(Object.hasOwn(request.body, 'service_role'), false);
     }
+  } catch (error) {
+    if (cdp) {
+      const extra = await captureDiagnostics(cdp, { tracker });
+      if (!String(error.message).includes('诊断快照')) error.message += `\n${extra}`;
+    }
+    throw error;
   } finally {
     cdp?.close();
-    await killTree(edge);
-    await killTree(vite);
+    await shutdownEdge(edge, profile);
+    await killProcessTree(vite);
     await new Promise((resolve) => boundary.server.close(resolve));
-    if (profile.startsWith(tmpdir()) && profile.includes('ams-p20-browser-')) {
-      await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    }
+    await removeTempProfile(profile);
   }
 });

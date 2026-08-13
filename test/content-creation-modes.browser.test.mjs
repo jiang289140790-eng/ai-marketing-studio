@@ -13,17 +13,17 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 // readFileSync 用于读取源文件做静态审计
 import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
 import { Buffer } from 'node:buffer';
 import { stripTypeScriptTypes } from 'node:module';
+import {
+  EDGE, waitFor, launchEdge, shutdownEdge, makeTempProfile, removeTempProfile, dumpDom,
+} from './helpers/cdp-browser-harness.mjs';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
 const DIST = join(REPO_ROOT, 'dist');
 const INDEX_HTML = join(DIST, 'index.html');
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 
 // 如果在 CI 或 Edge 不可用，跳过（本地开发者环境可选）
 const EDGE_AVAILABLE = existsSync(EDGE);
@@ -105,21 +105,18 @@ test('P30 browser tests require Edge', { skip: !EDGE_AVAILABLE }, () => {
 });
 
 // ---- 真实浏览器验收 ------------------------------------------------------------
+// dump-dom 路径：spawn 进程 + 有界超时强杀进程树；结束后按本次 profile 路径
+// 精确兜底清理（含孤儿 crashpad/utility 子进程）并等待零残留，然后才删除
+// 本次创建的临时 profile（路径经过校验）—— 任一残留都让测试失败。
 async function renderProductionDom(width, height) {
-  const profile = await mkdtemp(join(tmpdir(), 'ams-p30-browser-'));
+  const profile = await makeTempProfile('ams-p30-browser-');
   try {
-    return execFileSync(EDGE, [
-      '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-      '--no-sandbox', '--disable-setuid-sandbox',
-      `--user-data-dir=${join(profile, 'user-data')}`,
-      `--window-size=${width},${height}`,
-      '--virtual-time-budget=2000', '--dump-dom',
-      `http://127.0.0.1:${previewPort}/#/workspace`,
-    ], { encoding: 'utf-8', timeout: 30000, env: process.env });
+    const result = await dumpDom(`http://127.0.0.1:${previewPort}/#/workspace`, { width, height, profile });
+    if (result.code !== 0) throw new Error(`dump-dom 退出码 ${result.code}：${result.stderr.slice(-500)}`);
+    return result.stdout;
   } finally {
-    if (profile.startsWith(tmpdir()) && profile.includes('ams-p30-browser-')) {
-      await rm(profile, { recursive: true, force: true });
-    }
+    await shutdownEdge(null, profile);
+    await removeTempProfile(profile);
   }
 }
 
@@ -153,15 +150,13 @@ test('P30: production source binds exclusive branches and responsive rules', () 
 });
 
 async function withCdpPage(run, { authenticated = false } = {}) {
-  const profile = await mkdtemp(join(tmpdir(), 'ams-p30-cdp-'));
+  const profile = await makeTempProfile('ams-p30-cdp-');
   const debugPort = await freePort();
-  const browser = spawn(EDGE, [
-    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    '--no-sandbox', `--remote-debugging-port=${debugPort}`,
-    `--user-data-dir=${join(profile, 'user-data')}`,
-    'about:blank',
-  ], { stdio: 'ignore', windowsHide: true });
+  const browser = launchEdge({ debugPort, profile, userDataDir: join(profile, 'user-data'), extraArgs: ['--no-sandbox'] });
   let socket;
+  let result;
+  let primaryError = null;
+  let cleanupError = null;
   try {
     let target;
     for (let attempt = 0; attempt < 60 && !target; attempt += 1) {
@@ -250,20 +245,26 @@ async function withCdpPage(run, { authenticated = false } = {}) {
       await send('Page.addScriptToEvaluateOnNewDocument', { source: initScript });
     }
     await send('Page.navigate', { url: `http://127.0.0.1:${previewPort}/#/workspace` });
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 1500));
-    return await run({ send, evaluate });
-  } finally {
-    try { socket?.close(); } catch { /* noop */ }
-    browser.kill();
-    await new Promise((resolve) => {
-      if (browser.exitCode !== null) resolve();
-      else {
-        browser.once('exit', resolve);
-        globalThis.setTimeout(resolve, 2000);
-      }
+    // 工作台挂载的有界等待（不再固定 sleep）：React 挂载到 #root 且内容页出现。
+    await waitFor(async () => (await evaluate('document.readyState === "complete" && Boolean(document.querySelector(".creation-mode-switcher, .quick-input-textarea"))')), {
+      timeout: 20_000, label: 'workspace mounted',
     });
-    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    result = await run({ send, evaluate });
+  } catch (error) {
+    primaryError = error;
+  } finally {
+    try {
+      socket?.close();
+      // CDP 路径：进程树确定性退出 + 孤儿兜底 + 零残留等待 + 校验路径删除。
+      await shutdownEdge(browser, profile);
+      await removeTempProfile(profile);
+    } catch (error) {
+      cleanupError = error;
+    }
   }
+  if (cleanupError && !primaryError) throw cleanupError;
+  if (primaryError) throw primaryError;
+  return result;
 }
 
 test('P30: real DOM interactions keep one mode visible and cycle controls exact', { skip: !EDGE_AVAILABLE }, async () => {
@@ -398,12 +399,12 @@ test('P30: Brief gate and all cycle choices work through production DOM', { skip
       );
       const approvedEnabled = approvedButton.disabled === false;
       [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent.includes('创建周期计划')).click();
-      await wait(100);
+      await waitFor(() => document.querySelectorAll('.cycle-duration-option').length > 0, 'cycle duration choices missing');
       const choices = [...document.querySelectorAll('.cycle-duration-option')];
       const labels = choices.map((item) => item.textContent.trim());
       for (const item of choices.slice(0, 3)) item.click();
       choices.find((item) => item.textContent.includes('自定义')).click();
-      await wait(50);
+      await waitFor(() => document.querySelector('.cycle-custom-panel'), 'custom cycle panel missing');
       const details = document.querySelector('.cycle-custom-panel');
       if (!details) throw new Error('custom cycle panel missing');
       details.open = true;

@@ -1,6 +1,14 @@
 -- P17-A4: reconcile five production objects created outside migration history.
 -- Existing objects are fingerprinted before any reconciliation.  Drift aborts
 -- the transaction; only wholly absent objects are constructed below.
+--
+-- Function drift is checked with a deterministic, cross-environment semantic
+-- contract (not a raw fingerprint): the raw fingerprint hashed owner / ACL
+-- grantor / pg_get_functiondef formatting, which differ between PostgreSQL 17
+-- environments even for identical semantics (fresh replay bb7fa324… vs staging
+-- d06d8f82…).  The contract below compares catalog attributes that are stable
+-- across environments plus a normalized body text, and fails closed on any
+-- attribute that is not explicitly compared (see p17_contract_matches).
 
 create schema if not exists extensions;
 create extension if not exists pgcrypto with schema extensions;
@@ -73,35 +81,320 @@ as $function$
   from pg_class c where c.oid=target;
 $function$;
 
-create or replace function pg_temp.p17_function_fingerprint(target regprocedure)
+-- Deterministic semantic normalization helpers (stable across PostgreSQL 17
+-- environments; any drift in the compared attributes fails the migration).
+
+-- search_path: order-preserving canonical form; '' for an explicit-empty
+-- setting.  PostgreSQL 17 stores the explicit-empty search_path (written
+-- `set search_path to ''`) in proconfig as `search_path=""` — a quoted-empty
+-- element.  `""` and bare-empty are the same explicit-empty contract, so the
+-- quoted-empty element is dropped like a bare-empty one.  A missing
+-- search_path, `public`, or any other real path element is never normalized
+-- to empty (fail-closed).
+create or replace function pg_temp.p17_normalize_search_path(setting text)
 returns text
 language sql
+immutable
+as $function$
+  select coalesce((select string_agg(trim(x), ',' order by ord)
+    from unnest(string_to_array(coalesce(setting, ''), ',')) with ordinality as t(x, ord)
+    where trim(x) <> '' and trim(x) <> '""'), '');
+$function$;
+
+-- Body text: tokenized normalization.  Unquoted words (keywords / unquoted
+-- identifiers) are lowercased; comments (line, nested block) and whitespace
+-- runs collapse to a single space; string literals ('...' with '' escape,
+-- E'...' backslash escapes, $tag$...$tag$ dollar quotes), quoted identifiers
+-- ("..." with "" escape) and operators are preserved verbatim.  Formatting
+-- differences (comment placement, keyword case, spacing, dollar-quote tags)
+-- therefore compare equal, while semantic differences inside literals
+-- ('A' vs 'a', `--`/`/* */` inside a string, "Col" vs "col", dollar-quoted
+-- content) are never flattened (fail-closed).
+create or replace function pg_temp.p17_normalize_body(body text)
+returns text
+language plpgsql
+immutable
+as $function$
+declare
+  b text := coalesce(body, '');
+  n int := length(b);
+  i int := 1;
+  j int;
+  k int;
+  depth int;
+  tag text;
+  out text := '';
+begin
+  while i <= n loop
+    -- whitespace run -> single space
+    if substr(b, i, 1) ~ '[[:space:]]' then
+      while i <= n and substr(b, i, 1) ~ '[[:space:]]' loop
+        i := i + 1;
+      end loop;
+      if out <> '' and substr(out, length(out), 1) <> ' ' then
+        out := out || ' ';
+      end if;
+      continue;
+    end if;
+    -- line comment -> single space
+    if substr(b, i, 1) = '-' and substr(b, i + 1, 1) = '-' then
+      while i <= n and substr(b, i, 1) <> chr(10) loop
+        i := i + 1;
+      end loop;
+      if out <> '' and substr(out, length(out), 1) <> ' ' then
+        out := out || ' ';
+      end if;
+      continue;
+    end if;
+    -- block comment (nested) -> single space
+    if substr(b, i, 1) = '/' and substr(b, i + 1, 1) = '*' then
+      depth := 0;
+      while i <= n loop
+        if substr(b, i, 1) = '/' and substr(b, i + 1, 1) = '*' then
+          depth := depth + 1;
+          i := i + 2;
+        elsif substr(b, i, 1) = '*' and substr(b, i + 1, 1) = '/' then
+          depth := depth - 1;
+          i := i + 2;
+          exit when depth = 0;
+        else
+          i := i + 1;
+        end if;
+      end loop;
+      if out <> '' and substr(out, length(out), 1) <> ' ' then
+        out := out || ' ';
+      end if;
+      continue;
+    end if;
+    -- dollar-quoted string: $tag$ ... $tag$ (tag optional) -> verbatim
+    if substr(b, i, 1) = '$' then
+      j := i + 1;
+      while j <= n and substr(b, j, 1) ~ '[A-Za-z0-9_]' loop
+        j := j + 1;
+      end loop;
+      if j <= n and substr(b, j, 1) = '$' then
+        tag := substr(b, i, j - i + 1);
+        k := j + 1;
+        while k <= n - length(tag) + 1 and substr(b, k, length(tag)) <> tag loop
+          k := k + 1;
+        end loop;
+        if k <= n - length(tag) + 1 then
+          out := out || substr(b, i, k + length(tag) - i);
+          i := k + length(tag);
+          continue;
+        end if;
+      end if;
+      -- not a dollar-quote opener: fall through, the '$' stays verbatim
+    end if;
+    -- single-quoted string: '...' with '' escape (backslash escape in E'...')
+    if substr(b, i, 1) = '''' then
+      j := i + 1;
+      while j <= n loop
+        if substr(b, j, 1) = '\' then
+          j := j + 2;
+        elsif substr(b, j, 1) = '''' then
+          if substr(b, j + 1, 1) = '''' then
+            j := j + 2;
+          else
+            exit;
+          end if;
+        else
+          j := j + 1;
+        end if;
+      end loop;
+      if j <= n then
+        out := out || substr(b, i, j - i + 1);
+        i := j + 1;
+        continue;
+      end if;
+      -- unterminated string: keep the quote verbatim and rescan
+    end if;
+    -- double-quoted identifier: "..." with "" escape -> verbatim
+    if substr(b, i, 1) = '"' then
+      j := i + 1;
+      while j <= n loop
+        if substr(b, j, 1) = '"' then
+          if substr(b, j + 1, 1) = '"' then
+            j := j + 2;
+          else
+            exit;
+          end if;
+        else
+          j := j + 1;
+        end if;
+      end loop;
+      if j <= n then
+        out := out || substr(b, i, j - i + 1);
+        i := j + 1;
+        continue;
+      end if;
+    end if;
+    -- unquoted word (keyword / unquoted identifier) -> lowercase
+    if substr(b, i, 1) ~ '[A-Za-z_]' then
+      j := i + 1;
+      while j <= n and substr(b, j, 1) ~ '[A-Za-z0-9_$]' loop
+        j := j + 1;
+      end loop;
+      out := out || lower(substr(b, i, j - i));
+      i := j;
+      continue;
+    end if;
+    -- anything else (operators, digits, punctuation): verbatim
+    out := out || substr(b, i, 1);
+    i := i + 1;
+  end loop;
+  return btrim(out);
+end
+$function$;
+
+-- Canonical body texts of the two reconciled functions.  These must stay in
+-- sync with the CREATE FUNCTION bodies in the $functions$ block below: the
+-- $verify$ block compares each live function body against them, so a future
+-- edit that changes only one of the two copies fails the migration instead of
+-- silently passing (fail-closed by construction).
+create or replace function pg_temp.p17_expected_set_updated_at_body()
+returns text
+language sql
+immutable
+as $function$
+  select 'begin
+  new.updated_at = now();
+  return new;
+end;';
+$function$;
+
+create or replace function pg_temp.p17_expected_match_knowledge_entries_body()
+returns text
+language sql
+immutable
+as $function$
+  select '  select
+    knowledge_entries.id,
+    knowledge_entries.type,
+    knowledge_entries.title,
+    knowledge_entries.content,
+    knowledge_entries.metadata,
+    1 - (knowledge_entries.embedding <=> query_embedding) as similarity
+  from public.knowledge_entries
+  where knowledge_entries.embedding is not null
+    and (filter_type is null or knowledge_entries.type = filter_type)
+  order by knowledge_entries.embedding <=> query_embedding
+  limit match_count;';
+$function$;
+
+-- Semantic function contract comparison.  Returns an empty array when the
+-- function matches the contract, otherwise the list of mismatch descriptions.
+--
+-- Compared (must match exactly): identity signature, result type, language,
+-- security definer, leakproof, volatility, parallel safety, an explicitly set
+-- search_path (normalized), normalized body text, and — when p_execute_roles
+-- is non-empty — EXECUTE for every listed role plus PUBLIC (owner/grantor
+-- names are environment noise and are deliberately not compared).
+--
+-- Fail-closed properties:
+--   - missing function                -> mismatch
+--   - no explicit search_path         -> mismatch (caller-inherited search
+--     path is not the same contract as search_path='')
+--   - any GUC setting other than
+--     search_path in proconfig        -> mismatch
+--   - EXECUTE revoked from a listed
+--     role or from PUBLIC             -> mismatch
+create or replace function pg_temp.p17_contract_matches(
+  target regprocedure,
+  p_identity text,
+  p_result text,
+  p_language text,
+  p_security_definer boolean,
+  p_leakproof boolean,
+  p_volatility text,
+  p_parallel text,
+  p_search_path text,
+  p_body text,
+  p_execute_roles text[]
+) returns text[]
+language plpgsql
 set search_path = pg_catalog, public, extensions
 as $function$
-  select encode(extensions.digest(jsonb_build_object(
-    'owner',pg_get_userbyid(p.proowner),
-    'arguments',pg_get_function_identity_arguments(p.oid),
-    'result',pg_get_function_result(p.oid),'language',l.lanname,
-    'security_definer',p.prosecdef,'leakproof',p.proleakproof,
-    'volatility',p.provolatile::text,'parallel',p.proparallel::text,
-    'config',p.proconfig,'definition',pg_get_functiondef(p.oid),
-    'acl',coalesce((
-      select jsonb_agg(to_jsonb(x) order by grantee,privilege_type) from (
-        select coalesce(grantee.rolname,'PUBLIC') grantee,grantor.rolname grantor,
-          a.privilege_type,a.is_grantable
-        from aclexplode(p.proacl) a
-        left join pg_roles grantee on grantee.oid=a.grantee
-        join pg_roles grantor on grantor.oid=a.grantor
-      ) x
-    ),'[]'::jsonb)
-  )::text,'sha256'),'hex')
-  from pg_proc p join pg_language l on l.oid=p.prolang where p.oid=target;
+declare
+  p pg_proc;
+  l pg_language;
+  mismatches text[] := '{}'::text[];
+  setting text;
+  setting_name text;
+  found_search_path boolean := false;
+  actual_search_path text := null;
+  role_name text;
+begin
+  if target is null then
+    return array['function missing'];
+  end if;
+  select * into p from pg_proc where oid = target;
+  if not found then
+    return array['function missing'];
+  end if;
+  select * into l from pg_language where oid = p.prolang;
+  if pg_get_function_identity_arguments(p.oid) is distinct from p_identity then
+    mismatches := mismatches || format('signature: got [%s] want [%s]', pg_get_function_identity_arguments(p.oid), p_identity);
+  end if;
+  if pg_get_function_result(p.oid) is distinct from p_result then
+    mismatches := mismatches || format('result: got [%s] want [%s]', pg_get_function_result(p.oid), p_result);
+  end if;
+  if l.lanname is distinct from p_language then
+    mismatches := mismatches || format('language: got [%s] want [%s]', l.lanname, p_language);
+  end if;
+  if p.prosecdef is distinct from p_security_definer then
+    mismatches := mismatches || format('security_definer: got [%s] want [%s]', p.prosecdef, p_security_definer);
+  end if;
+  if p.proleakproof is distinct from p_leakproof then
+    mismatches := mismatches || format('leakproof: got [%s] want [%s]', p.proleakproof, p_leakproof);
+  end if;
+  if p.provolatile::text is distinct from p_volatility then
+    mismatches := mismatches || format('volatility: got [%s] want [%s]', p.provolatile::text, p_volatility);
+  end if;
+  if p.proparallel::text is distinct from p_parallel then
+    mismatches := mismatches || format('parallel: got [%s] want [%s]', p.proparallel::text, p_parallel);
+  end if;
+  foreach setting in array coalesce(p.proconfig, '{}'::text[]) loop
+    setting_name := split_part(setting, '=', 1);
+    if setting_name = 'search_path' then
+      found_search_path := true;
+      actual_search_path := substring(setting from length('search_path=') + 1);
+    else
+      mismatches := mismatches || format('unexpected setting [%s]', setting_name);
+    end if;
+  end loop;
+  if not found_search_path then
+    mismatches := mismatches || format('search_path: not explicitly set, want [%s]', p_search_path);
+  elsif pg_temp.p17_normalize_search_path(actual_search_path)
+        is distinct from pg_temp.p17_normalize_search_path(p_search_path) then
+    mismatches := mismatches || format('search_path: got [%s] want [%s]',
+      pg_temp.p17_normalize_search_path(actual_search_path), pg_temp.p17_normalize_search_path(p_search_path));
+  end if;
+  if pg_temp.p17_normalize_body(p.prosrc) is distinct from p_body then
+    mismatches := mismatches || format('body: got [%s] want [%s]', pg_temp.p17_normalize_body(p.prosrc), p_body);
+  end if;
+  foreach role_name in array coalesce(p_execute_roles, '{}'::text[]) loop
+    if role_name <> 'public' and not has_function_privilege(role_name, p.oid, 'EXECUTE') then
+      mismatches := mismatches || format('permission: role [%s] cannot execute', role_name);
+    end if;
+  end loop;
+  if 'public' = any(coalesce(p_execute_roles, '{}'::text[]))
+     and not exists (
+       select 1 from pg_proc q where q.oid = p.oid and (
+         q.proacl is null or exists (select 1 from aclexplode(q.proacl) a where a.grantee = 0 and a.privilege_type = 'EXECUTE')
+       )
+     ) then
+    mismatches := mismatches || 'permission: PUBLIC cannot execute';
+  end if;
+  return mismatches;
+end
 $function$;
 
 do $preflight$
 declare
   item record;
   actual text;
+  mismatches text[];
 begin
   for item in select * from (values
     ('account_intelligence_reports','ba61d41a5dcf21e9c9b594baa22c2074dee8f982e34be1e93453e8cbcf9a4647'),
@@ -120,15 +413,30 @@ begin
     end if;
   end loop;
 
-  if to_regprocedure('public.set_knowledge_entries_updated_at()') is not null
-     and pg_temp.p17_function_fingerprint(to_regprocedure('public.set_knowledge_entries_updated_at()'))
-       <> 'dfdbb17dafcfb26975df9144dd1d50feb120177600fc87f411e5c6cf6b76d703' then
-    raise exception using errcode='P0001',message='P17_A4_EXISTING_FUNCTION_DRIFT',detail='object=set_knowledge_entries_updated_at';
+  -- Function semantic contract for pre-existing out-of-band objects.
+  -- EXECUTE permissions are reconciled by the idempotent grants below, so the
+  -- preflight contract intentionally does not require any specific grants
+  -- (p_execute_roles = '{}'); the post-reconciliation $verify$ block below
+  -- enforces the full permission contract.
+  if to_regprocedure('public.set_knowledge_entries_updated_at()') is not null then
+    mismatches := pg_temp.p17_contract_matches(to_regprocedure('public.set_knowledge_entries_updated_at()'),
+      '', 'trigger', 'plpgsql', false, false, 'v', 'u', '',
+      pg_temp.p17_normalize_body(pg_temp.p17_expected_set_updated_at_body()), '{}'::text[]);
+    if array_length(mismatches, 1) > 0 then
+      raise exception using errcode='P0001',message='P17_A4_EXISTING_FUNCTION_DRIFT',
+        detail='object=set_knowledge_entries_updated_at '||array_to_string(mismatches,'; ');
+    end if;
   end if;
-  if to_regprocedure('public.match_knowledge_entries(vector,integer,text)') is not null
-     and pg_temp.p17_function_fingerprint(to_regprocedure('public.match_knowledge_entries(vector,integer,text)'))
-       <> '517cf39d12bf8e0371f6b1192e7fd5fbf1df91d7636e13967bd3aa7bd1df943f' then
-    raise exception using errcode='P0001',message='P17_A4_EXISTING_FUNCTION_DRIFT',detail='object=match_knowledge_entries';
+  if to_regprocedure('public.match_knowledge_entries(vector,integer,text)') is not null then
+    mismatches := pg_temp.p17_contract_matches(to_regprocedure('public.match_knowledge_entries(vector,integer,text)'),
+      'query_embedding vector, match_count integer, filter_type text',
+      'TABLE(id uuid, type text, title text, content text, metadata jsonb, similarity double precision)',
+      'sql', false, false, 's', 'u', 'pg_catalog,public',
+      pg_temp.p17_normalize_body(pg_temp.p17_expected_match_knowledge_entries_body()), '{}'::text[]);
+    if array_length(mismatches, 1) > 0 then
+      raise exception using errcode='P0001',message='P17_A4_EXISTING_FUNCTION_DRIFT',
+        detail='object=match_knowledge_entries '||array_to_string(mismatches,'; ');
+    end if;
   end if;
 end
 $preflight$;
@@ -312,7 +620,7 @@ grant execute on function public.set_knowledge_entries_updated_at() to public,po
 grant execute on function public.match_knowledge_entries(vector,integer,text) to public,postgres,anon,authenticated,service_role;
 
 do $verify$
-declare item record; actual text;
+declare item record; actual text; mismatches text[];
 begin
   for item in select * from (values
     ('account_intelligence_reports','ba61d41a5dcf21e9c9b594baa22c2074dee8f982e34be1e93453e8cbcf9a4647'),
@@ -327,13 +635,25 @@ begin
       raise exception using errcode='P0001',message='P17_A4_TABLE_FINGERPRINT_MISMATCH',detail=format('object=%s expected=%s actual=%s',item.object_name,item.fingerprint,actual);
     end if;
   end loop;
-  actual:=pg_temp.p17_function_fingerprint(to_regprocedure('public.set_knowledge_entries_updated_at()'));
-  if actual<>'dfdbb17dafcfb26975df9144dd1d50feb120177600fc87f411e5c6cf6b76d703' then
-    raise exception using errcode='P0001',message='P17_A4_FUNCTION_FINGERPRINT_MISMATCH',detail='object=set_knowledge_entries_updated_at actual='||coalesce(actual,'null');
+  -- Post-reconciliation function contract: semantics + full EXECUTE contract
+  -- (postgres, anon, authenticated, service_role and PUBLIC all executable).
+  mismatches := pg_temp.p17_contract_matches(to_regprocedure('public.set_knowledge_entries_updated_at()'),
+    '', 'trigger', 'plpgsql', false, false, 'v', 'u', '',
+    pg_temp.p17_normalize_body(pg_temp.p17_expected_set_updated_at_body()),
+    '{postgres,anon,authenticated,service_role,public}'::text[]);
+  if array_length(mismatches, 1) > 0 then
+    raise exception using errcode='P0001',message='P17_A4_FUNCTION_CONTRACT_MISMATCH',
+      detail='object=set_knowledge_entries_updated_at '||array_to_string(mismatches,'; ');
   end if;
-  actual:=pg_temp.p17_function_fingerprint(to_regprocedure('public.match_knowledge_entries(vector,integer,text)'));
-  if actual<>'517cf39d12bf8e0371f6b1192e7fd5fbf1df91d7636e13967bd3aa7bd1df943f' then
-    raise exception using errcode='P0001',message='P17_A4_FUNCTION_FINGERPRINT_MISMATCH',detail='object=match_knowledge_entries actual='||coalesce(actual,'null');
+  mismatches := pg_temp.p17_contract_matches(to_regprocedure('public.match_knowledge_entries(vector,integer,text)'),
+    'query_embedding vector, match_count integer, filter_type text',
+    'TABLE(id uuid, type text, title text, content text, metadata jsonb, similarity double precision)',
+    'sql', false, false, 's', 'u', 'pg_catalog,public',
+    pg_temp.p17_normalize_body(pg_temp.p17_expected_match_knowledge_entries_body()),
+    '{postgres,anon,authenticated,service_role,public}'::text[]);
+  if array_length(mismatches, 1) > 0 then
+    raise exception using errcode='P0001',message='P17_A4_FUNCTION_CONTRACT_MISMATCH',
+      detail='object=match_knowledge_entries '||array_to_string(mismatches,'; ');
   end if;
   if not exists(select 1 from pg_extension e join pg_namespace n on n.oid=e.extnamespace where e.extname='vector' and e.extversion='0.8.2' and n.nspname='public')
      or not exists(select 1 from pg_extension e join pg_namespace n on n.oid=e.extnamespace where e.extname='pg_trgm' and e.extversion='1.6' and n.nspname='public')

@@ -1,79 +1,19 @@
-/* global WebSocket, fetch */
+/* global fetch */
 // P32-C 真实浏览器验收：启动生产 #/research 路由，在隔离 localStorage 中创建
 // 多帖项目，真实点击比较选择与综合按钮，验证 Evidence → latest Qwen analysis →
 // exact Knowledge Cards → pending Brief 链、刷新恢复、项目切换清理和响应式布局。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { setTimeout as sleep } from 'node:timers/promises';
+import {
+  EDGE, freePort, waitFor, waitForPageTarget, CdpClient, createPageTracker,
+  navigateAndWait, reloadAndWait, waitForSelector, click, captureDiagnostics,
+  makeTempProfile, removeTempProfile, shutdownEdge, killProcessTree,
+} from './helpers/cdp-browser-harness.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-
-async function freePort() {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
-async function waitFor(check, { timeout = 30_000, interval = 150, label = 'condition' } = {}) {
-  const deadline = Date.now() + timeout;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const value = await check();
-      if (value) return value;
-    } catch (error) {
-      lastError = error;
-    }
-    await sleep(interval);
-  }
-  throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ''}`);
-}
-
-class CdpClient {
-  constructor(url) { this.socket = new WebSocket(url); this.nextId = 1; this.pending = new Map(); }
-  async open() {
-    await new Promise((resolve, reject) => {
-      this.socket.addEventListener('open', resolve, { once: true });
-      this.socket.addEventListener('error', reject, { once: true });
-    });
-    this.socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      if (!message.id || !this.pending.has(message.id)) return;
-      const pending = this.pending.get(message.id);
-      this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message));
-      else pending.resolve(message.result);
-    });
-  }
-  send(method, params = {}) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-  async evaluate(expression) {
-    const result = await this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Browser evaluation failed');
-    return result.result?.value;
-  }
-  close() { this.socket.close(); }
-}
-
-async function killTree(child) {
-  if (!child || child.exitCode !== null) return;
-  const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-  await new Promise((resolve) => killer.once('close', resolve));
-}
 
 const seedScript = `
 (async () => {
@@ -172,7 +112,7 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
   assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required');
   const vitePort = await freePort();
   const debugPort = await freePort();
-  const profile = await mkdtemp(join(tmpdir(), 'ams-p32c-browser-'));
+  const profile = await makeTempProfile('ams-p32c-browser-');
   const vite = spawn('cmd.exe', ['/d', '/s', '/c', `npm run dev -- --host 127.0.0.1 --port ${vitePort}`], {
     cwd: ROOT, env: { ...process.env, VITE_SUPABASE_URL: '', VITE_SUPABASE_ANON_KEY: '' }, stdio: 'ignore', windowsHide: true,
   });
@@ -181,30 +121,27 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, 'about:blank',
   ], { stdio: 'ignore', windowsHide: true });
   let cdp;
+  let tracker;
   try {
     const baseUrl = `http://127.0.0.1:${vitePort}/ai-marketing-studio/`;
     await waitFor(async () => (await fetch(baseUrl)).ok, { label: 'Vite route' });
-    const target = await waitFor(async () => {
-      const response = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
-      if (!response.ok) return null;
-      return (await response.json()).find((item) => item.type === 'page');
-    }, { label: 'Edge target' });
+    const target = await waitForPageTarget(debugPort);
     cdp = new CdpClient(target.webSocketDebuggerUrl);
     await cdp.open();
+    tracker = createPageTracker(cdp);
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
-    await cdp.send('Page.navigate', { url: baseUrl });
-    await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: 'base page' });
+    await navigateAndWait(cdp, tracker, baseUrl, { label: 'base page' });
     const projectIds = await cdp.evaluate(seedScript);
     assert.equal(projectIds.length, 2);
 
     await cdp.send('Page.navigate', { url: `${baseUrl}#/research` });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P32-C 浏览器综合项目')`), { label: 'seeded project' });
     // P36 渐进式重设计：多帖比较位于「分析」目的地的高级工具区，先导航并展开。
-    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="analyze"]')][0].click()`);
+    await click(cdp, { selector: '[data-destination-tab="analyze"]', label: 'analyze destination tab' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), { label: 'analyze destination' });
-    await cdp.evaluate(`[...document.querySelectorAll('.p36-advanced summary')].find((s) => s.textContent.includes('多帖比较')).click()`);
-    await sleep(200);
+    await click(cdp, { selector: '.p36-advanced summary', text: '多帖比较', label: 'multipost comparison section' });
+    // 展开后渲染比较选择；不依赖固定 sleep，直接有界等待三个选择出现。
     await waitFor(() => cdp.evaluate(`document.querySelectorAll('.p32-compare-chip input').length === 3`), { label: 'comparison choices' });
     const initial = await cdp.evaluate(`(() => ({
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -214,12 +151,10 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     assert.equal(initial.overflow, false);
     assert.equal(initial.brief, false);
 
-    await cdp.evaluate(`(() => {
-      const boxes = [...document.querySelectorAll('.p32-compare-chip input')];
-      boxes[0].click(); boxes[1].click();
-    })()`);
+    await click(cdp, { selector: '.p32-compare-chip input', index: 0, label: 'first comparison post' });
+    await click(cdp, { selector: '.p32-compare-chip input', index: 1, label: 'second comparison post' });
     await waitFor(() => cdp.evaluate(`document.querySelectorAll('.p32-compare-chip input:checked').length === 2`), { label: 'two selected posts' });
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p32-synthesis-preview'))`), { label: 'synthesis preview' });
+    await waitForSelector(cdp, '.p32-synthesis-preview', { label: 'synthesis preview' });
     const preview = await cdp.evaluate(`(() => ({
       sections: document.querySelectorAll('.p32-synthesis-section').length,
       metrics: document.querySelectorAll('.p32-synthesis-metrics-row:not(.p32-synthesis-metrics-head)').length,
@@ -231,7 +166,7 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     assert.equal(preview.chain, 2);
     assert.equal(preview.buttonDisabled, false);
 
-    await cdp.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('生成综合知识与待审核 Brief')).click()`);
+    await click(cdp, { text: '生成综合知识与待审核 Brief', label: 'synthesize brief button' });
     const synthesisResult = await waitFor(() => cdp.evaluate(`(() => {
       const outcome = document.querySelector('.p32-synthesis-outcome');
       const error = document.querySelector('.p19-error-banner');
@@ -240,10 +175,10 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     })()`), { label: 'synthesis outcome or bounded error' });
     assert.equal(synthesisResult.ok, true, `synthesis failed in production UI: ${synthesisResult.text}`);
     // P36：Brief 详情位于「产物」目的地，导航并选择 Brief 区。
-    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
+    await click(cdp, { selector: '[data-destination-tab="outputs"]', label: 'outputs destination tab' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), { label: 'outputs destination' });
-    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((b) => b.innerText.includes('Brief')).click()`);
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p32-synthesis-brief-summary'))`), { label: 'pending Brief' });
+    await click(cdp, { selector: '.p36-rail-item', text: 'Brief', label: 'brief rail item' });
+    await waitForSelector(cdp, '.p32-synthesis-brief-summary', { label: 'pending Brief' });
     const persisted = await cdp.evaluate(`(() => {
       const store = JSON.parse(localStorage.getItem('p19_workspace_store_v1'));
       const project = store.projects.find((item) => item.id === localStorage.getItem('p19_active_project_v1'));
@@ -265,12 +200,12 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     assert.equal(persisted.handoff, null);
     assert.deepEqual(persisted.flags, { generation_executed: false, routing_executed: false, network_executed: false, publish_executed: false });
 
-    await cdp.send('Page.reload');
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('[data-destination-tab="outputs"]'))`), { label: 'destinations after refresh' });
-    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
+    await reloadAndWait(cdp, tracker, { label: 'hard refresh' });
+    await waitForSelector(cdp, '[data-destination-tab="outputs"]', { label: 'destinations after refresh' });
+    await click(cdp, { selector: '[data-destination-tab="outputs"]', label: 'outputs destination tab after refresh' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), { label: 'outputs destination after refresh' });
-    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((b) => b.innerText.includes('Brief')).click()`);
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p32-synthesis-brief-summary'))`), { label: 'Brief after refresh' });
+    await click(cdp, { selector: '.p36-rail-item', text: 'Brief', label: 'brief rail item after refresh' });
+    await waitForSelector(cdp, '.p32-synthesis-brief-summary', { label: 'Brief after refresh' });
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.p32-compare-chip input:checked').length`), 0, 'transient selection clears on refresh');
 
     await cdp.evaluate(`(() => {
@@ -284,12 +219,19 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.p32-compare-chip input:checked').length`), 0);
 
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-    await sleep(250);
+    // 视口切换后的布局稳定是异步的：有界等待布局收敛，再断言无横向溢出。
+    await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'mobile layout settle' });
     assert.equal(await cdp.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth'), false, 'mobile page has no horizontal overflow');
+  } catch (error) {
+    if (cdp) {
+      const extra = await captureDiagnostics(cdp, { tracker });
+      if (!String(error.message).includes('诊断快照')) error.message += `\n${extra}`;
+    }
+    throw error;
   } finally {
     if (cdp) cdp.close();
-    await killTree(edge);
-    await killTree(vite);
-    await rm(profile, { recursive: true, force: true });
+    await shutdownEdge(edge, profile);
+    await killProcessTree(vite);
+    await removeTempProfile(profile);
   }
 });

@@ -35,7 +35,7 @@ async function freePort() {
   return port;
 }
 
-async function waitFor(check, { timeout = 25_000, interval = 100, label = 'condition' } = {}) {
+async function waitFor(check, { timeout = 25_000, interval = 100, label = 'condition', diagnose } = {}) {
   const deadline = Date.now() + timeout;
   let lastError;
   while (Date.now() < deadline) {
@@ -47,7 +47,17 @@ async function waitFor(check, { timeout = 25_000, interval = 100, label = 'condi
     }
     await delay(interval);
   }
-  throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ''}`);
+  let detail = `Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ''}`;
+  if (diagnose) {
+    // 有界失败诊断：附加一次页面/调用快照，绝不输出无界正文。
+    try {
+      const snapshot = await diagnose();
+      detail += `\n诊断快照: ${JSON.stringify(snapshot)}`;
+    } catch (snapshotError) {
+      detail += `\n（诊断快照不可用: ${String(snapshotError?.message || snapshotError).slice(0, 300)}）`;
+    }
+  }
+  throw new Error(detail);
 }
 
 function json(response, status, body, origin = '') {
@@ -305,6 +315,46 @@ class CdpClient {
   close() { this.socket.close(); }
 }
 
+/**
+ * 有界页面快照（固定字节上限）：失败诊断用，区分页面未就绪（readyState）、
+ * 目标 tab 不存在/未激活、预览未出现（notice/CTA/按钮/正文片段）与页面或
+ * CDP 异常（evaluate 抛错）。绝不输出无界正文。
+ */
+async function pageSnapshot(cdp) {
+  return cdp.evaluate(`(() => {
+    const tab = document.querySelector('[data-destination-tab="analyze"]');
+    const notice = document.querySelector('[data-testid="p38-media-notice"]');
+    const cta = document.querySelector('.p38-rehydrate-cta');
+    return {
+      readyState: document.readyState,
+      href: String(location.href).slice(0, 200),
+      hasAnalyzeTab: Boolean(tab),
+      analyzeTabActive: Boolean(tab && tab.classList.contains('active')),
+      hasNotice: Boolean(notice),
+      noticeText: notice ? notice.innerText.slice(0, 240) : null,
+      rehydrateCta: cta ? { text: cta.textContent.trim().slice(0, 60), disabled: cta.disabled } : null,
+      hasVersionMenu: Boolean(document.querySelector('.p36-version-menu')),
+      buttons: [...document.querySelectorAll('button')].map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 25),
+      bodyText: document.body.innerText.slice(0, 400),
+    };
+  })()`);
+}
+
+/** P38 恢复链调用计数：区分「恢复命令未完成」（调用缺失）与「命令已完成但预览未出现」。 */
+async function p38Diagnose(cdp, boundary) {
+  const snapshot = await pageSnapshot(cdp);
+  const calls = boundary.calls;
+  return {
+    ...snapshot,
+    calls: {
+      collect_url: calls.filter((c) => c.fn === 'p22' && c.action === 'collect_url').length,
+      evidence_update: calls.filter((c) => c.fn === 'command' && c.command === 'evidence.update').length,
+      analyze_persisted: calls.filter((c) => c.fn === 'p22' && c.action === 'analyze_persisted').length,
+      total: calls.length,
+    },
+  };
+}
+
 async function killTree(child) {
   if (!child || child.exitCode !== null) return;
   const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
@@ -351,8 +401,14 @@ test('P29 production page collects the two-image example post, renders real medi
     await cdp.open();
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
+    // 主 frame 导航计数：硬刷新必须等真实提交；旧文档在提交前仍可被 evaluate
+    // 命中（文本/卡片仍在），会造成「刷新恢复」在旧 DOM 上假通过或 Uncaught。
+    let mainFrameNavigations = 0;
+    cdp.on('Page.frameNavigated', (params) => {
+      if (params.frame && !params.frame.parentId) mainFrameNavigations += 1;
+    });
     await cdp.send('Page.navigate', { url: baseUrl });
-    await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: 'base page' });
+    await waitFor(() => cdp.evaluate(`document.location.origin === 'http://127.0.0.1:${vitePort}' && document.readyState === 'complete'`), { label: 'base page' });
 
     const payload = Buffer.from(JSON.stringify({
       sub: '11111111-1111-4111-8111-111111111111', aud: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600,
@@ -447,7 +503,9 @@ test('P29 production page collects the two-image example post, renders real medi
 
     // 硬刷新：Evidence 的媒体、哈希和来源身份保持一致。
     await cdp.send('Page.reload', { ignoreCache: true });
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('在线工作区 · 已同步') && document.body.innerText.includes('P29 双图示例')`), { label: 'reload recovery' });
+    const navigationsBefore = mainFrameNavigations;
+    await waitFor(() => mainFrameNavigations > navigationsBefore, { label: 'hard reload navigation' });
+    await waitFor(() => cdp.evaluate(`document.readyState === 'complete' && document.body.innerText.includes('在线工作区 · 已同步') && document.body.innerText.includes('P29 双图示例')`), { label: 'reload recovery', diagnose: () => pageSnapshot(cdp) });
     // P36 默认目的地为「采集」，保存后的来源卡直接可见（不再需要切换完整视图）。
     await waitFor(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length === 1`), { label: 'saved source card after reload' });
     const reloaded = await cdp.evaluate(`(() => {
@@ -763,8 +821,14 @@ test('P38 production page: legacy video evidence shows the unverified state, rec
         cdp.send('Fetch.continueRequest', { requestId: params.requestId });
       }
     });
+    // 主 frame 导航计数：硬刷新必须等真实提交；旧文档在提交前仍可被 evaluate
+    // 命中（正文与元素仍在），会造成假通过或紧随其后的 Uncaught。
+    let mainFrameNavigations = 0;
+    cdp.on('Page.frameNavigated', (params) => {
+      if (params.frame && !params.frame.parentId) mainFrameNavigations += 1;
+    });
     await cdp.send('Page.navigate', { url: baseUrl });
-    await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: 'base page' });
+    await waitFor(() => cdp.evaluate(`document.location.origin === 'http://127.0.0.1:${vitePort}' && document.readyState === 'complete'`), { label: 'base page' });
 
     const payload = Buffer.from(JSON.stringify({
       sub: '11111111-1111-4111-8111-111111111111', aud: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600,
@@ -781,11 +845,13 @@ test('P38 production page: legacy video evidence shows the unverified state, rec
     assert.deepEqual(authResult, { ok: true, error: null });
     await cdp.send('Page.navigate', { url: `${baseUrl}#/research` });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('在线工作区 · 已同步')`), { label: 'authenticated online mode' });
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P38 旧视频恢复')`), { label: 'seeded project loaded' });
+    // 正文文本出现不等于工作台挂载：目标 tab 元素存在才是可点击的真实生产状态。
+    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P38 旧视频恢复') && Boolean(document.querySelector('[data-destination-tab="analyze"]'))`), { label: 'seeded project loaded', diagnose: () => pageSnapshot(cdp) });
 
     // 分析目的地：旧证据状态 —— 横幅 + 唯一主操作「重新采集媒体并分析」，零 Qwen。
     await cdp.evaluate(`document.querySelector('[data-destination-tab="analyze"]').click()`);
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('[data-testid="p38-media-notice"]'))`), { label: 'P38 media notice' });
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-destination-tab="analyze"]').classList.contains('active')`), { label: 'analyze tab active', diagnose: () => pageSnapshot(cdp) });
+    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('[data-testid="p38-media-notice"]'))`), { label: 'P38 media notice', diagnose: () => pageSnapshot(cdp) });
     const legacyState = await cdp.evaluate(`(() => ({
       notice: document.querySelector('[data-testid="p38-media-notice"]').innerText,
       primary: document.querySelector('.p36-cta-primary')?.textContent || '',
@@ -802,8 +868,9 @@ test('P38 production page: legacy video evidence shows the unverified state, rec
     assert.equal(boundary.calls.filter((c) => c.fn === 'p22' && c.action === 'analyze_persisted').length, 0, '恢复前零 Qwen 调用');
 
     // 点击恢复：严格顺序 collect_url → 一次 evidence.update → analyze_persisted。
+    await waitFor(() => cdp.evaluate(`(() => { const el = document.querySelector('.p38-rehydrate-cta'); return Boolean(el && !el.disabled); })()`), { label: 'rehydrate CTA enabled', diagnose: () => p38Diagnose(cdp, boundary) });
     await cdp.evaluate(`document.querySelector('.p38-rehydrate-cta').click()`);
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('预览 · 未保存') && [...document.querySelectorAll('button')].some((b) => b.textContent.includes('保存分析结果'))`), { label: 'rehydrate preview' });
+    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('预览 · 未保存') && [...document.querySelectorAll('button')].some((b) => b.textContent.includes('保存分析结果'))`), { label: 'rehydrate preview', diagnose: () => p38Diagnose(cdp, boundary) });
     const p38Calls = boundary.calls;
     assert.equal(p38Calls.filter((c) => c.fn === 'p22' && c.action === 'collect_url').length, 1, '恰好一次 collect_url');
     assert.equal(p38Calls.filter((c) => c.fn === 'command' && c.command === 'evidence.update').length, 1, '恰好一次 evidence.update');
@@ -826,11 +893,7 @@ test('P38 production page: legacy video evidence shows the unverified state, rec
 
     // 显式保存分析结果：逐 media_id 完整绑定。
     await cdp.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('保存分析结果')).click()`);
-    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('去创作'))`), { label: 'analysis saved' }).catch(async (error) => {
-      const diagnostic = await cdp.evaluate(`({ text: document.body.innerText.slice(0, 3000), buttons: [...document.querySelectorAll('button')].map((b) => b.textContent.trim()).filter(Boolean) })`);
-      error.message += `\nP38 browser diagnostic: ${JSON.stringify(diagnostic)}`;
-      throw error;
-    });
+    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('去创作'))`), { label: 'analysis saved', diagnose: () => p38Diagnose(cdp, boundary) });
     const saved = boundary.getProject();
     const savedAnalyses = saved.analyses.filter((row) => row.evidence_id === saved.evidence[0].id).sort((a, b) => b.version - a.version);
     const modelAnalysis = savedAnalyses[0];
@@ -842,9 +905,16 @@ test('P38 production page: legacy video evidence shows the unverified state, rec
 
     // 硬刷新：版本历史与 Knowledge Card 入口准确，旧 deterministic 不作为当前有效结果。
     await cdp.send('Page.reload', { ignoreCache: true });
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P38 旧视频恢复') && document.body.innerText.includes('在线工作区 · 已同步')`), { label: 'reload recovery' });
+    // 硬刷新必须等真实导航提交：旧文档在提交前仍可被 evaluate 命中（正文与
+    // 元素仍在），文本/元素等待可能在旧 DOM 上假通过，随后对新文档立即报
+    // Uncaught（历史失败签名）。提交后再等新文档 DOM 就绪与工作台挂载。
+    const navigationsBefore = mainFrameNavigations;
+    await waitFor(() => mainFrameNavigations > navigationsBefore, { label: 'hard reload navigation' });
+    await waitFor(() => cdp.evaluate(`document.readyState === 'complete' && document.body.innerText.includes('P38 旧视频恢复') && Boolean(document.querySelector('[data-destination-tab="analyze"]'))`), { label: 'reload recovery', diagnose: () => pageSnapshot(cdp) });
     await cdp.evaluate(`document.querySelector('[data-destination-tab="analyze"]').click()`);
-    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('去创作'))`), { label: 'reloaded analyze state' });
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-destination-tab="analyze"]').classList.contains('active')`), { label: 'analyze tab active after reload', diagnose: () => pageSnapshot(cdp) });
+    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('去创作'))`), { label: 'reloaded analyze state', diagnose: () => p38Diagnose(cdp, boundary) });
+    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p36-version-menu summary'))`), { label: 'version menu', diagnose: () => pageSnapshot(cdp) });
     await cdp.evaluate(`document.querySelector('.p36-version-menu summary').click()`);
     const history = await cdp.evaluate(`document.querySelector('.p36-version-menu').innerText`);
     assert.match(history, /v1/, '版本历史必须包含旧确定性分析 v1');

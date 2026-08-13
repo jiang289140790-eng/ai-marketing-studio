@@ -77,6 +77,14 @@ const OWNED_PATHS = new Set([
   'test/p29-multimodal-x-evidence.test.mjs',
   'test/p29-multimodal-x-evidence.browser.test.mjs',
   'docs/P29_MULTIMODAL_X_EVIDENCE_LOOP.md',
+  // P36 渐进式交互重设计新增授权路径（本里程碑）：所有权清单必须同步跟踪。
+  'src/components/integrated-workspace/P36ResearchDestinations.jsx',
+  'test/p21-guided-research.test.mjs',
+  'test/p32-hot-topic-search.browser.test.mjs',
+  'test/p32-reddit-topic-search.browser.test.mjs',
+  'test/p32-multipost-synthesis-brief.browser.test.mjs',
+  'test/p20-browser-online.test.mjs',
+  'test/p36-research-ux-redesign.test.mjs',
 ]);
 
 // P19 已验收迁移对账唯一允许的删除：5 个过时时间戳变体。
@@ -275,5 +283,8 @@ test('所有权与删除防护：仅授权路径发生受跟踪修改，无删�
 // ==============================================================================
 test('有界条目数量：OWNED_PATHS 不超过合理上限', () => {
   // P19 + P29 里程碑合法扩充授权路径（迁移对账 + 工作台服务 + 函数 + 测试 + 文档）。
-  assert.ok(OWNED_PATHS.size <= 60, `路径集过大: ${OWNED_PATHS.size}`);
+  // P36 adds one bounded destination component plus its real-browser regression
+  // coverage. Keep the sentinel tight enough to catch accidental whole-repo
+  // ownership expansion while accounting for the explicitly reviewed paths.
+  assert.ok(OWNED_PATHS.size <= 70, `路径集过大: ${OWNED_PATHS.size}`);
 });

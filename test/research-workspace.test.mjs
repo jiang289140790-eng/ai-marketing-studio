@@ -48,6 +48,15 @@ const OWNED_PATHS = new Set([
   'src/services/p19-workspace-service.js',
   'src/services/p19-server-write-adapter.js',
   'src/components/integrated-workspace/P19WorkbenchPanels.jsx',
+  // P36 渐进式交互重设计新增授权路径（本里程碑）：四目的地容器 + 采集面板改造。
+  'src/components/integrated-workspace/P22ResearchAssistPanel.jsx',
+  'src/components/integrated-workspace/P36ResearchDestinations.jsx',
+  'test/p21-guided-research.test.mjs',
+  'test/p32-hot-topic-search.browser.test.mjs',
+  'test/p32-reddit-topic-search.browser.test.mjs',
+  'test/p32-multipost-synthesis-brief.browser.test.mjs',
+  'test/p20-browser-online.test.mjs',
+  'test/p36-research-ux-redesign.test.mjs',
   // P19 迁移对账：2 个已验收规范文件替换了工作区中的旧版本（内容不一致）。
   'supabase/migrations/20260722023000_ops_execution_gateway.sql',
   'supabase/migrations/20260722033000_ops_business_tables_and_rls_hardening.sql',
@@ -309,20 +318,22 @@ test('hash 路由：#/research 直接解析为 research 页，构建与刷新可
   }
 });
 
-test('页面源码：P19 运营研究工作台（单项目操作链、本地草稿、执行标志恒 false、破坏性二次确认）', () => {
+test('页面源码：P36 运营研究工作台（四目的地、本地草稿、执行标志恒 false、破坏性二次确认）', () => {
   const source = readSource('src/pages/ResearchWorkspacePage.jsx');
-  // P19 主路径：单项目聚焦的工作链，不保留 P18 多面板浏览布局。
+  const destinations = readSource('src/components/integrated-workspace/P36ResearchDestinations.jsx');
+  // P36 主路径：单项目聚焦的四目的地工作台，不保留 P18 多面板浏览布局。
   assert.ok(source.includes('p19-workspace'), '页面必须作用域于 P19 工作台');
   assert.ok(source.includes('本地草稿'), '页面必须显式标注本地草稿');
   assert.ok(source.includes('createP19Store'), '页面必须使用有界本地存储');
   assert.ok(source.includes('P19FlagStrip'), '页面必须渲染四项执行标志');
-  assert.ok(source.includes('P19ChainProgress'), '页面必须渲染操作步骤进度');
-  assert.ok(source.includes('P19EvidenceList'), '页面必须提供证据管理');
-  assert.ok(source.includes('P19AnalysisList'), '页面必须提供确定性分析');
-  assert.ok(source.includes('P19CardList'), '页面必须提供知识卡');
-  assert.ok(source.includes('P19BriefSection'), '页面必须提供可审核 Brief');
-  assert.ok(source.includes('P19HandoffSection'), '页面必须提供交接包');
-  assert.ok(source.includes('P19LineageSection'), '页面必须提供世系审计');
+  assert.ok(source.includes('P36Destinations'), '页面必须挂载四目的地容器');
+  assert.ok(destinations.includes('P22CollectPanel'), '采集目的地必须提供智能采集面板');
+  assert.ok(destinations.includes('P19EvidenceList'), '手工证据管理必须保留（采集次级工具）');
+  assert.ok(destinations.includes('P19AnalysisList'), '全部分析记录必须保留（分析高级工具）');
+  assert.ok(destinations.includes('P19CardList'), '知识卡列表必须保留（产物）');
+  assert.ok(destinations.includes('P19BriefSection'), '产物必须提供可审核 Brief');
+  assert.ok(destinations.includes('P19HandoffSection'), '产物必须提供交接包');
+  assert.ok(destinations.includes('P19LineageSection'), '产物必须提供世系审计');
   assert.ok(source.includes('deriveHandoffPackage'), '页面必须经由唯一交接入口派生 P5 交接包');
   // 破坏性操作二次确认
   assert.ok(source.includes('P19ConfirmButton'), '页面必须使用二次确认按钮');
@@ -359,17 +370,26 @@ test('页面源码：归档只读门禁（归档后重载快照 + 编辑/分析/
   assert.ok(service.includes("'PROJECT_ARCHIVED'"), '服务层门禁必须使用同一有界错误码');
 });
 
-test('页面源码：项目切换不保留表单状态（key 绑定精确 (project.id, project.version) 确定性重挂载）', () => {
+test('页面源码：项目切换不保留瞬态状态（P36 目的地容器按 project.id 重挂载 + 页面级状态显式清空）', () => {
   const source = readSource('src/pages/ResearchWorkspacePage.jsx');
-  // 项目作用域整棵面板子树（档案表单/证据编辑与新增/Brief 理由与评论/确认臂）
-  // 必须以精确的 (project.id, project.version) 为 key 重挂载：切换项目或版本
-  // 递增时所有项目级本地状态随之重置，上一个项目的表单值绝不流入当前项目。
-  assert.ok(source.includes('key={`${project.id}:${project.version}`}'), '项目面板必须按 (id, version) 确定性重挂载');
+  const destinations = readSource('src/components/integrated-workspace/P36ResearchDestinations.jsx');
+  // P36 隔离契约第一层：目的地容器（采集输入/结果、选中来源/分析、分析预览、
+  // 草稿与保存标记等全部瞬态状态）以 key={project.id} 挂载，切换项目即整棵重挂载，
+  // 上一个项目的表单/选择值绝不流入当前项目。
+  assert.ok(source.includes('key={project.id}'), '目的地容器必须按 project.id 确定性重挂载');
   assert.ok(source.includes('p19-project-scope'), '项目作用域容器必须存在');
-  assert.ok(source.includes('P19ProjectForm'), '档案表单必须在作用域内');
-  assert.ok(source.includes('P19EvidenceList'), '证据列表必须在作用域内');
-  assert.ok(source.includes('P19BriefSection'), 'Brief 区必须在作用域内');
-  // 顶栏破坏性确认臂同样按 activeId 重挂载（切换项目时确认状态复位）。
+  assert.ok(destinations.includes('setCollectTopic'), '采集输入状态必须位于目的地容器内');
+  assert.ok(destinations.includes('setSelectedEvidenceId'), '选中来源状态必须位于目的地容器内');
+  assert.ok(destinations.includes('setSelectedAnalysisId'), '选中分析状态必须位于目的地容器内');
+  assert.ok(destinations.includes('setDrafts'), '草稿状态必须位于目的地容器内');
+  assert.ok(source.includes('P19ProjectForm'), '档案表单必须存在（更多菜单抽屉内）');
+  // P36 隔离契约第二层：页面级瞬态状态（热门搜索批次/综合结果/比较选择/草稿记录）
+  // 在 activeId 变化时显式清空，绝不跨项目复用旧结论。
+  assert.ok(source.includes('setHotSearchState(null)'), '切换项目必须清空热门搜索瞬态');
+  assert.ok(source.includes('setSynthesisOutcome(null)'), '切换项目必须清空综合结果');
+  assert.ok(source.includes('setComparedEvidenceIds([])'), '切换项目必须清空比较选择');
+  assert.ok(source.includes('setSavedDrafts([])'), '切换项目必须清空草稿记录');
+  // 顶栏破坏性确认臂按 activeId 重挂载（切换项目时确认状态复位）。
   assert.ok(source.includes('key={`archive-arm:${activeId}`}'), '归档确认臂必须按 activeId 复位');
   assert.ok(source.includes('key={`delete-arm:${activeId}`}'), '删除确认臂必须按 activeId 复位');
 });
@@ -383,12 +403,13 @@ test('页面源码：损坏存储恢复 UI（CORRUPT_STORE fail closed + 恢复�
   assert.ok(css.includes('.p19-recovery-hint'), '恢复指引样式必须存在于页面专属 CSS');
 });
 
-test('页面样式隔离：P19 工作台样式仅定义在页面专属 CSS 文件中', () => {
+test('页面样式隔离：P36 工作台样式仅定义在页面专属 CSS 文件中', () => {
   const css = readSource('src/pages/ResearchWorkspacePage.css');
   assert.ok(css.length > 1000, '页面 CSS 应有实质内容');
   assert.ok(css.includes('.p19-workspace'), 'CSS 必须作用域于 P19 工作台');
   assert.ok(css.includes('.p19-flag-strip'), 'CSS 必须包含执行标志样式');
-  assert.ok(css.includes('.p19-chain'), 'CSS 必须包含步骤链样式');
+  assert.ok(css.includes('.p36-tabs'), 'CSS 必须包含目的地导航样式');
+  assert.ok(css.includes('.p36-destination'), 'CSS 必须包含目的地布局样式');
   assert.ok(css.includes('.p19-panel'), 'CSS 必须包含面板样式');
   assert.ok(css.includes('.p19-evidence-item'), 'CSS 必须包含证据卡样式');
   assert.ok(css.includes('.p19-brief-actions'), 'CSS 必须包含 Brief 操作样式');

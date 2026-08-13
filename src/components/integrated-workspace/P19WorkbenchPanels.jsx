@@ -452,19 +452,24 @@ function ruleOutputText(rule) {
   return '—';
 }
 
-export function P19CardList({ project, workflow }) {
+export function P19CardList({ project, workflow, onSelectCard }) {
   const cards = project.knowledge_cards || [];
   return (
     <div className="p19-panel">
       <div className="p19-panel-head">
         <h3>知识卡（content_knowledge_card_v1）</h3>
-        <span className="p19-panel-note">共 {cards.length} 张 · 校验后才可进入 Brief</span>
+        <span className="p19-panel-note">共 {cards.length} 张 · 校验后才可进入 Brief{onSelectCard ? ' · 点击卡片查看完整详情' : ''}</span>
       </div>
       {cards.length === 0 && <p className="p19-empty-note">还没有知识卡。在分析卡片上点击「生成知识卡」。</p>}
       <ul className="p19-card-list">
         {cards.map((card) => (
           <li className="p19-card-item" key={card.id}>
             <div className="p19-card-top">
+              {onSelectCard ? (
+                <button className="p19-btn p19-btn-ghost p19-card-open" type="button" onClick={() => onSelectCard(card.id)} title="打开完整知识卡详情（媒体时间线/视觉影响/语义层/证据链接/生成指导/溯源）">
+                  查看详情 →
+                </button>
+              ) : <span />}
               <strong>{boundedText(card.source_observations.post_text, 60)}</strong>
               <P19Pill label={card.validation_status} tone="ok" />
             </div>
@@ -1415,7 +1420,7 @@ export function P32HotTopicSearchPanel({
     <div className="p32-search" aria-label="热门主题搜索">
       <div className="p32-search-head">
         <div>
-          <span className="p22-kicker">P32-B/D · 跨平台热门主题搜索</span>
+          <span className="p22-kicker">热门主题搜索</span>
           <h4>热门主题搜索（批量导入当前项目）</h4>
         </div>
         <span className="p32-search-mode-note">与「智能找资料」的单帖 URL 读取区分：本面板按关键词批量搜索 X 或 Reddit</span>

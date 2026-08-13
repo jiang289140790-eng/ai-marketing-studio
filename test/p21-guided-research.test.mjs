@@ -81,16 +81,19 @@ test('P21 fails safely to project setup and sends archived projects to lineage',
   assert.equal(archived.archived, true);
 });
 
-test('P21 production page binds progress navigation to real guided panels', async () => {
-  const source = await readFile(join(ROOT, 'src/pages/ResearchWorkspacePage.jsx'), 'utf8');
-  assert.match(source, /P19ChainProgress workflow=\{workflow\} onNavigateStep=\{handleNavigateStep\}/);
-  assert.match(source, /viewMode === P21_VIEW_MODES\.GUIDED/);
-  assert.match(source, /引导视图/);
-  assert.match(source, /完整视图/);
-
-  for (const panel of ['project', 'evidence', 'analysis', 'card', 'brief', 'handoff', 'lineage']) {
-    assert.match(source, new RegExp(`id="p21-step-${panel}" data-p21-step="${panel}"`));
-  }
+test('P21 guidance is preserved as a lightweight next-step hint bound to P36 destinations', async () => {
+  const page = await readFile(join(ROOT, 'src/pages/ResearchWorkspacePage.jsx'), 'utf8');
+  const destinations = await readFile(join(ROOT, 'src/components/integrated-workspace/P36ResearchDestinations.jsx'), 'utf8');
+  // P21 引导逻辑保留：推荐步骤 → 目的地映射，作为目的地导航区的轻量提示；
+  // 七步长链与引导/完整视图切换由四目的地导航取代。
+  assert.match(page, /deriveP21GuidedState\(\{ workflow, project \}\)/);
+  assert.match(page, /recommendedDestination=\{recommendedDestination\}/);
+  assert.match(page, /recommendedLabel=\{guidedState\.label\}/);
+  assert.match(destinations, /建议下一步：\{recommendedLabel\}/);
+  assert.match(destinations, /if \(stepId === 'analysis' \|\| stepId === 'card'\) return P36_DESTINATIONS\.ANALYZE/);
+  assert.match(destinations, /if \(stepId === 'brief' \|\| stepId === 'review' \|\| stepId === 'handoff' \|\| stepId === 'lineage'\) return P36_DESTINATIONS\.OUTPUTS/);
+  assert.match(destinations, /role: 'tablist'/);
+  assert.match(destinations, /data-destination-tab=\{meta\.id\}/);
 });
 
 test('P21 helper remains local-only and cannot activate execution capabilities', async () => {

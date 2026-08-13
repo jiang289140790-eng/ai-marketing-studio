@@ -434,14 +434,13 @@ test('P29 production page collects the two-image example post, renders real medi
     // 硬刷新：Evidence 的媒体、哈希和来源身份保持一致。
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('在线工作区 · 已同步') && document.body.innerText.includes('P29 双图示例')`), { label: 'reload recovery' });
-    // 引导视图只展示当前建议步骤的面板；切换到完整视图再核对全部面板。
-    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('完整视图')).click()`);
+    // P36 默认目的地为「采集」，保存后的来源卡直接可见（不再需要切换完整视图）。
     await waitFor(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length === 1`), { label: 'saved source card after reload' });
     const reloaded = await cdp.evaluate(`(() => {
       const card = document.querySelector('.p22-source-card');
       return {
         saved: card.innerText.includes('证据已保存'),
-        analysisReady: card.querySelector('button').textContent.includes('分析此帖子'),
+        analysisReady: card.querySelector('button').textContent.includes('去分析'),
         mediaCount: card.querySelectorAll('.p22-media-gallery img').length,
       };
     })()`);

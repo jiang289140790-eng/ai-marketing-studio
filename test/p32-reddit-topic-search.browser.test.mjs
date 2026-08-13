@@ -245,6 +245,10 @@ test('P32-D real browser: Reddit search, real metrics, deterministic sorting, sa
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P32-D Reddit 项目 A')`), { label: 'online project A' });
 
+    // P36 渐进式重设计：热门主题搜索是「采集」目的地的次级工具，先展开 details。
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-advanced summary')].find((s) => s.textContent.includes('更多采集方式')).click()`);
+    await delay(200);
+
     await cdp.evaluate(`(() => { const select = document.querySelector('select[aria-label="搜索平台"]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, 'reddit'); select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('input[aria-label="限定 subreddit"]'))`), { label: 'Reddit controls' });
     await cdp.evaluate(`(() => {

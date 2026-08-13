@@ -77,6 +77,14 @@ const OWNED_PATHS = new Set([
   'test/p29-multimodal-x-evidence.test.mjs',
   'test/p29-multimodal-x-evidence.browser.test.mjs',
   'docs/P29_MULTIMODAL_X_EVIDENCE_LOOP.md',
+  // P36 渐进式交互重设计新增授权路径（本里程碑）。
+  'src/components/integrated-workspace/P36ResearchDestinations.jsx',
+  'test/p21-guided-research.test.mjs',
+  'test/p32-hot-topic-search.browser.test.mjs',
+  'test/p32-reddit-topic-search.browser.test.mjs',
+  'test/p32-multipost-synthesis-brief.browser.test.mjs',
+  'test/p20-browser-online.test.mjs',
+  'test/p36-research-ux-redesign.test.mjs',
 ]);
 
 // P19 已验收迁移对账唯一允许的删除：5 个过时时间戳变体，由已验收规范文件替代。

@@ -200,6 +200,11 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
 
     await cdp.send('Page.navigate', { url: `${baseUrl}#/research` });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P32-C 浏览器综合项目')`), { label: 'seeded project' });
+    // P36 渐进式重设计：多帖比较位于「分析」目的地的高级工具区，先导航并展开。
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="analyze"]')][0].click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), { label: 'analyze destination' });
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-advanced summary')].find((s) => s.textContent.includes('多帖比较')).click()`);
+    await sleep(200);
     await waitFor(() => cdp.evaluate(`document.querySelectorAll('.p32-compare-chip input').length === 3`), { label: 'comparison choices' });
     const initial = await cdp.evaluate(`(() => ({
       overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -234,6 +239,10 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
       return { ok: Boolean(outcome), text: (outcome || error).textContent };
     })()`), { label: 'synthesis outcome or bounded error' });
     assert.equal(synthesisResult.ok, true, `synthesis failed in production UI: ${synthesisResult.text}`);
+    // P36：Brief 详情位于「产物」目的地，导航并选择 Brief 区。
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), { label: 'outputs destination' });
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((b) => b.innerText.includes('Brief')).click()`);
     await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p32-synthesis-brief-summary'))`), { label: 'pending Brief' });
     const persisted = await cdp.evaluate(`(() => {
       const store = JSON.parse(localStorage.getItem('p19_workspace_store_v1'));
@@ -257,6 +266,10 @@ test('P32-C real browser: select exact posts, synthesize knowledge and pending B
     assert.deepEqual(persisted.flags, { generation_executed: false, routing_executed: false, network_executed: false, publish_executed: false });
 
     await cdp.send('Page.reload');
+    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('[data-destination-tab="outputs"]'))`), { label: 'destinations after refresh' });
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), { label: 'outputs destination after refresh' });
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((b) => b.innerText.includes('Brief')).click()`);
     await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p32-synthesis-brief-summary'))`), { label: 'Brief after refresh' });
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.p32-compare-chip input:checked').length`), 0, 'transient selection clears on refresh');
 

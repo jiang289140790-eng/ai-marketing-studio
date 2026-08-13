@@ -146,19 +146,23 @@ test('P23 confirmed source becomes exact Evidence, deterministic Analysis and Kn
 test('P23/P24 production page performs confirmed Evidence → Analysis → Knowledge → Brief chain', () => {
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
   const panel = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
+  const destinations = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P36ResearchDestinations.jsx'), 'utf8');
   const pageCss = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.css'), 'utf8');
   assert.match(page, /addEvidence\(project, input\)/);
   assert.match(page, /handleSaveAnalysisPreview/);
   assert.match(page, /recordVersionedReanalysis/);
   assert.match(page, /saveContentDraftV2/);
-  assert.match(panel, /collectUrl\(topic\.trim\(\)\)/);
-  assert.match(panel, />保存证据</);
-  assert.match(panel, />保存分析结果</);
-  assert.match(panel, />根据分析生成相似帖子</);
-  assert.match(panel, /保存相似帖子草稿/);
+  // P36 渐进式重设计：单帖读取仍在采集面板；保存分析结果/相似帖草稿分别位于分析/创作目的地。
+  assert.match(panel, /'保存证据'/);
+  assert.match(destinations, /collectUrl\(topic\)/);
+  assert.match(destinations, /'保存分析结果'/);
+  assert.match(destinations, /根据分析生成相似帖子/);
+  assert.match(destinations, /保存相似帖子草稿/);
   assert.match(page, /DRAFT_SOURCE_BINDING_MISMATCH/);
   assert.doesNotMatch(panel, /保存\$\{sourceKind\}证据并生成分析/);
   assert.doesNotMatch(page, /recordAssistedAnalysis\(persistedEvidence/);
-  assert.match(page, /'p21-full-grid'/);
-  assert.match(pageCss, /p21-full-grid > #p21-step-project[\s\S]*p21-full-grid > #p21-step-evidence[\s\S]*grid-column: 1 \/ -1/);
+  // P36 布局取代旧引导/完整视图网格。
+  assert.match(destinations, /destination === P36_DESTINATIONS\.ANALYZE &&/);
+  assert.match(destinations, /destination === P36_DESTINATIONS\.CREATE &&/);
+  assert.match(pageCss, /\.p36-split/);
 });

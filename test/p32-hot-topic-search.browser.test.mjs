@@ -506,14 +506,14 @@ test('P32-B real production build: hot-topic search, five deterministic sorts, b
     })()`);
     await waitFor(() => cdp.evaluate(`!document.querySelector('.p19-create-panel button[type="submit"]').disabled`), { label: 'valid form' });
     await cdp.evaluate(`document.querySelector('.p19-create-panel button[type="submit"]').click()`);
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('P32-B 浏览器验证')`), { label: 'project created' });
+    await waitFor(() => boundary.projects.size === 1, { label: 'project created' });
     await delay(400);
     const projectId = [...boundary.projects.keys()][0];
     assert.ok(projectId, 'project persisted in mock store');
 
-    // 切到完整视图：证据导入后引导视图会切换到分析步骤并隐藏证据区，
-    // 完整视图保证后续搜索/证据库/比较等所有面板持续可见。
-    await cdp.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('完整视图')).click()`);
+    // P36 渐进式重设计：默认目的地「采集」。热门主题搜索是次级工具，先展开
+    // 「更多采集方式」details 再验证面板可见性。
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-advanced summary')].find((s) => s.textContent.includes('更多采集方式')).click()`);
     await delay(300);
 
     // 5) 两个面板都可见且清楚区分（热门主题搜索 vs 智能找资料单帖读取）
@@ -743,7 +743,11 @@ test('P32-B real production build: hot-topic search, five deterministic sorts, b
     assert.equal(await reanalyze('热门帖子 2'), true, '热门帖子 2 应有重新分析按钮');
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('Qwen 重新分析完成（第 1 个版本已追加')`), { label: 'reanalysis post-2 completed' });
 
-    // 14) P32-A 回归：多帖比较入口可见且可操作（选择 2 条 → 比较结果）
+    // 14) P32-A 回归：多帖比较入口可见且可操作（P36 中位于「分析」目的地的高级工具区）
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="analyze"]')][0].click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), { label: 'analyze destination' });
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-advanced summary')].find((s) => s.textContent.includes('多帖比较')).click()`);
+    await delay(200);
     await cdp.evaluate(`(() => {
       const chips = [...document.querySelectorAll('.p32-compare-chip input[type="checkbox"]')].slice(0, 2);
       chips.forEach((chip) => chip.click());
@@ -752,7 +756,9 @@ test('P32-B real production build: hot-topic search, five deterministic sorts, b
     const compareVisible = await cdp.evaluate(`document.body.innerText.includes('多帖比较') && Boolean(document.querySelector('.p32-compare-results'))`);
     assert.equal(compareVisible, true, '多帖比较应可见且可操作');
 
-    // 15) P22 回归：单帖 URL 读取仍可用（智能找资料面板）
+    // 15) P22 回归：单帖 URL 读取仍可用（P36 中位于「采集」目的地）
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="collect"]')][0].click()`);
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'collect'`), { label: 'collect destination' });
     const urlInput = await cdp.evaluate(`Boolean([...document.querySelectorAll('input[aria-label="帖子链接或研究主题"]')].length > 0)`);
     assert.equal(urlInput, true, '单帖 URL 读取输入应存在');
     await cdp.evaluate(`(() => {

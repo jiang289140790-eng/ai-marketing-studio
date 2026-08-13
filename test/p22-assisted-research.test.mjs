@@ -421,9 +421,14 @@ test('P26 removes cumulative daily caps while retaining bounded, service-only co
 test('P35 production UI contains explicit result, save and draft wording', () => {
   {
   const component = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
+  const destinations = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P36ResearchDestinations.jsx'), 'utf8');
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
-  for (const label of ['保存证据', '保存分析结果', '根据分析生成相似帖子', '保存相似帖子草稿', '预览 · 未保存', '追加新版分析']) assert.match(component, new RegExp(label));
-  assert.match(component, /只保存为草稿；不会自动审核、路由或发布/);
+  // P36 渐进式重设计：采集面板保留「保存证据」；分析/创作目的地的
+  // 「保存分析结果」「相似帖子草稿」「预览 · 未保存」「追加新版分析」等在
+  // P36ResearchDestinations.jsx 中，各自独立显示、独立确认。
+  assert.match(component, /保存证据/);
+  for (const label of ['保存分析结果', '根据分析生成相似帖子', '保存相似帖子草稿', '预览 · 未保存', '追加新版分析']) assert.match(destinations, new RegExp(label));
+  assert.match(destinations, /只保存为草稿；不会自动审核、路由或发布/);
   assert.doesNotMatch(component, /保存图文证据并生成分析|保存视频证据并生成分析/);
   assert.match(page, /saveContentDraftV2/);
   }
@@ -1217,50 +1222,82 @@ async function p35BrowserAcceptance() {
     const token = `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${payload}.p35`;
     assert.equal(await cdp.evaluate(`(async()=>{const {supabase}=await import('/ai-marketing-studio/src/services/supabase-client.js');const {data,error}=await supabase.auth.setSession({access_token:${JSON.stringify(token)},refresh_token:'p35-refresh'});return !error&&Boolean(data?.session?.user?.id)})()`), true);
     await cdp.send('Page.navigate', { url: `${baseUrl}#/research` });
-    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-project-bar button.p19-btn-primary'))`), 'research page');
-    await cdp.evaluate(`document.querySelector('.p19-project-bar button.p19-btn-primary').click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p36-projectbar button.p19-btn-primary'))`), 'research page');
+    await cdp.evaluate(`document.querySelector('.p36-projectbar button.p19-btn-primary').click()`);
     await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-create-panel form'))`), 'project form');
     await cdp.evaluate(`(()=>{const values=['P35 Browser Project','Analyze and draft','Research team','X','No auto publish'];const fields=[...document.querySelectorAll('.p19-create-panel input,.p19-create-panel textarea')];fields.forEach((field,index)=>{const proto=field.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(field,values[index]);field.dispatchEvent(new Event('input',{bubbles:true}))});document.querySelector('.p19-create-panel button[type="submit"]').click()})()`);
-    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p22-query-row input')) && !document.querySelector('.p22-query-row button').disabled`), 'P35 capability');
-    await cdp.evaluate(`(()=>{const input=document.querySelector('.p22-query-row input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'https://x.com/example/status/1900000000000000002');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p22-query-row input'))`), 'P35 capability');
+    await cdp.evaluate(`(()=>{const input=document.querySelector('.p22-query-row input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'Project A');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await browserWait(() => cdp.evaluate(`!document.querySelector('.p22-query-row button').disabled`), 'capability ready');
+    await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length===1 && document.body.innerText.includes('Project A source preview')`), 'A preview');
+    await cdp.evaluate(`(()=>{const input=document.querySelector('.p22-query-row input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'https://x.com/example/status/1900000000000000999');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'failing exact URL mode');
+    await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelectorAll('.p22-source-card').length===0`), 'stale preview cleared at request start');
+    await browserWait(() => cdp.evaluate(`document.querySelector('[role="alert"]')?.textContent.includes('发布时间格式无效')`), 'bounded collection error');
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('Project A source preview')`), false);
+    await cdp.evaluate(`(()=>{const input=document.querySelector('.p22-query-row input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,'https://x.com/example/status/1900000000000000002');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p22-query-row button').textContent.includes('读取这条帖子')`), 'exact URL mode');
     await cdp.evaluate(`document.querySelector('.p22-query-row button').click()`);
     await browserWait(() => cdp.evaluate(`document.querySelector('.p22-source-card')?.innerText.includes('Exact URL source')`), 'source preview');
     await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.trim()==='保存证据').click()`);
-    await browserWait(() => boundary.getProject()?.evidence.length === 1, 'evidence saved');
-    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('分析此帖子'));return Boolean(button)&&!button.disabled})()`), 'analysis action');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('分析此帖子')).click()`);
-    await browserWait(() => cdp.evaluate(`document.querySelector('.p35-analysis-result')?.innerText.includes('预览 · 未保存')`), 'unsaved analysis preview');
+    await browserWait(() => boundary.getProject()?.evidence.length === 1 && boundary.getProject()?.analyses.length === 0, 'evidence-only persistence');
+    // P36：保存来源后去「分析」目的地，主操作「分析此来源」→ 预览不落库 → 显式保存为第 1 版。
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="analyze"]')][0].click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), 'analyze destination');
+    await browserWait(() => cdp.evaluate(`(()=>{const button=document.querySelector('.p36-cta-primary');return Boolean(button)&&button.textContent.includes('分析此来源')&&!button.disabled})()`), 'analysis action');
+    await cdp.evaluate(`document.querySelector('.p36-cta-primary').click()`);
+    try {
+      await browserWait(() => cdp.evaluate(`document.querySelector('.p36-analysis-detail') && document.querySelector('.p36-cta-primary')?.textContent.includes('保存分析结果')`), 'unsaved analysis preview');
+    } catch (cause) {
+      const diagnostic = await cdp.evaluate(`({ alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '', detail: document.querySelector('.p36-analysis-detail')?.innerText || '', primary: document.querySelector('.p36-cta-primary')?.textContent || '' })`);
+      throw new Error(`${cause.message}; browser=${JSON.stringify(diagnostic)}; requests=${JSON.stringify(boundary.p22Requests)}`);
+    }
     assert.equal(boundary.getProject().analyses.length, 0, 'preview must not persist analysis');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('保存分析结果')).click()`);
+    await cdp.evaluate(`document.querySelector('.p36-cta-primary').click()`);
     await browserWait(() => boundary.getProject()?.analyses.length === 1, 'analysis version saved');
-    await browserWait(() => cdp.evaluate(`document.querySelector('.p35-analysis-result')?.innerText.includes('已保存 · 第 1 版')`), 'saved analysis rendered');
-    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('根据分析生成相似帖子'));return Boolean(button)&&!button.disabled})()`), 'generate similar action ready');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('根据分析生成相似帖子')).click()`);
-    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p35-similar-draft textarea'))`), 'editable similar draft');
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p36-analysis-detail')?.innerText.includes('第 1 版')`), 'saved analysis rendered');
+    // P36：主操作变为「去创作」→ 生成相似帖子 → 编辑 → 显式保存草稿。
+    await browserWait(() => cdp.evaluate(`(()=>{const button=document.querySelector('.p36-cta-primary');return Boolean(button)&&button.textContent.includes('去创作')})()`), 'go create action');
+    await cdp.evaluate(`document.querySelector('.p36-cta-primary').click()`);
+    await browserWait(() => cdp.evaluate(`(()=>{const button=document.querySelector('.p36-cta-primary');return Boolean(button)&&button.textContent.includes('根据分析生成相似帖子')&&!button.disabled})()`), 'generate similar action ready');
+    await cdp.evaluate(`document.querySelector('.p36-cta-primary').click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p36-draft-editor textarea'))`), 'editable similar draft');
     const draftBoundAnalysis = clonePlain(boundary.getProject().analyses[0]);
-    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('追加新版分析'));return Boolean(button)&&!button.disabled})()`), 'append analysis action ready');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('追加新版分析')).click()`);
-    await browserWait(() => cdp.evaluate(`document.querySelector('.p35-analysis-result')?.innerText.includes('预览 · 未保存')`), 'second analysis preview');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('保存分析结果')).click()`);
+    // P36：回「分析」→ 版本与历史菜单 → 追加新版分析 → 第 2 版（保留第 1 版身份）。
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="analyze"]')][0].click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), 'analyze back');
+    await cdp.evaluate(`document.querySelector('.p36-version-menu summary').click()`);
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p36-version-menu button')].find((node)=>node.textContent.includes('追加新版分析'));return Boolean(button)&&!button.disabled})()`), 'append analysis action ready');
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-version-menu button')].find((button)=>button.textContent.includes('追加新版分析')).click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('.p36-analysis-detail') && document.querySelector('.p36-cta-primary')?.textContent.includes('保存分析结果')`), 'second analysis preview');
+    await cdp.evaluate(`document.querySelector('.p36-cta-primary').click()`);
     await browserWait(() => boundary.getProject()?.analyses.length === 2, 'second analysis version saved');
     assert.notEqual(boundary.getProject().analyses[1].id, draftBoundAnalysis.id, 'new analysis must retain a distinct version identity');
     await sleep(800);
-    const secondVersionState = await cdp.evaluate(`({ result: document.querySelector('.p35-analysis-result')?.innerText || '', draft: Boolean(document.querySelector('.p35-similar-draft textarea')), alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '' })`);
-    assert.equal(secondVersionState.result.includes('已保存 · 第 2 版'), true, JSON.stringify(secondVersionState));
+    // P36：旧版本绑定的未保存草稿绝不能被静默改绑到新版本：选择第 2 版时编辑器必须
+    // 空并要求显式重新生成；旧草稿不落库。
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="create"]')][0].click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'create'`), 'create destination');
+    await cdp.evaluate(`(()=>{const item=[...document.querySelectorAll('.p36-rail-item')].find((node)=>node.innerText.includes('v2'));if(item)item.click();})()`);
+    await sleep(300);
+    const secondVersionState = await cdp.evaluate(`({ draft: Boolean(document.querySelector('.p36-draft-editor textarea')), primary: document.querySelector('.p36-cta-primary')?.textContent || '', alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '' })`);
     assert.equal(secondVersionState.draft, false, 'an unsaved draft bound to an older analysis must be discarded instead of silently rebound');
+    assert.equal(secondVersionState.primary, '根据分析生成相似帖子', 'must require explicit regeneration against the new analysis');
     assert.equal(boundary.contentRows.length, 0, 'discarding the stale draft must not persist anything');
-    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p22-source-card button')].find((node)=>node.textContent.includes('根据分析生成相似帖子'));return Boolean(button)&&!button.disabled})()`), 'regenerate against second analysis');
-    await cdp.evaluate(`[...document.querySelectorAll('.p22-source-card button')].find((button)=>button.textContent.includes('根据分析生成相似帖子')).click()`);
-    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p35-similar-draft textarea'))`), 'second-version draft');
-    await cdp.evaluate(`(()=>{const field=document.querySelector('.p35-similar-draft textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'用户编辑后的全新帖子正文。');field.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await browserWait(() => cdp.evaluate(`(()=>{const button=document.querySelector('.p36-cta-primary');return Boolean(button)&&!button.disabled})()`), 'regenerate against second analysis');
+    await cdp.evaluate(`document.querySelector('.p36-cta-primary').click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p36-draft-editor textarea'))`), 'second-version draft');
+    await cdp.evaluate(`(()=>{const field=document.querySelector('.p36-draft-editor textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'用户编辑后的全新帖子正文。');field.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await sleep(600);
-    const saveDraftState = await cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p35-similar-draft button')].find((node)=>node.textContent.includes('保存相似帖子草稿'));return {exists:Boolean(button),disabled:button?.disabled||false,text:button?.textContent||'',alert:document.querySelector('[role="alert"]')?.textContent||''}})()`);
+    const saveDraftState = await cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p36-draft-editor button')].find((node)=>node.textContent.includes('保存相似帖子草稿'));return {exists:Boolean(button),disabled:button?.disabled||false,text:button?.textContent||'',alert:document.querySelector('[role="alert"]')?.textContent||''}})()`);
     assert.deepEqual(saveDraftState, { exists: true, disabled: false, text: '保存相似帖子草稿', alert: '' });
-    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p35-similar-draft button')].find((node)=>node.textContent.includes('保存相似帖子草稿'));return Boolean(button)&&!button.disabled})()`), 'save draft action ready');
-    await cdp.evaluate(`[...document.querySelectorAll('.p35-similar-draft button')].find((button)=>button.textContent.includes('保存相似帖子草稿')).click()`);
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('.p36-draft-editor button')].find((node)=>node.textContent.includes('保存相似帖子草稿'));return Boolean(button)&&!button.disabled})()`), 'save draft action ready');
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-draft-editor button')].find((button)=>button.textContent.includes('保存相似帖子草稿')).click()`);
     await sleep(600);
     if (boundary.contentRows.length === 0) {
-      const draftState = await cdp.evaluate(`({ alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '', draft: document.querySelector('.p35-similar-draft')?.innerText || '' })`);
+      const draftState = await cdp.evaluate(`({ alert: document.querySelector('[role="alert"]')?.textContent || '', status: document.querySelector('[role="status"]')?.textContent || '', draft: document.querySelector('.p36-draft-editor')?.innerText || '' })`);
       assert.fail(`draft save did not reach persistence boundary: ${JSON.stringify(draftState)}`);
     }
     await browserWait(() => boundary.contentRows.length === 1, 'draft saved');
@@ -1272,8 +1309,50 @@ async function p35BrowserAcceptance() {
     assert.equal(references.analysis_reference.analysis_id, boundary.getProject().analyses[1].id);
     assert.equal(references.analysis_reference.analysis_version, boundary.getProject().analyses[1].version);
     assert.equal(references.analysis_reference.fingerprint, boundary.getProject().analyses[1].fingerprint);
-    assert.equal(await cdp.evaluate(`document.querySelector('.p35-similar-draft')?.innerText.includes('已保存到内容库')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('.p36-draft-editor')?.innerText.includes('已保存到内容库')`), true);
     assert.deepEqual(boundary.p22Requests.filter((row) => ['analyze_persisted', 'generate_similar'].includes(row.action)).map((row) => row.action), ['analyze_persisted', 'generate_similar', 'analyze_persisted', 'generate_similar']);
+    // P36：产物 → 知识卡 → 生成 → Brief → 人工批准 → 交接包（在线评审持久化）。
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="analyze"]')][0].click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'analyze'`), 'analyze for card');
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find((node)=>node.textContent.trim()==='生成知识卡');return Boolean(button)&&!button.disabled})()`), 'make card action');
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button)=>button.textContent.trim()==='生成知识卡').click()`);
+    await browserWait(() => boundary.getProject()?.knowledge_cards.length === 1, 'knowledge card persisted');
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), 'outputs destination');
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((button)=>button.innerText.includes('Brief')).click()`);
+    await browserWait(() => cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find((node)=>node.textContent.includes('生成内容策划草案'));return Boolean(button)&&!button.disabled})()`), 'assemble brief action');
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button)=>button.textContent.includes('生成内容策划草案')).click()`);
+    await browserWait(() => boundary.getProject()?.brief?.status === 'pending_review', 'online pending Brief');
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-brief-actions textarea'))`), 'pending Brief review controls');
+    await cdp.evaluate(`(()=>{const field=document.querySelector('.p19-brief-actions textarea');const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(field,'来源和知识绑定已人工核对');field.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await browserWait(() => cdp.evaluate(`!([...document.querySelectorAll('button')].find((button)=>button.textContent.includes('批准草案'))?.disabled)`), 'review rationale gate');
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button)=>button.textContent.includes('批准草案')).click()`);
+    await browserWait(() => boundary.getProject()?.brief?.status === 'approved', 'online manual Brief approval');
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((button)=>button.innerText.includes('交接包')).click()`);
+    await browserWait(() => cdp.evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.includes('派生 P5 交接包') && !b.disabled)`), 'handoff action');
+    await cdp.evaluate(`[...document.querySelectorAll('button')].find((button)=>button.textContent.includes('派生 P5 交接包')).click()`);
+    await browserWait(() => Boolean(boundary.getProject()?.handoff), 'online handoff persistence');
+    assert.equal(boundary.getProject().handoff.brief_provenance.brief_id, boundary.getProject().brief.id);
+    assert.equal(boundary.getProject().handoff.evidence_provenance.local_only, false);
+    assert.deepEqual(boundary.getProject().handoff.execution_flags, { generation_executed: false, routing_executed: false, network_executed: false, publish_executed: false });
+    await cdp.send('Page.reload', { ignoreCache: true });
+    // P36：交接包详情位于「产物」目的地，刷新后导航并选择交接包区再核对持久化。
+    await sleep(500);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('[data-destination-tab="outputs"]'))`), 'destinations after reload');
+    await cdp.evaluate(`[...document.querySelectorAll('[data-destination-tab="outputs"]')][0].click()`);
+    await browserWait(() => cdp.evaluate(`document.querySelector('[data-active-destination]')?.getAttribute('data-active-destination') === 'outputs'`), 'outputs destination after reload');
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-rail-item')].find((button)=>button.innerText.includes('交接包')).click()`);
+    await browserWait(() => cdp.evaluate(`document.body.textContent.includes(${JSON.stringify(`handoff-pkg-${'4'.repeat(24)}`)})`), 'handoff survives reload');
+    await browserWait(() => cdp.evaluate(`!document.querySelector('.p36-projectbar button.p19-btn-primary').disabled`), 'review save completion');
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p36-projectbar button.p19-btn-primary')) && !document.querySelector('.p36-projectbar button.p19-btn-primary').disabled`), 'new project B action');
+    await cdp.evaluate(`document.querySelector('.p36-projectbar button.p19-btn-primary').click()`);
+    await browserWait(() => cdp.evaluate(`Boolean(document.querySelector('.p19-create-panel form'))`), 'project B form');
+    await cdp.evaluate(`(() => { const fields=[...document.querySelectorAll('.p19-create-panel input, .p19-create-panel textarea')]; const values=${JSON.stringify(['Project B', 'Clean scope', 'Team B', 'Research', 'No A state'])}; fields.forEach((field,index)=>{ const proto=field.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto,'value').set.call(field,values[index]); field.dispatchEvent(new Event('input',{bubbles:true})); }); document.querySelector('.p19-create-panel button[type="submit"]').click(); })()`);
+    await browserWait(() => cdp.evaluate(`document.body.innerText.includes('Project B') && document.querySelectorAll('.p22-source-card').length===0`), 'B clean state');
+    assert.equal(await cdp.evaluate(`document.querySelector('.p22-query-row input').value`), '', 'B must not inherit A collect input');
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('Project A source preview')`), false);
+    assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect').length, 1);
+    assert.equal(boundary.p22Requests.filter((item) => item.action === 'collect_url').length, 2);
   } finally {
     cdp?.close(); await stopProcess(edge); await stopProcess(vite); await new Promise((resolve) => boundary.server.close(resolve)); await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
@@ -1299,7 +1378,10 @@ class BrowserCdp {
   }
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'Browser evaluation failed');
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Browser evaluation failed';
+      throw new Error(detail);
+    }
     return result.result?.value;
   }
   close() { this.socket.close(); }
@@ -1478,11 +1560,14 @@ test('P35 request and draft contracts are exact, bounded and source-bound', () =
 
 test('P35 UI presents an explicit result/save/generate/edit workflow', () => {
   const component = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P22ResearchAssistPanel.jsx'), 'utf8');
+  const destinations = readFileSync(join(process.cwd(), 'src', 'components', 'integrated-workspace', 'P36ResearchDestinations.jsx'), 'utf8');
   const page = readFileSync(join(process.cwd(), 'src', 'pages', 'ResearchWorkspacePage.jsx'), 'utf8');
-  for (const label of ['保存证据', '保存分析结果', '根据分析生成相似帖子', '保存相似帖子草稿', '预览 · 未保存', '追加新版分析']) assert.match(component, new RegExp(label));
-  assert.match(component, /只保存为草稿；不会自动审核、路由或发布/);
+  // P36 渐进式重设计：采集面板保留「保存证据」；其余 P35 文案位于分析/创作目的地。
+  assert.match(component, /保存证据/);
+  for (const label of ['保存分析结果', '根据分析生成相似帖子', '保存相似帖子草稿', '预览 · 未保存', '追加新版分析']) assert.match(destinations, new RegExp(label));
+  assert.match(destinations, /只保存为草稿；不会自动审核、路由或发布/);
   assert.doesNotMatch(component, /保存图文证据并生成分析|保存视频证据并生成分析/);
   assert.match(page, /saveContentDraftV2/);
-  assert.match(page, /onSaveAnalysis=\{handleSaveAnalysisPreview\}/);
+  assert.match(page, /onSaveAnalysisPreview=\{handleSaveAnalysisPreview\}/);
   assert.match(page, /onSaveDraft=\{handleSaveSimilarDraft\}/);
 });

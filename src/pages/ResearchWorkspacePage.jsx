@@ -38,54 +38,25 @@ import {
 } from '../services/p19-workspace-service.js';
 import { buildLineageAudit, buildProjectLineageGraph } from '../services/p19-lineage.js';
 import {
-  P19AnalysisList,
-  P19BriefSection,
-  P19CardList,
-  P19ChainProgress,
   P19ConfirmButton,
-  P19EvidenceList,
   P19FlagStrip,
-  P19HandoffSection,
-  P19LineageSection,
   P19ProjectForm,
-  P32EvidenceLibrary,
-  P32ComparisonView,
-  P32HotTopicSearchPanel,
 } from '../components/integrated-workspace/P19WorkbenchPanels.jsx';
+import {
+  P36Destinations,
+  destinationForRecommendedStep,
+} from '../components/integrated-workspace/P36ResearchDestinations.jsx';
 import { getStagingRuntimeStatus } from '../services/staging-preview-service.js';
 import { useAuth } from '../contexts/auth-context.js';
 import { createP20OnlineStore } from '../services/p20-online-store.js';
 import { isServerWriteEnabled } from '../services/p19-server-write-adapter.js';
-import {
-  deriveP21GuidedState,
-  normalizeP21ViewMode,
-  panelIdForP21Step,
-  P21_VIEW_MODE_KEY,
-  P21_VIEW_MODES,
-} from '../services/p21-guided-workspace.js';
-import { P22ResearchAssistPanel } from '../components/integrated-workspace/P22ResearchAssistPanel.jsx';
+import { deriveP21GuidedState } from '../services/p21-guided-workspace.js';
 import { createP22ResearchAssistClient, evidenceMatchesSearchIdentity, findP22Evidence, importSearchSelection, toP19EvidenceInput } from '../services/p22-research-assist.js';
 import { saveContentDraftV2 } from '../services/content-creation-service.js';
 import './ResearchWorkspacePage.css';
 
 const ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
 const IMPORT_MAX_TEXT = 2 * 1024 * 1024;
-
-function readP21ViewMode() {
-  try {
-    return normalizeP21ViewMode(globalThis.localStorage?.getItem(P21_VIEW_MODE_KEY));
-  } catch {
-    return P21_VIEW_MODES.GUIDED;
-  }
-}
-
-function writeP21ViewMode(mode) {
-  try {
-    globalThis.localStorage?.setItem(P21_VIEW_MODE_KEY, normalizeP21ViewMode(mode));
-  } catch {
-    // Presentation preference failure must never affect project persistence.
-  }
-}
 
 function readActiveProjectId() {
   try {
@@ -203,8 +174,7 @@ export function ResearchWorkspacePage() {
   const [notice, setNotice] = useState(null);
   const [creating, setCreating] = useState(false);
   const [pendingImport, setPendingImport] = useState(null);
-  const [viewMode, setViewMode] = useState(readP21ViewMode);
-  const [selectedStep, setSelectedStep] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [comparedEvidenceIds, setComparedEvidenceIds] = useState([]);
   // P32-C 综合成功结果（选中条数/卡复用新建数/Brief 版本与状态）。切换项目、
   // 归档、刷新或证据变化后严格重新验证；绝不跨项目复用旧结论。
@@ -212,6 +182,9 @@ export function ResearchWorkspacePage() {
   // P32-B 热门主题搜索瞬态状态：{ batch, selectedIds }。切换项目、重新搜索或刷新后
   // 立即失效，绝不把旧选择导入其他项目（见 activeId 清理 effect）。
   const [hotSearchState, setHotSearchState] = useState(null);
+  // 本会话已保存的相似帖子草稿记录（绑定项目/来源/分析身份）。切换项目即清空，
+  // 产物页只展示当前项目内的草稿，绝不跨项目泄漏。
+  const [savedDrafts, setSavedDrafts] = useState([]);
   const importInputRef = useRef(null);
 
   const stagingStatus = useMemo(() => getStagingRuntimeStatus(), []);
@@ -330,12 +303,14 @@ export function ResearchWorkspacePage() {
 
   useEffect(() => {
     setPendingImport(null);
-    setSelectedStep(null);
+    setProfileOpen(false);
     setComparedEvidenceIds([]);
     // P32-C：切换项目必须清空综合结果（旧结论绝不跨项目复用）。
     setSynthesisOutcome(null);
     // P32-B：切换项目必须清空瞬态搜索结果与选择，防止旧选择导入其他项目。
     setHotSearchState(null);
+    // 切换项目必须清空本会话草稿记录（草稿绑定项目/来源/分析身份，绝不跨项目展示）。
+    setSavedDrafts([]);
   }, [activeId]);
 
   const selectProject = useCallback(async (id) => {
@@ -520,9 +495,19 @@ export function ResearchWorkspacePage() {
     const result = { title: draft.title, main_copy: draft.main_copy, cta: draft.cta, hashtags: draft.hashtags, visual_description: draft.media_idea, platform: evidence.provenance?.source_platform || 'x', content_format: 'text_only' };
     const intent = { platform: evidence.provenance?.source_platform || 'x', content_format: 'text_only', language_mode: 'zh-cn', length_profile: 'short', tone: 'engaging', cta_policy: draft.cta ? 'required' : 'none', hashtag_policy: draft.hashtags?.length ? 'required_3_5' : 'none' };
     const saved = await saveContentDraftV2(userId, result, intent, { source: 'p35_saved_analysis_similar_post', model: draft.model, usage: draft.usage || {}, evidenceReferences: [{ evidence_id: evidence.id, fingerprint: evidence.fingerprint }], knowledgeReferences: { analysis_id: analysis.id, analysis_version: analysis.version, fingerprint: analysis.fingerprint } });
+    setSavedDrafts((previous) => [...previous.slice(-19), {
+      projectId: project?.id || evidence.project_id || null,
+      evidenceId: evidence.id,
+      evidenceLabel: evidence.label,
+      analysisId: analysis.id,
+      analysisVersion: analysis.version,
+      title: draft.title,
+      savedId: saved?.id || 'saved',
+      savedAt: new Date().toISOString(),
+    }]);
     setNotice('相似帖子草稿已保存到内容库；未审核、未路由、未发布。');
     return saved;
-  }, [userId]);
+  }, [project, userId]);
 
   const handleUpdateEvidence = useCallback((evidenceId, patch) => {
     return run('编辑证据', () => updateEvidence(project, evidenceId, patch), { notice: '证据已更新；下游分析/知识卡/Brief 已标记为过时。' });
@@ -813,9 +798,9 @@ export function ResearchWorkspacePage() {
       };
       setSynthesisOutcome(outcome);
       setNotice(`综合完成：选中 ${outcome.selected} 条 · 知识卡复用 ${outcome.reused} / 新建或重建 ${outcome.created} · Brief 第 ${outcome.briefVersion} 版（待人工审核 pending）。无模型调用、无额外费用；不会自动批准或生成交接包。`);
-      // 成功后滚动/聚焦到 Brief。
+      // 成功后滚动/聚焦到目的地导航（Brief 详情位于「产物」目的地）。
       globalThis.setTimeout(() => {
-        const section = globalThis.document?.getElementById('p21-step-brief');
+        const section = globalThis.document?.querySelector('.p36-tabs');
         if (section) {
           section.scrollIntoView({ behavior: 'smooth', block: 'start' });
           section.setAttribute('tabindex', '-1');
@@ -1033,35 +1018,28 @@ export function ResearchWorkspacePage() {
   }, [lineage, project]);
 
   const archiveDisabled = !project || project.status === 'archived';
+  // P21 引导逻辑保留：建议下一步（推荐步骤 → 目的地）作为导航区的轻量提示，
+  // 不再渲染七步长链或引导/完整视图切换。
   const guidedState = useMemo(
-    () => deriveP21GuidedState({ workflow, project, requestedStep: selectedStep }),
-    [workflow, project, selectedStep],
+    () => deriveP21GuidedState({ workflow, project }),
+    [workflow, project],
   );
-
-  const changeViewMode = useCallback((mode) => {
-    const normalized = normalizeP21ViewMode(mode);
-    setViewMode(normalized);
-    writeP21ViewMode(normalized);
-  }, []);
-
-  const handleNavigateStep = useCallback((stepId) => {
-    setSelectedStep(stepId);
-    if (viewMode !== P21_VIEW_MODES.FULL) return;
-    const panelId = panelIdForP21Step(stepId);
-    globalThis.requestAnimationFrame?.(() => {
-      globalThis.document?.getElementById(`p21-step-${panelId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }, [viewMode]);
+  const recommendedDestination = useMemo(() => {
+    if (!project || project.status === 'archived') return null;
+    if (guidedState.complete) return null;
+    return destinationForRecommendedStep(guidedState.recommended_step_id);
+  }, [guidedState, project]);
 
   return (
-    <section className="p19-workspace" aria-label="运营研究工作台">
-      {/* 顶部：标题 + 项目选择 + 执行标志 + 存储状态 */}
-      <header className="p19-topbar">
-        <div className="p19-topbar-left">
-          <p className="p19-eyebrow">运营研究工作台 · 本地草稿模式</p>
-          <h2>研究项目 → 证据 → 来源分析 → 知识卡 → 内容策划草案 → 交接包 → 世系审计</h2>
+    <section className="p19-workspace p36-workspace" aria-label="运营研究工作台">
+      {/* 顶部：标题 + 存储状态 + 项目选择 + 新建 + 更多（导入/导出/归档/删除/档案） */}
+      <header className="p36-topbar">
+        <div className="p36-topbar-left">
+          <p className="p19-eyebrow">研究工作台</p>
+          <h2>{project ? `${project.topic.slice(0, 40)}` : '采集 → 分析 → 创作 → 产物'}</h2>
+          <p className="p36-topbar-sub">{onlineMode ? '在线工作区 · 保存经命令边界写入当前账号' : '本机草稿 · 有界本地存储，未写入任何后端'}</p>
         </div>
-        <div className="p19-topbar-right">
+        <div className="p36-topbar-right">
           <span className={`p19-storage-chip ${onlineMode ? 'online' : 'off'}`} data-testid="p20-persistence-mode">
             {onlineMode ? '在线工作区 · 已同步' : '本机草稿 · 未上传'}
           </span>
@@ -1076,47 +1054,76 @@ export function ResearchWorkspacePage() {
         </div>
       </header>
 
-      <div className="p19-strip">
+      {/* 执行标志：四项恒为 false，始终可见（紧凑单行） */}
+      <div className="p19-strip p36-flagline">
         <P19FlagStrip />
       </div>
 
-      <section className="p21-guide" aria-label="智能引导">
-        <div className="p21-guide-copy">
-          <p className="p19-eyebrow">智能引导 · 确定性下一步</p>
-          <h3>{guidedState.complete ? '研究链已完成' : `当前建议：${guidedState.label}`}</h3>
-          <p>{guidedState.guidance}</p>
-          {guidedState.recommended_step_id !== guidedState.active_step_id && (
-            <small>建议步骤：{guidedState.recommended_step_id}；当前正在查看：{guidedState.active_step_id}</small>
-          )}
-        </div>
-        <div className="p21-view-switch" role="group" aria-label="工作台显示模式">
-          <button
-            className={`p19-btn ${viewMode === P21_VIEW_MODES.GUIDED ? 'p19-btn-primary' : 'p19-btn-ghost'}`}
-            type="button"
-            aria-pressed={viewMode === P21_VIEW_MODES.GUIDED}
-            onClick={() => changeViewMode(P21_VIEW_MODES.GUIDED)}
+      {/* 项目选择 + 新建 + 更多菜单（导入/导出/归档/删除/项目档案等次级操作） */}
+      <div className="p36-projectbar" role="toolbar" aria-label="项目操作">
+        <label className="p19-field p19-project-select">
+          <span>当前研究项目</span>
+          <select
+            value={activeId || ''}
+            onChange={(event) => selectProject(event.target.value)}
+            disabled={busy || projects.length === 0}
+            aria-label="选择研究项目"
           >
-            引导视图
-          </button>
-          <button
-            className={`p19-btn ${viewMode === P21_VIEW_MODES.FULL ? 'p19-btn-primary' : 'p19-btn-ghost'}`}
-            type="button"
-            aria-pressed={viewMode === P21_VIEW_MODES.FULL}
-            onClick={() => changeViewMode(P21_VIEW_MODES.FULL)}
-          >
-            完整视图
-          </button>
-          {project && (
-            <button
-              className="p19-btn p19-btn-ghost"
-              type="button"
-              onClick={() => handleNavigateStep(guidedState.recommended_step_id)}
-            >
-              回到建议步骤
+            {projects.length === 0 && <option value="">（无项目）</option>}
+            {projects.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.topic.slice(0, 32)}{item.status === 'archived' ? '（已归档）' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={() => { setCreating(true); setError(null); }} title={onlineMode ? '新建一个在线研究项目' : '新建一个本地研究项目'}>
+          + 新建项目
+        </button>
+        <details className="p36-more" aria-label="更多项目操作">
+          <summary className="p19-btn p19-btn-ghost">更多</summary>
+          <div className="p36-more-menu">
+            <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || !project} onClick={() => { setProfileOpen(true); }} title="编辑研究主题/目标/受众/渠道/约束（保存后下游 Brief/交接包标记过时）">
+              项目档案
             </button>
-          )}
-        </div>
-      </section>
+            <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || !project} onClick={handleExport} title="导出当前项目的本地备份 JSON（仅备份）">
+              导出备份
+            </button>
+            <button className="p19-btn p19-btn-ghost" type="button" disabled={busy} onClick={() => importInputRef.current && importInputRef.current.click()} title="从本地备份 JSON 恢复项目（校验版本/指纹/绑定/标志）">
+              导入备份
+            </button>
+            <P19ConfirmButton
+              key={`archive-arm:${activeId}`}
+              label={project && project.status === 'archived' ? '已归档' : '归档项目'}
+              confirmLabel="确认归档？"
+              onConfirm={() => handleArchiveProject(activeId)}
+              disabled={busy || archiveDisabled}
+              disabledReason="归档后项目不再参与工作链（可在列表中选择查看）"
+              tone="ghost"
+            />
+            <P19ConfirmButton
+              key={`delete-arm:${activeId}`}
+              label="删除项目"
+              confirmLabel="确认永久删除？"
+              onConfirm={() => handleDeleteProject(activeId)}
+              disabled={busy || !project}
+              disabledReason="删除会从本地存储移除整个项目（建议先导出备份）"
+              tone="danger"
+            />
+            <p className="p19-meta-line p36-more-note">
+              导入/导出只是本地备份，不是发布任务；破坏性操作仍需二次确认。
+            </p>
+          </div>
+        </details>
+        <input
+          ref={importInputRef}
+          className="p19-file-input-hidden"
+          type="file"
+          accept=".json,application/json"
+          onChange={(event) => handleImportFile(event.target.files && event.target.files[0])}
+          aria-label="选择项目备份 JSON 文件"
+        />
+      </div>
 
       {error && (
         <div className="p19-error-banner" role="alert">
@@ -1137,61 +1144,6 @@ export function ResearchWorkspacePage() {
           <button className="p19-btn p19-btn-ghost" type="button" onClick={() => setNotice(null)} aria-label="关闭提示">×</button>
         </div>
       )}
-
-      {/* 项目选择器 + 项目操作 */}
-      <div className="p19-project-bar" role="toolbar" aria-label="项目操作">
-        <label className="p19-field p19-project-select">
-          <span>当前研究项目</span>
-          <select
-            value={activeId || ''}
-            onChange={(event) => selectProject(event.target.value)}
-            disabled={busy || projects.length === 0}
-            aria-label="选择研究项目"
-          >
-            {projects.length === 0 && <option value="">（无项目）</option>}
-            {projects.map((item) => (
-              <option value={item.id} key={item.id}>
-                {item.topic.slice(0, 32)}{item.status === 'archived' ? '（已归档）' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={() => { setCreating(true); setError(null); }} title={onlineMode ? '新建一个在线研究项目' : '新建一个本地研究项目'}>
-          + 新建项目
-        </button>
-        <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || !project} onClick={handleExport} title="导出当前项目的本地备份 JSON（仅备份）">
-          导出备份
-        </button>
-        <button className="p19-btn p19-btn-ghost" type="button" disabled={busy} onClick={() => importInputRef.current && importInputRef.current.click()} title="从本地备份 JSON 恢复项目（校验版本/指纹/绑定/标志）">
-          导入备份
-        </button>
-        <input
-          ref={importInputRef}
-          className="p19-file-input-hidden"
-          type="file"
-          accept=".json,application/json"
-          onChange={(event) => handleImportFile(event.target.files && event.target.files[0])}
-          aria-label="选择项目备份 JSON 文件"
-        />
-        <P19ConfirmButton
-          key={`archive-arm:${activeId}`}
-          label={project && project.status === 'archived' ? '已归档' : '归档项目'}
-          confirmLabel="确认归档？"
-          onConfirm={() => handleArchiveProject(activeId)}
-          disabled={busy || archiveDisabled}
-          disabledReason="归档后项目不再参与工作链（可在列表中选择查看）"
-          tone="ghost"
-        />
-        <P19ConfirmButton
-          key={`delete-arm:${activeId}`}
-          label="删除项目"
-          confirmLabel="确认永久删除？"
-          onConfirm={() => handleDeleteProject(activeId)}
-          disabled={busy || !project}
-          disabledReason="删除会从本地存储移除整个项目（建议先导出备份）"
-          tone="danger"
-        />
-      </div>
 
       {pendingImport && (
         <div className="p19-panel p19-import-confirm" role="alert" aria-label={pendingImport.online ? '确认导入在线工作区' : '确认替换同 ID 项目'}>
@@ -1227,9 +1179,11 @@ export function ResearchWorkspacePage() {
       {!project && projects.length === 0 && !creating && (
         <div className="p19-welcome">
           <p className="p19-eyebrow">开始第一条研究链</p>
-          <h3>创建你的第一个本地研究项目</h3>
+          <h3>创建你的第一个研究项目</h3>
           <p className="p19-meta-line">
-            全部内容保存在本浏览器（localStorage）：不采集、不调用模型、不生成、不路由、不发布；四项执行标志恒为 false。
+            {onlineMode
+              ? '项目保存在当前账号的在线工作区：先建项目，再采集来源、保存分析、生成草稿，每步都由你确认。'
+              : '全部内容保存在本浏览器（localStorage）：不采集、不调用模型、不生成、不路由、不发布；四项执行标志恒为 false。'}
           </p>
           <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={() => setCreating(true)}>
             + 新建项目
@@ -1238,71 +1192,59 @@ export function ResearchWorkspacePage() {
       )}
 
       {project && (
-        // 项目作用域确定性重挂载：key 绑定精确的 (project.id, project.version)。
-        // 切换项目或版本递增时整棵面板子树重挂载，项目档案/证据编辑与新增/
-        // Brief 理由与评论等全部项目级本地表单状态随之重置，绝不留存上一个
-        // 项目的表单值（A 项目的值绝不会覆盖 B 项目）。
-        <div className="p19-project-scope" key={`${project.id}:${project.version}`}>
-          <P19ChainProgress workflow={workflow} onNavigateStep={handleNavigateStep} />
-          <div className={`p19-grid ${viewMode === P21_VIEW_MODES.GUIDED ? 'p21-guided-grid' : 'p21-full-grid'}`}>
-            <section className="p21-step-panel" id="p21-step-project" data-p21-step="project" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'project'}>
-              <P19ProjectForm key={`${project.id}:${project.version}`} project={project} onSave={handleSaveProfile} busy={busy} />
-            </section>
-            <section className="p21-step-panel" id="p21-step-evidence" data-p21-step="evidence" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'evidence'}>
-              {onlineMode && <P22ResearchAssistPanel key={project.id} project={project} workflow={workflow} busy={busy} onSaveEvidence={handleSaveAssistedEvidence} onSaveAnalysis={handleSaveAnalysisPreview} onSaveDraft={handleSaveSimilarDraft} />}
-              {onlineMode && (
-                <P32HotTopicSearchPanel
-                  key={project.id}
-                  project={project}
-                  busy={busy}
-                  client={assistClient}
-                  searchState={hotSearchState}
-                  onSearchStateChange={setHotSearchState}
-                  onImport={handleImportHotSearch}
-                  importError={error}
-                />
-              )}
-              <P32EvidenceLibrary
-                project={project}
-                workflow={workflow}
-                onReanalyze={handleVersionedReanalyze}
-                onMakeCard={handleMakeCard}
-                busy={busy}
-              />
-              <P19EvidenceList
-                project={project}
-                onAdd={handleAddEvidence}
-                onUpdate={handleUpdateEvidence}
-                onRemove={handleRemoveEvidence}
-                onAnalyze={handleRunAnalysis}
-                busy={busy}
-              />
-            </section>
-            <section className="p21-step-panel" id="p21-step-compare" data-p21-step="compare" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'compare'}>
-              <P32ComparisonView
-                project={project}
-                selectedIds={comparedEvidenceIds}
-                onSelectionChange={setComparedEvidenceIds}
-                onSynthesize={handleSynthesizeBrief}
-                busy={busy}
-                outcome={synthesisOutcome}
-              />
-            </section>
-            <section className="p21-step-panel" id="p21-step-analysis" data-p21-step="analysis" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'analysis'}>
-              <P19AnalysisList project={project} onMakeCard={handleMakeCard} busy={busy} />
-            </section>
-            <section className="p21-step-panel" id="p21-step-card" data-p21-step="card" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'card'}>
-              <P19CardList project={project} workflow={workflow} />
-            </section>
-            <section className="p21-step-panel" id="p21-step-brief" data-p21-step="brief" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'brief'}>
-              <P19BriefSection project={project} workflow={workflow} onAssemble={handleAssembleBrief} onDecide={handleDecide} busy={busy} onlineMode={onlineMode} />
-            </section>
-            <section className="p21-step-panel" id="p21-step-handoff" data-p21-step="handoff" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'handoff'}>
-              <P19HandoffSection project={project} workflow={workflow} onDerive={handleDeriveHandoff} onDownload={handleExport} busy={busy} />
-            </section>
-            <section className="p21-step-panel" id="p21-step-lineage" data-p21-step="lineage" hidden={viewMode !== P21_VIEW_MODES.FULL && guidedState.active_panel_id !== 'lineage'}>
-              <P19LineageSection row={activeRow} graph={graph} projects={projects} />
-            </section>
+        // 项目作用域：P36Destinations 以 key={project.id} 挂载 —— 切换项目时
+        // 整棵目的地子树重挂载，采集输入/结果、选中来源/分析、分析预览、草稿与
+        // 保存标记全部重置，绝不留存上一个项目的瞬态状态（A 项目绝不泄漏到 B）。
+        // 页面级瞬态状态（热门搜索批次、综合结果、草稿记录）由 activeId effect
+        // 显式清空，形成第二道隔离。
+        <div className="p19-project-scope" key={project.id}>
+          <P36Destinations
+            key={project.id}
+            project={project}
+            workflow={workflow}
+            onlineMode={onlineMode}
+            busy={busy}
+            assistClient={assistClient}
+            onSaveEvidence={handleSaveAssistedEvidence}
+            onSaveAnalysisPreview={handleSaveAnalysisPreview}
+            onReanalyze={handleVersionedReanalyze}
+            onRunDeterministic={handleRunAnalysis}
+            onMakeCard={handleMakeCard}
+            onSaveDraft={handleSaveSimilarDraft}
+            hotSearchState={hotSearchState}
+            onHotSearchStateChange={setHotSearchState}
+            onImportHotSearch={handleImportHotSearch}
+            importError={error}
+            comparedEvidenceIds={comparedEvidenceIds}
+            onComparedSelectionChange={setComparedEvidenceIds}
+            synthesisOutcome={synthesisOutcome}
+            onSynthesize={handleSynthesizeBrief}
+            onAddEvidence={handleAddEvidence}
+            onUpdateEvidence={handleUpdateEvidence}
+            onRemoveEvidence={handleRemoveEvidence}
+            onAssembleBrief={handleAssembleBrief}
+            onDecide={handleDecide}
+            onDeriveHandoff={handleDeriveHandoff}
+            onDownload={handleExport}
+            activeRow={activeRow}
+            graph={graph}
+            projects={projects}
+            savedDrafts={savedDrafts}
+            recommendedDestination={recommendedDestination}
+            recommendedLabel={guidedState.label}
+          />
+        </div>
+      )}
+
+      {profileOpen && project && (
+        <div className="p36-settings-overlay" role="presentation" onClick={() => setProfileOpen(false)}>
+          <div className="p36-settings-drawer" role="dialog" aria-label="项目档案设置" onClick={(event) => event.stopPropagation()}>
+            <div className="p36-settings-head">
+              <h3>项目档案</h3>
+              <button className="p19-btn p19-btn-ghost" type="button" onClick={() => setProfileOpen(false)} aria-label="关闭项目档案">×</button>
+            </div>
+            <P19ProjectForm key={project.id} project={project} onSave={handleSaveProfile} busy={busy} />
+            <p className="p19-meta-line">编辑档案并保存后，下游 Brief/交接包会自动标记为过时并要求重新生成。</p>
           </div>
         </div>
       )}

@@ -274,12 +274,16 @@ test('real production route persists online create across reload and surfaces a 
 
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('在线工作区 · 已同步') && document.body.innerText.includes('P20 跨浏览器研究')`), { label: 'server project after reload' });
-    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p19-form button[type="submit"]'))`), { label: 'project profile form after reload' });
+    // P36 渐进式重设计：项目档案位于「更多」菜单的抽屉中，先打开抽屉。
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-more summary')].find((s) => s.textContent.includes('更多')).click()`);
+    await delay(150);
+    await cdp.evaluate(`[...document.querySelectorAll('.p36-more-menu button')].find((b) => b.textContent.includes('项目档案')).click()`);
+    await waitFor(() => cdp.evaluate(`Boolean(document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]'))`), { label: 'project profile form after reload' });
 
     // 未修改的档案是明确 no-op：按钮禁用并显示原因，不生成空 project.update，
     // 更不能落入 ONLINE_COMMAND_MISSING 的误报。
     const noChangeState = await cdp.evaluate(`(() => {
-      const button = document.querySelector('.p19-form button[type="submit"]');
+      const button = document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]');
       return { disabled: button.disabled, text: button.textContent, title: button.title };
     })()`);
     assert.deepEqual(noChangeState, {
@@ -291,21 +295,21 @@ test('real production route persists online create across reload and surfaces a 
 
     // 真实字段修改必须映射到唯一 project.update，保存成功后以服务端权威修订重置表单。
     await cdp.evaluate(`(() => {
-      const field = document.querySelector('.p19-form textarea');
+      const field = document.querySelector('.p36-settings-drawer .p19-form textarea');
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, '验证在线保存、刷新读取和无修改 no-op');
       field.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
-    await waitFor(() => cdp.evaluate(`!document.querySelector('.p19-form button[type="submit"]').disabled`), { label: 'project profile dirty' });
-    await cdp.evaluate(`document.querySelector('.p19-form button[type="submit"]').click()`);
+    await waitFor(() => cdp.evaluate(`!document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]').disabled`), { label: 'project profile dirty' });
+    await cdp.evaluate(`document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]').click()`);
     await waitFor(() => cdp.evaluate(`document.body.innerText.includes('项目档案已保存')`), { label: 'project update saved' });
     assert.equal(boundary.requests.filter((item) => item.body.command === 'project.update').length, 1);
-    assert.equal(await cdp.evaluate(`document.querySelector('.p19-form textarea').value`), '验证在线保存、刷新读取和无修改 no-op');
-    assert.equal(await cdp.evaluate(`document.querySelector('.p19-form button[type="submit"]').disabled`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('.p36-settings-drawer .p19-form textarea').value`), '验证在线保存、刷新读取和无修改 no-op');
+    assert.equal(await cdp.evaluate(`document.querySelector('.p36-settings-drawer .p19-form button[type="submit"]').disabled`), true);
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('无法将本次修改绑定到唯一在线命令')`), false);
 
     boundary.failNext('PROJECT_REVISION_STALE', '项目已被另一会话更新，请刷新后重试。');
     await cdp.evaluate(`(() => {
-      const field = document.querySelector('.p19-form input[type="text"]');
+      const field = document.querySelector('.p36-settings-drawer .p19-form input[type="text"]');
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, '冲突更新');
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.closest('form').querySelector('button[type="submit"]').click();

@@ -51,7 +51,7 @@ import { useAuth } from '../contexts/auth-context.js';
 import { createP20OnlineStore } from '../services/p20-online-store.js';
 import { isServerWriteEnabled } from '../services/p19-server-write-adapter.js';
 import { deriveP21GuidedState } from '../services/p21-guided-workspace.js';
-import { createP22ResearchAssistClient, evidenceMatchesSearchIdentity, findP22Evidence, importSearchSelection, toP19EvidenceInput } from '../services/p22-research-assist.js';
+import { createP22ResearchAssistClient, assessMediaAnalyzability, evidenceMatchesSearchIdentity, findP22Evidence, importSearchSelection, rehydrateEvidenceMediaAndAnalyze, toP19EvidenceInput } from '../services/p22-research-assist.js';
 import { saveContentDraftV2 } from '../services/content-creation-service.js';
 import './ResearchWorkspacePage.css';
 
@@ -96,7 +96,7 @@ function buildOnlineCommand(previous, next) {
     const before = previousEvidence.get(item.id);
     if (before.fingerprint !== item.fingerprint) {
       const evidencePatch = {};
-      for (const field of ['source_url', 'label', 'platform', 'content_text', 'media_metadata', 'source_metadata', 'media_assets']) {
+      for (const field of ['source_url', 'label', 'platform', 'content_text', 'recorded_at', 'provenance', 'media_metadata', 'source_metadata', 'media_assets']) {
         if (JSON.stringify(before[field]) !== JSON.stringify(item[field])) evidencePatch[field] = item[field];
       }
       return { command: 'evidence.update', payload: { project_id: previous.id, evidence_id: item.id, expected_fingerprint: before.fingerprint, patch: evidencePatch } };
@@ -536,6 +536,12 @@ export function ResearchWorkspacePage() {
     try {
       const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
       if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要重新分析的证据不存在。');
+      // P38 失败关闭：旧合同媒体（URL 哈希/t.co/非白名单/类型失配/缺内容字节）
+      // 不得直接交给 Qwen —— 必须先原位恢复媒体（重新采集媒体并分析）。
+      const mediaGate = assessMediaAnalyzability(evidence);
+      if (!mediaGate.analyzable) {
+        throw workbenchError('P38_MEDIA_NOT_VERIFIED', `该来源的媒体尚未完成安全验证（${String(mediaGate.issues[0] || '旧媒体绑定').slice(0, 120)}）：请先在「分析」页点击「重新采集媒体并分析」恢复媒体后再重新分析。`);
+      }
       const item = {
         id: evidence.provenance?.source_id || evidence.id,
         source_url: evidence.source_url,
@@ -604,6 +610,60 @@ export function ResearchWorkspacePage() {
       setBusy(false);
     }
   }, [assistClient, onlineMode, onlineStore, project, reloadProjects, store]);
+
+  /**
+   * P38 一键「重新采集媒体并分析」：旧合同媒体（URL 哈希/t.co/非白名单/类型
+   * 失配/缺内容字节）在原位恢复后才会调用 Qwen。
+   *
+   * 完整链（顺序严格，任一步失败立即失败关闭且零 Qwen 调用）：
+   * collect_url（仅一次，规范 source_url）→ 唯一身份绑定 → 一次
+   * evidence.update（不创建新证据；版本 +1、指纹变化，下游旧分析/知识卡/
+   * Brief/交接按现有合同失效或过时）→ 权威在线读取确认同一 evidence_id 的
+   * 新版本与媒体指纹 → analyze_persisted → 结果仅预览（由用户确认保存）。
+   * 需登录在线工作区：重新采集与 Qwen 均经已认证命令边界执行。
+   */
+  const handleRehydrateAndAnalyze = useCallback(async (evidenceId) => {
+    if (!project || project.status === 'archived') {
+      setError({ code: 'PROJECT_ARCHIVED', message: '项目已归档，不能恢复媒体或重新分析。' });
+      return null;
+    }
+    if (!onlineMode) {
+      setError({ code: 'P38_ONLINE_REQUIRED', message: '重新采集媒体需要登录在线工作区（经已认证命令边界原位升级）。' });
+      return null;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await rehydrateEvidenceMediaAndAnalyze({
+        project,
+        evidenceId,
+        client: assistClient,
+        updateEvidenceFn: updateEvidence,
+        buildCommandFn: buildOnlineCommand,
+        executeCommandFn: (command, payload, options) => onlineStore.execute(command, payload, options),
+      });
+      setProject(result.project);
+      await reloadProjects();
+      setNotice('媒体已重新采集并通过安全验证；同一证据已原位升级（版本与媒体指纹更新），Qwen 分析结果预览中，确认后才会保存。');
+      return result;
+    } catch (cause) {
+      // 在线部分失败后重载权威项目：响应丢失但写入已成功的情况绝不误报。
+      if (onlineMode && project?.id) {
+        try {
+          const recovered = await onlineStore.getProject(project.id);
+          setProject(recovered);
+        } catch {
+          // 保留原始有界错误；后续显式刷新仍然可用。
+        }
+      }
+      const message = cause && cause.bounded ? cause.message : String((cause && cause.message) || cause).slice(0, 300);
+      setError({ code: (cause && cause.code) || 'P38_REHYDRATION_FAILED', message });
+      throw cause;
+    } finally {
+      setBusy(false);
+    }
+  }, [assistClient, onlineMode, onlineStore, project, reloadProjects]);
 
   /**
    * P32-B 批量导入所选搜索结果到当前项目：先在前端工作区层面原子重验证
@@ -1208,6 +1268,7 @@ export function ResearchWorkspacePage() {
             onSaveEvidence={handleSaveAssistedEvidence}
             onSaveAnalysisPreview={handleSaveAnalysisPreview}
             onReanalyze={handleVersionedReanalyze}
+            onRehydrateAndAnalyze={handleRehydrateAndAnalyze}
             onRunDeterministic={handleRunAnalysis}
             onMakeCard={handleMakeCard}
             onSaveDraft={handleSaveSimilarDraft}

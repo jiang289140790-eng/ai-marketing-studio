@@ -20,7 +20,7 @@ import {
   parseCommandRequest,
 } from '../supabase/functions/p19-workspace-command/command-core.mjs';
 import { verifyJwtToken, DEFAULT_JWT_ISSUER, DEFAULT_JWT_AUDIENCE } from '../supabase/functions/p19-workspace-command/jwt-verify.mjs';
-import { clonePlain, fingerprintOf } from '../src/services/p19-contracts.js';
+import { clonePlain, fingerprintOf, sha256Hex } from '../src/services/p19-contracts.js';
 import { assembleBrief, deriveHandoffPackage } from '../src/services/p19-workspace-service.js';
 
 const USER_A = '44444444-4444-4444-8444-444444444444';
@@ -1067,4 +1067,44 @@ test('修订守卫：归档冲突（旧修订上的归档）返回 PROJECT_REVIS
   assert.equal(staleArchive.ok, false, JSON.stringify(staleArchive));
   assert.equal(staleArchive.code, 'PROJECT_REVISION_STALE');
   assert.equal(db._state.projects.get(`${USER_A}:${projectId}`).status, 'active', '旧修订上的归档不得执行');
+});
+
+test('P38 evidence.update refreshes same-identity provenance and verifies the new proof', async () => {
+  const db = memoryDb();
+  const role = { user_id: USER_A, access_role: 'operator' };
+  const created = await executeCommand({ ...request('project.create', { project: { topic: 'P38', objective: 'rehydrate', audience: 'qa', channel: 'X', constraints: [] } }, 'p38-project'), ...role }, { db });
+  const projectId = created.entity.id;
+  const content = 'same persisted X post';
+  const contentSha = await sha256Hex(content);
+  const sourceUrl = 'https://x.com/example/status/2087399629654524194';
+  const provenance = {
+    schema_version: 'p22_apify_evidence_provenance_v1', manual: false, method: 'apify_public_collection',
+    provider: 'apify:xquik/x-tweet-scraper', source_platform: 'x', source_id: 'p38-source', external_id: '2087399629654524194',
+    source_url: sourceUrl, run_id: 'old-run', collected_at: '2026-08-12T00:00:00.000Z', usage_total_usd: 0.01,
+    budget_reservation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', content_sha256: contentSha,
+    collection_proof: `1999999999.${'a'.repeat(64)}`, statement: 'old verified proof',
+  };
+  const evidence = {
+    source_url: sourceUrl, label: 'video', platform: 'X 路 Apify', content_text: content, recorded_at: provenance.collected_at, provenance,
+    media_metadata: { filename: 'p38.txt', mime_type: 'text/plain; charset=utf-8', byte_size: 21, last_modified: provenance.collected_at, sha256: contentSha },
+    media_assets: [{ id: 'm-111111111111111111111111', tweet_id: provenance.external_id, external_id: provenance.external_id, canonical_tweet_url: sourceUrl, media_url: 'https://video.twimg.com/ext_tw_video/old.mp4', order: 0, kind: 'video', mime_type: 'video/mp4', dimensions: { width: 720, height: 1280 }, byte_size: null, hash: { algorithm: 'sha256', kind: 'url', value: 'a'.repeat(64) } }],
+  };
+  let verifiedProof = '';
+  const verify = async (_userId, record) => { verifiedProof = record.provenance.collection_proof; return true; };
+  const added = await executeCommand({ ...request('evidence.create', { project_id: projectId, evidence }, 'p38-create'), ...role }, { db, verifyP22Evidence: verify });
+  assert.equal(added.ok, true, JSON.stringify(added));
+  const before = db._state.evidence.find((row) => row.id === added.entity.id);
+  const refreshed = { ...provenance, run_id: 'new-run', collected_at: '2026-08-13T00:00:00.000Z', usage_total_usd: 0.02, budget_reservation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2', collection_proof: `1999999998.${'b'.repeat(64)}`, statement: 'new media-bound proof' };
+  const media = [{ id: 'm-222222222222222222222222', tweet_id: provenance.external_id, external_id: provenance.external_id, canonical_tweet_url: sourceUrl, media_url: 'https://video.twimg.com/ext_tw_video/new.mp4', order: 0, kind: 'video', mime_type: 'video/mp4', dimensions: { width: 720, height: 1280 }, byte_size: 4096, hash: { algorithm: 'sha256', kind: 'content', value: 'b'.repeat(64) } }];
+  const updated = await executeCommand({ ...request('evidence.update', { project_id: projectId, evidence_id: before.id, expected_fingerprint: before.fingerprint, patch: { recorded_at: refreshed.collected_at, provenance: refreshed, media_assets: media } }, 'p38-update'), ...role }, { db, verifyP22Evidence: verify });
+  assert.equal(updated.ok, true, JSON.stringify(updated));
+  assert.equal(verifiedProof, refreshed.collection_proof);
+  const after = db._state.evidence.find((row) => row.id === before.id);
+  assert.equal(after.version, before.version + 1);
+  assert.equal(after.provenance.run_id, 'new-run');
+  assert.equal(after.media_assets[0].hash.kind, 'content');
+
+  const rejected = await executeCommand({ ...request('evidence.update', { project_id: projectId, evidence_id: after.id, expected_fingerprint: after.fingerprint, patch: { provenance: { ...refreshed, external_id: 'wrong' } } }, 'p38-bad-identity'), ...role }, { db, verifyP22Evidence: verify });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.code, 'EVIDENCE_PROVENANCE_IDENTITY_MISMATCH');
 });

@@ -104,7 +104,7 @@ const COMMAND_FIELDS = Object.freeze({
 });
 
 const PROJECT_PATCH_FIELDS = ['topic', 'objective', 'audience', 'channel', 'constraints'];
-const EVIDENCE_PATCH_FIELDS = ['source_url', 'label', 'platform', 'content_text', 'media_metadata', 'source_metadata', 'media_assets'];
+const EVIDENCE_PATCH_FIELDS = ['source_url', 'label', 'platform', 'content_text', 'recorded_at', 'provenance', 'media_metadata', 'source_metadata', 'media_assets'];
 
 /** 证据表 required 列 recorded_at 的 ISO-8601 模式（与边界 timestamptz 转换一致）。 */
 const ISO8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
@@ -738,6 +738,28 @@ async function applyEvidenceUpdate(ctx) {
   if (patch.label !== undefined) next.label = String(patch.label).trim().slice(0, 200);
   if (patch.platform !== undefined) next.platform = String(patch.platform).trim().slice(0, 80);
   if (patch.content_text !== undefined) next.content_text = String(patch.content_text).slice(0, 5000);
+  if (patch.recorded_at !== undefined) next.recorded_at = String(patch.recorded_at).slice(0, 80);
+  if (patch.provenance !== undefined) {
+    if (!isPlainObject(patch.provenance)) {
+      return fail('EVIDENCE_PROVENANCE_INVALID', 'provenance 必须是对象，已失败关闭。', { entity: { type: 'evidence', id: evidenceId } });
+    }
+    const before = isPlainObject(record.provenance) ? record.provenance : {};
+    const incoming = patch.provenance;
+    const p22Refresh = before.schema_version === 'p22_apify_evidence_provenance_v1'
+      && before.manual === false
+      && incoming.schema_version === 'p22_apify_evidence_provenance_v1'
+      && incoming.manual === false;
+    const identityUnchanged = p22Refresh
+      && incoming.source_platform === before.source_platform
+      && incoming.source_id === before.source_id
+      && (incoming.external_id ?? null) === (before.external_id ?? null)
+      && incoming.source_url === before.source_url
+      && incoming.content_sha256 === before.content_sha256;
+    if (!identityUnchanged) {
+      return fail('EVIDENCE_PROVENANCE_IDENTITY_MISMATCH', '来源证明只能为同一 P22 证据身份原子刷新，已失败关闭。', { entity: { type: 'evidence', id: evidenceId } });
+    }
+    next.provenance = clonePlain(incoming);
+  }
   if (patch.media_metadata !== undefined) next.media_metadata = isPlainObject(patch.media_metadata) ? clonePlain(patch.media_metadata) : null;
   if (patch.source_metadata !== undefined) {
     if (patch.source_metadata === null) delete next.source_metadata;
@@ -746,6 +768,21 @@ async function applyEvidenceUpdate(ctx) {
   if (patch.media_assets !== undefined) {
     if (patch.media_assets === null) delete next.media_assets;
     else next.media_assets = clonePlain(patch.media_assets);
+  }
+  if (patch.provenance !== undefined) {
+    if (await sha256Hex(next.content_text) !== next.provenance.content_sha256) {
+      return fail('P22_EVIDENCE_HASH_MISMATCH', 'P22 证据正文与来源 SHA-256 不一致。', { entity: { type: 'evidence', id: evidenceId } });
+    }
+    if (typeof ctx.verifyP22Evidence !== 'function') {
+      return fail('P22_SOURCE_PROOF_UNVERIFIED', 'P22 服务端来源证明无法验证，已拒绝。', { entity: { type: 'evidence', id: evidenceId } });
+    }
+    try {
+      if (await ctx.verifyP22Evidence(ctx.userId, next) !== true) {
+        return fail('P22_SOURCE_PROOF_INVALID', 'P22 服务端来源证明无效，已拒绝。', { entity: { type: 'evidence', id: evidenceId } });
+      }
+    } catch {
+      return fail('P22_SOURCE_PROOF_INVALID', 'P22 服务端来源证明无效，已拒绝。', { entity: { type: 'evidence', id: evidenceId } });
+    }
   }
   const { valid, issues } = validateEvidenceRecord(next);
   if (!valid) return fail('EVIDENCE_INVALID', '更新后的证据未通过契约校验。', { entity: { type: 'evidence', id: evidenceId }, diagnostics: boundedDiagnostics(issues) });

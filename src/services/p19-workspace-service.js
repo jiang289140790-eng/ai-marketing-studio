@@ -415,6 +415,25 @@ export async function updateEvidence(project, evidenceId, patch, { now = () => n
   if (patch.label !== undefined) record.label = boundedSlice(patch.label, 200);
   if (patch.platform !== undefined) record.platform = boundedSlice(patch.platform, 80);
   if (patch.content_text !== undefined) record.content_text = boundedSlice(patch.content_text, MAX_STRING_LENGTH);
+  if (patch.recorded_at !== undefined) record.recorded_at = boundedSlice(patch.recorded_at, 80);
+  if (patch.provenance !== undefined) {
+    const before = record.provenance || {};
+    const incoming = patch.provenance;
+    const p22Refresh = before.schema_version === 'p22_apify_evidence_provenance_v1'
+      && before.manual === false
+      && incoming?.schema_version === 'p22_apify_evidence_provenance_v1'
+      && incoming?.manual === false;
+    const identityUnchanged = p22Refresh
+      && incoming.source_platform === before.source_platform
+      && incoming.source_id === before.source_id
+      && (incoming.external_id ?? null) === (before.external_id ?? null)
+      && incoming.source_url === before.source_url
+      && incoming.content_sha256 === before.content_sha256;
+    if (!identityUnchanged) {
+      throw workbenchError('EVIDENCE_PROVENANCE_IDENTITY_MISMATCH', '来源证明只能为同一 P22 证据身份原子刷新，已失败关闭。');
+    }
+    record.provenance = clonePlain(incoming);
+  }
   if (patch.media_metadata !== undefined) record.media_metadata = normalizeMediaMetadata(patch.media_metadata);
   if (patch.source_metadata !== undefined) {
     if (patch.source_metadata === null) {

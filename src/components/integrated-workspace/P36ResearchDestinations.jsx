@@ -22,7 +22,7 @@ import {
   getAllAnalysisVersionsForEvidence,
   getLatestAnalysisForEvidence,
 } from '../../services/p19-workspace-service.js';
-import { findP22Evidence, p22ItemFromEvidence } from '../../services/p22-research-assist.js';
+import { assessMediaAnalyzability, findP22Evidence, p22ItemFromEvidence } from '../../services/p22-research-assist.js';
 import { P19AnalysisList, P19CardList, P19EvidenceList } from './P19WorkbenchPanels.jsx';
 import { P32ComparisonView, P32EvidenceLibrary, P32HotTopicSearchPanel } from './P19WorkbenchPanels.jsx';
 import { P19BriefSection, P19HandoffSection, P19LineageSection } from './P19WorkbenchPanels.jsx';
@@ -101,10 +101,17 @@ function MediaNode({ asset }) {
     : <img src={asset.media_url} alt={`媒体 ${asset.order + 1}`} loading="lazy" {...common} />;
 }
 
-/** 来源媒体预览：视频带播放器、图片按顺序展示；与右侧结论同屏分栏。 */
+/**
+ * 来源媒体预览：真实媒体资产（视频播放器/图片）单独展示；帖子正文文本包
+ * （text/plain）明确标记为「帖子文本证据」，绝不把文本包伪称为视频元数据。
+ * P38：媒体绑定未通过严格安全验证（旧 URL 哈希/t.co/非白名单/类型失配/
+ * 缺内容字节）时显示有界提示，绝不显示不可解释的灰色死按钮。
+ */
 function P36MediaPreview({ evidence }) {
   const assets = Array.isArray(evidence.media_assets) ? evidence.media_assets : [];
   const mediaMeta = evidence.media_metadata;
+  const isTextPackage = Boolean(mediaMeta && typeof mediaMeta.mime_type === 'string' && mediaMeta.mime_type.startsWith('text/plain'));
+  const mediaGate = assessMediaAnalyzability(evidence);
   return (
     <div className="p36-media-preview" aria-label="来源媒体预览">
       <div className="p36-section-head">
@@ -112,14 +119,29 @@ function P36MediaPreview({ evidence }) {
         <span className="p19-panel-note">{assets.length} 项 · 按顺序绑定</span>
       </div>
       {assets.length > 0 && (
-        <div className="p36-media-grid" data-media-count={assets.length}>
-          {assets.map((asset) => <MediaNode key={asset.id} asset={asset} />)}
-        </div>
+        <>
+          <div className="p36-media-grid" data-media-count={assets.length}>
+            {assets.map((asset) => <MediaNode key={asset.id} asset={asset} />)}
+          </div>
+          {!mediaGate.analyzable && (
+            <p className="p38-media-unverified" role="status">
+              ⚠ 媒体绑定尚未完成安全验证（旧合同）：无法确认真实画面/声音内容，未通过验证前不会调用 Qwen。
+            </p>
+          )}
+        </>
       )}
       {assets.length === 0 && !mediaMeta && (
         <p className="p19-empty-note">该来源没有媒体资产（纯文本来源）。</p>
       )}
-      {mediaMeta && (
+      {isTextPackage && (
+        <div className="p38-text-package" aria-label="帖子文本证据">
+          <b>帖子文本证据</b>
+          <span title={mediaMeta.sha256}>
+            {boundedText(mediaMeta.filename, 40)} · {mediaMeta.mime_type} · {mediaMeta.byte_size} 字节 · SHA-256 {String(mediaMeta.sha256 || '').slice(0, 12)}…
+          </span>
+        </div>
+      )}
+      {mediaMeta && !isTextPackage && (
         <p className="p19-meta-line" title={mediaMeta.sha256}>
           媒体元数据：{boundedText(mediaMeta.filename, 40)} · {mediaMeta.mime_type} · {mediaMeta.byte_size} 字节 · SHA-256 {String(mediaMeta.sha256 || '').slice(0, 12)}…
         </p>
@@ -220,10 +242,12 @@ export function P36AnalyzeDestination({
   project,
   busy,
   canUseAi,
+  onlineMode,
   selectedEvidenceId,
   onSelectEvidence,
   previews,
   onStartAnalysis,
+  onRehydrateMedia,
   onSaveAnalysis,
   onDiscardPreview,
   onRunDeterministic,
@@ -256,6 +280,10 @@ export function P36AnalyzeDestination({
   const sourceHasMedia = Array.isArray(selected?.media_assets) && selected.media_assets.length > 0;
   const allVersions = selected ? getAllAnalysisVersionsForEvidence(project, selected.id) : [];
   const isCollected = Boolean(selected && selected.provenance && selected.provenance.source_id);
+  // P38 严格媒体可分析性：旧合同媒体（URL 哈希/t.co/非白名单/类型失配/缺内容
+  // 字节）必须先「重新采集媒体并分析」原位恢复，恢复前任何入口不得调用 Qwen。
+  const mediaGate = selected ? assessMediaAnalyzability(selected) : null;
+  const needsRehydration = Boolean(mediaGate && !mediaGate.analyzable && isCollected);
 
   if (!selected) {
     return (
@@ -276,6 +304,22 @@ export function P36AnalyzeDestination({
       return (
         <button className="p19-btn p19-btn-primary p36-cta-primary" type="button" disabled={busy || Boolean(workingKey)} onClick={() => onSaveAnalysis(selected.id, preview)}>
           {workingKey === `save-analysis:${selected.id}` ? '保存中…' : '保存分析结果'}
+        </button>
+      );
+    }
+    if (needsRehydration) {
+      // P38 唯一可操作入口：旧合同媒体不得直接调用 Qwen，必须先原位恢复。
+      return (
+        <button
+          className="p19-btn p19-btn-primary p36-cta-primary p38-rehydrate-cta"
+          type="button"
+          disabled={busy || Boolean(workingKey) || !canUseAi || !onlineMode}
+          onClick={() => onRehydrateMedia(selected.id)}
+          title={onlineMode
+            ? (canUseAi ? '重新采集同一 X 帖子、验证真实媒体内容并原位升级该证据，再运行 Qwen 多模态分析（结果预览，确认后才会保存）' : '当前账号无分析权限')
+            : '重新采集媒体需要登录在线工作区'}
+        >
+          {workingKey === `rehydrate:${selected.id}` ? '恢复并分析中…' : '重新采集媒体并分析'}
         </button>
       );
     }
@@ -355,7 +399,11 @@ export function P36AnalyzeDestination({
           {evidenceList.map((record) => {
             const rowLatest = getLatestAnalysisForEvidence(project, record.id);
             const rowFresh = Boolean(rowLatest && rowLatest.evidence_fingerprint === record.fingerprint && rowLatest.evidence_version === record.version);
-            const status = rowLatest ? (rowLatest.model_analysis ? (rowFresh ? '已分析' : '分析已过时') : rowFresh ? '确定性分析' : '分析已过时') : '尚未分析';
+            const rowGate = assessMediaAnalyzability(record);
+            const rowNeedsRehydration = Boolean(!rowGate.analyzable && record.provenance?.source_id);
+            const status = rowNeedsRehydration
+              ? '媒体待恢复'
+              : rowLatest ? (rowLatest.model_analysis ? (rowFresh ? '已分析' : '分析已过时') : rowFresh ? '确定性分析' : '分析已过时') : '尚未分析';
             return (
               <li key={record.id}>
                 <button
@@ -407,6 +455,15 @@ export function P36AnalyzeDestination({
                 </div>
               </>
             )}
+            {!preview && needsRehydration && (
+              <div className="p38-media-notice" data-testid="p38-media-notice" role="status">
+                <b>视频媒体尚未完成安全验证</b>
+                <span>
+                  该来源的媒体绑定来自旧合同：基础检测没有理解视频画面/声音，也未验证真实媒体内容。
+                  点击下方「重新采集媒体并分析」：重新采集同一 X 帖子、验证真实视频/图片内容、原位升级该 Evidence，再运行 Qwen 多模态分析（结果预览，确认后才会保存）。
+                </span>
+              </div>
+            )}
             {!preview && latest && (
               <>
                 <div className={`p36-analysis-quality ${hasModel ? 'model' : 'basic'}`} data-testid="p36-analysis-quality" role="status">
@@ -416,7 +473,7 @@ export function P36AnalyzeDestination({
                       ? `已保存模型结果；覆盖文本与 ${latest.model_analysis?.result?.media_analysis?.length || 0} 项逐媒体分析，并保留模型、来源和执行身份。`
                       : '仅检查来源 URL、文字表面特征和媒体元数据；不包含镜头、人物动作、字幕、声音、叙事或情绪理解，不能作为全面的视频分析。'}
                   </span>
-                  {!hasModel && isCollected && sourceHasMedia && canUseAi && (
+                  {!hasModel && isCollected && sourceHasMedia && canUseAi && !needsRehydration && (
                     <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || Boolean(workingKey)} onClick={() => onStartAnalysis(selected.id)}>
                       用 Qwen 分析视频/图片
                     </button>
@@ -480,7 +537,13 @@ export function P36AnalyzeDestination({
           <details className="p36-version-menu">
             <summary>版本与历史</summary>
             <div className="p36-version-menu-items">
-              <button className="p19-btn p19-btn-ghost" type="button" disabled={busy || Boolean(workingKey) || !canUseAi} onClick={() => onStartAnalysis(selected.id)} title="追加新版分析（保留旧版本，不覆写）">
+              <button
+                className="p19-btn p19-btn-ghost"
+                type="button"
+                disabled={busy || Boolean(workingKey) || !canUseAi || needsRehydration}
+                onClick={() => onStartAnalysis(selected.id)}
+                title={needsRehydration ? '媒体尚未完成安全验证：请先点击「重新采集媒体并分析」恢复媒体' : '追加新版分析（保留旧版本，不覆写）'}
+              >
                 追加新版分析
               </button>
               {allVersions.length > 1 && (
@@ -900,6 +963,7 @@ export function P36Destinations({
   onSaveEvidence,
   onSaveAnalysisPreview,
   onReanalyze,
+  onRehydrateAndAnalyze,
   onRunDeterministic,
   onMakeCard,
   onSaveDraft,
@@ -1056,6 +1120,13 @@ export function P36Destinations({
   const startAnalysis = useCallback(async (evidenceId) => {
     const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
     if (!evidence) return;
+    // P38 失败关闭：旧合同媒体（URL 哈希/t.co/非白名单/类型失配/缺内容字节）
+    // 不得直接调用 Qwen —— 必须先「重新采集媒体并分析」原位恢复。
+    const mediaGate = assessMediaAnalyzability(evidence);
+    if (!mediaGate.analyzable) {
+      setAnalyzeError(`该来源的媒体尚未完成安全验证（${String(mediaGate.issues[0] || '旧媒体绑定').slice(0, 120)}）：请先点击「重新采集媒体并分析」恢复媒体后再分析。`);
+      return;
+    }
     setWorkingKey(`analyze:${evidenceId}`);
     setAnalyzeError('');
     setAnalyzeMessage('');
@@ -1079,6 +1150,48 @@ export function P36Destinations({
       setWorkingKey('');
     }
   }, [assistClient, project]);
+
+  /**
+   * P38 一键「重新采集媒体并分析」：委托页面执行原位恢复链（collect_url →
+   * 唯一身份绑定 → 一次 evidence.update → 权威在线读取 → analyze_persisted），
+   * 成功后把 Qwen 结果作为预览绑定到权威升级后的证据版本/指纹。
+   * 页面侧任何失败都会抛回有界结构化错误（P38_*），此处仅展示并保持原状态。
+   */
+  const rehydrateMedia = useCallback(async (evidenceId) => {
+    const evidence = (project.evidence || []).find((item) => item.id === evidenceId);
+    if (!evidence) return;
+    const mediaGate = assessMediaAnalyzability(evidence);
+    if (mediaGate.analyzable) {
+      setAnalyzeError('该证据的媒体已通过安全验证，无需重新采集。');
+      return;
+    }
+    setWorkingKey(`rehydrate:${evidenceId}`);
+    setAnalyzeError('');
+    setAnalyzeMessage('');
+    try {
+      const result = await onRehydrateAndAnalyze(evidenceId);
+      if (!result || !result.evidence) return;
+      const upgraded = result.evidence;
+      // 恢复后的预览必须绑定权威升级后的版本/指纹；旧版本预览绝不混入。
+      if (upgraded.id !== evidenceId || upgraded.version !== evidence.version + 1) {
+        throw new Error('原位升级未返回同一证据的新版本，已停止。');
+      }
+      setAnalysisPreviews((previous) => ({
+        ...previous,
+        [evidenceId]: {
+          result: result.modelResult,
+          usage: result.usage || {},
+          evidenceVersion: upgraded.version,
+          evidenceFingerprint: upgraded.fingerprint,
+        },
+      }));
+      setAnalyzeMessage('媒体已重新采集并通过安全验证，同一证据已原位升级；Qwen 分析完成，请查看完整结果，确认后再保存。');
+    } catch (cause) {
+      setAnalyzeError(String(cause?.message || cause));
+    } finally {
+      setWorkingKey('');
+    }
+  }, [onRehydrateAndAnalyze, project]);
 
   const saveAnalysis = useCallback(async (evidenceId, preview) => {
     setWorkingKey(`save-analysis:${evidenceId}`);
@@ -1272,10 +1385,12 @@ export function P36Destinations({
           project={project}
           busy={busy}
           canUseAi={canUseAi}
+          onlineMode={onlineMode}
           selectedEvidenceId={selectedEvidenceId}
           onSelectEvidence={setSelectedEvidenceId}
           previews={analysisPreviews}
           onStartAnalysis={startAnalysis}
+          onRehydrateMedia={rehydrateMedia}
           onSaveAnalysis={saveAnalysis}
           onDiscardPreview={discardPreview}
           onRunDeterministic={onRunDeterministic}

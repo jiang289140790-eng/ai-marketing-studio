@@ -48,6 +48,14 @@ const OWNED_PATHS = new Set([
   'test/p32-multipost-synthesis-brief.browser.test.mjs',
   'test/p20-browser-online.test.mjs',
   'test/p36-research-ux-redesign.test.mjs',
+  // P38 旧视频证据恢复新增授权路径（本里程碑）。
+  'src/services/p22-research-assist.js',
+  'src/services/p19-workspace-service.js',
+  'supabase/functions/p19-workspace-command/command-core.mjs',
+  'supabase/functions/p19-workspace-command/index.ts',
+  'test/p19-backend-command.test.mjs',
+  'test/p29-multimodal-x-evidence.browser.test.mjs',
+  'test/p29-multimodal-x-evidence.test.mjs',
   // 所有权守卫清单必须同步跟踪 P36 授权路径。
   'test/p17c-staging-preview.test.mjs',
   'test/online-integrated-preview.test.mjs',
@@ -325,7 +333,7 @@ function makeCollectItem(index) {
       id: `m-${sha256(`p36-media\0${extId}\0`).slice(0, 24)}`,
       tweet_id: extId, external_id: extId,
       canonical_tweet_url: `https://x.com/p36author/status/${extId}`,
-      media_url: `http://127.0.0.1:${0}/media/p36-${index}.jpg`,
+      media_url: `https://pbs.twimg.com/media/p36-${index}.jpg?format=jpg&name=small`,
       order: 0, kind: 'image', mime_type: 'image/jpeg',
       dimensions: { width: 800, height: 600 }, byte_size: TINY_PNG.length,
       hash: { algorithm: 'sha256', kind: 'content', value: sha256(`p36-media-bytes-${index}`) },
@@ -388,7 +396,7 @@ function makeDraftFor(evidence, analysis) {
 function p36Boundary() {
   const projects = new Map();
   const requests = [];
-  let mediaBase = '';
+  let _mediaBase = '';
   const server = createServer(async (request, response) => {
     requests.push({ method: request.method, url: request.url, requestedHeaders: request.headers['access-control-request-headers'] || null });
     const origin = request.headers.origin || '';
@@ -425,7 +433,9 @@ function p36Boundary() {
       }
       if (body.action === 'collect_url') {
         const item = makeCollectItem(1);
-        item.media_assets[0].media_url = `${mediaBase}/media/p36-1.jpg`;
+        // P38：媒体必须来自严格 X/Twitter CDN 白名单（浏览器经 CDP Fetch 拦截
+        // 到本机 mock，全部字节流量保持本地）。
+        item.media_assets[0].media_url = 'https://pbs.twimg.com/media/p36-1.jpg?format=jpg&name=small';
         return json(response, 200, { ...base, action: 'collect_url', items: [item], cost: { recorded_cny: 0.01, actual_cny: 0.001 } }, origin);
       }
       if (body.action === 'analyze_persisted') {
@@ -517,11 +527,14 @@ function p36Boundary() {
     }
     return json(response, 404, { code: 'NOT_FOUND' }, origin);
   });
-  return { server, projects, requests, setMediaBase(base) { mediaBase = base; } };
+  return { server, projects, requests, setMediaBase(base) { _mediaBase = base; } };
 }
 
 class CdpClient {
-  constructor(url) { this.socket = new WebSocket(url); this.nextId = 1; this.pending = new Map(); }
+  constructor(url) {
+    this.socket = new WebSocket(url); this.nextId = 1; this.pending = new Map();
+    this.eventHandlers = new Map();
+  }
   async open() {
     await new Promise((resolve, reject) => {
       this.socket.addEventListener('open', resolve, { once: true });
@@ -529,12 +542,22 @@ class CdpClient {
     });
     this.socket.addEventListener('message', (event) => {
       const message = JSON.parse(event.data);
-      if (!message.id || !this.pending.has(message.id)) return;
+      if (!message.id || !this.pending.has(message.id)) {
+        // 事件（如 Fetch.requestPaused）：分发给订阅者（可能内联回复命令）。
+        const handlers = this.eventHandlers.get(message.method) || [];
+        for (const handler of handlers) handler(message.params);
+        return;
+      }
       const pending = this.pending.get(message.id);
       this.pending.delete(message.id);
       if (message.error) pending.reject(new Error(message.error.message));
       else pending.resolve(message.result);
     });
+  }
+  on(method, handler) {
+    const handlers = this.eventHandlers.get(method) || [];
+    handlers.push(handler);
+    this.eventHandlers.set(method, handlers);
   }
   send(method, params = {}) {
     const id = this.nextId++;
@@ -614,6 +637,28 @@ test('P36 生产构建浏览器验收：三档视口无溢出无空列 + 完整�
     await cdp.open();
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
+    // P38：严格 CDN 白名单媒体（pbs/video/abs.twimg.com）经 CDP Fetch 拦截到
+    // 本机 mock 字节 —— 全部流量保持本地，绝不访问真实 X CDN。
+    await cdp.send('Fetch.enable', {
+      patterns: [
+        { urlPattern: 'https://pbs.twimg.com/*', requestStage: 'Request' },
+        { urlPattern: 'https://video.twimg.com/*', requestStage: 'Request' },
+        { urlPattern: 'https://abs.twimg.com/*', requestStage: 'Request' },
+      ],
+    });
+    cdp.on('Fetch.requestPaused', (params) => {
+      const url = params.request?.url || '';
+      if (/\/media\/[^?#]+\.(?:jpg|jpeg|png|mp4)(?:$|[?#])/.test(url)) {
+        cdp.send('Fetch.fulfillRequest', {
+          requestId: params.requestId,
+          responseCode: 200,
+          responseHeaders: [{ name: 'content-type', value: 'image/png' }, { name: 'cache-control', value: 'no-store' }],
+          body: TINY_PNG.toString('base64'),
+        });
+      } else {
+        cdp.send('Fetch.continueRequest', { requestId: params.requestId });
+      }
+    });
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
     const payload = Buffer.from(JSON.stringify({

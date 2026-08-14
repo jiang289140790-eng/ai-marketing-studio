@@ -172,6 +172,17 @@ export function P36AnalysisResultView({ analysis, evidence }) {
           {ext ? `多模态模型分析 · 第 ${analysis.version} 版` : `确定性本地分析 · 第 ${analysis.version} 版`}
         </span>
       </div>
+      {/* M3 费用绑定（范围 10）：只显示并绑定服务端实际返回的 provider 费用记录；
+          未返回费用记录时如实显示「未返回」，绝不虚构费用。 */}
+      {ext && ext.usage && (
+        <p className="p19-meta-line p36-cost-line" data-testid="m3-analysis-cost">
+          模型 {boundedText(ext.model, 40)} · {boundedText(ext.provider || 'dashscope', 20)} · 用量 {ext.usage.total_tokens ?? '—'} tokens
+          {ext.usage.recorded_cny != null ? ` · 实际费用 ¥${ext.usage.recorded_cny}` : ''}
+          {ext.usage.actual_usd != null ? `（$${ext.usage.actual_usd}）` : ''}
+          {ext.usage.reservation_id ? ` · 预留 ${String(ext.usage.reservation_id).slice(0, 8)}…` : ''}
+          {ext.usage.recorded_cny == null ? ' · 未返回费用记录' : ''}
+        </p>
+      )}
       <TextBlock title="表达与内容" value={result.text_expression} />
       <TextBlock title="文案结构" value={result.copy_pattern} />
       {(result.target_audience || result.audience_need_emotion) && (
@@ -487,6 +498,7 @@ export function P36AnalyzeDestination({
                       <h4>确定性本地分析（未调用任何模型）</h4>
                       <span className="p19-panel-note">deterministic_local · 第 {latest.version} 版</span>
                     </div>
+                    <p className="p19-meta-line p36-cost-line" data-testid="m3-analysis-cost">确定性本地分析：未调用任何模型、不产生任何费用（绝不显示为付费模型调用）。</p>
                     <p className="p19-provenance-line">规则 {latest.rule_ids.length} 条 · {latest.provenance.generated_by}</p>
                     <ul className="p19-rule-list">
                       {(latest.result.rules || []).map((rule) => (
@@ -1174,6 +1186,8 @@ export function P36Destinations({
         [evidenceId]: {
           result,
           usage: response.usage || {},
+          // M3 费用绑定（范围 10）：服务端实际费用记录随预览保留，保存时随分析绑定。
+          cost: response.cost || undefined,
           evidenceVersion: evidence.version,
           evidenceFingerprint: evidence.fingerprint,
         },
@@ -1216,6 +1230,7 @@ export function P36Destinations({
         [evidenceId]: {
           result: result.modelResult,
           usage: result.usage || {},
+          cost: result.cost || undefined,
           evidenceVersion: upgraded.version,
           evidenceFingerprint: upgraded.fingerprint,
         },
@@ -1233,7 +1248,7 @@ export function P36Destinations({
     setAnalyzeError('');
     setAnalyzeMessage('');
     try {
-      const saved = await onSaveAnalysisPreview(evidenceId, preview.result, preview.usage);
+      const saved = await onSaveAnalysisPreview(evidenceId, preview.result, preview.usage, preview.cost);
       if (!saved) throw new Error('分析保存后未返回准确版本。');
       setAnalysisPreviews((previous) => {
         const next = { ...previous };

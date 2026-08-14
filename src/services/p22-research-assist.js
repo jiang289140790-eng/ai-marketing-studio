@@ -771,5 +771,13 @@ export async function rehydrateEvidenceMediaAndAnalyze({
   if (!modelResult) {
     throw safeError('P38_ANALYSIS_IDENTITY_MISSING', '分析结果未精确绑定来源身份，已停止。');
   }
-  return { project: persisted, evidence: upgraded, modelResult, usage: analysisResponse.usage || {} };
+  // M3 费用绑定（范围 10）：服务端实际返回的 provider 费用记录随预览返回，
+  // 由调用方在保存分析时随记录绑定；绝不虚构费用。
+  return {
+    project: persisted,
+    evidence: upgraded,
+    modelResult,
+    usage: analysisResponse.usage || {},
+    cost: analysisResponse.cost || undefined,
+  };
 }

@@ -1029,6 +1029,14 @@
   overflow-wrap: anywhere;
 }
 
+/* M3 费用绑定行：只显示并绑定实际 provider 费用记录（绝不虚构费用） */
+.p36-cost-line {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.08);
+  font-variant-numeric: tabular-nums;
+}
+
 .p19-blocking-note {
   margin: 8px 0;
   padding: 8px 10px;

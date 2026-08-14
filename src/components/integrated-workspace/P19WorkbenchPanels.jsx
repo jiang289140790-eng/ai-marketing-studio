@@ -585,10 +585,15 @@ export function P19BriefSection({ project, workflow, onAssemble, onDecide, busy,
           ) : (
             <p className="p19-meta-line">尚无确认决定。批准前必须确保草案未过时。</p>
           )}
+          {/* M3 审计（范围 5）：审核记录可折叠展示——旧决定保留审计，绝不显示为 current；
+              当前决定只在上方「决定」行，退回后必须生成新版本再审核。 */}
           {(brief.review.comments || []).length > 0 && (
-            <ul className="p19-comment-list">
-              {brief.review.comments.map((item, index) => <li key={index}>「{boundedText(item, 120)}」</li>)}
-            </ul>
+            <details className="p19-details" data-testid="m3-decision-audit">
+              <summary>审核记录（{brief.review.comments.length} 条 · 旧决定保留审计，不视为当前决定）</summary>
+              <ul className="p19-comment-list">
+                {brief.review.comments.map((item, index) => <li key={index}>「{boundedText(item, 200)}」</li>)}
+              </ul>
+            </details>
           )}
           <div className="p19-brief-actions">
             <button className="p19-btn p19-btn-primary" type="button" disabled={busy} onClick={onAssemble} title="上游内容变化后必须重新生成草案才能重新确认">
@@ -656,7 +661,7 @@ export function P19HandoffSection({ project, workflow, onDerive, onDownload, bus
       </div>
       {!handoff ? (
         <>
-          <p className="p19-empty-note">还没有交接包。批准 Brief 且未过时时可派生；派生即不可修改，仅可随 Brief 重建作废。</p>
+          <p className="p19-empty-note">还没有交接包。批准 Brief 且未过时时可派生；派生即不可修改，仅可随 Brief 重建作废。旧交接包（如存在）保留在在线账本中供审计，不再显示为 current。</p>
           <div className="p19-form-actions">
             <button className="p19-btn p19-btn-primary" type="button" disabled={busy || !canDerive} title={canDerive ? '派生精确 P5 交接包（四项执行标志恒 false）' : `不可派生：${reason}`} onClick={onDerive}>
               派生 P5 交接包
@@ -673,6 +678,11 @@ export function P19HandoffSection({ project, workflow, onDerive, onDownload, bus
             绑定 Brief {handoff.brief_provenance.brief_id} 第 {handoff.brief_provenance.brief_version} 版（{handoff.brief_provenance.brief_status}）· 决定 {handoff.human_decision.source} @ {handoff.human_decision.decided_at}
           </p>
           <p className="p19-provenance-line">知识引用 {handoff.knowledge_citations.length} 条 · 来源轨迹 {handoff.source_trace.origin} / {handoff.source_trace.created_from}</p>
+          {/* M3 审计（范围 5）：本页只展示当前 Brief 修订绑定的交接包；旧交接包
+              保留在在线账本中供审计，绝不显示为 current。 */}
+          <p className="p19-meta-line">
+            审计：本页只展示当前 Brief 修订绑定的交接包；重建 Brief 后旧交接包不再显示为 current，旧记录保留在在线账本中（无删除命令）供审计。
+          </p>
           {stale && <p className="p19-blocking-note">⛔ 交接包已过时：{workflow.handoff_stale_reasons.join('；')}</p>}
           <div className="p19-form-actions">
             <button className="p19-btn p19-btn-ghost" type="button" disabled={busy} onClick={onDownload} title="下载本项目的本地备份 JSON（仅本地备份，不发布）">
@@ -834,6 +844,13 @@ export function P32EvidenceLibrary({ project, onReanalyze, onMakeCard, busy }) {
               <p className="p19-meta-line">
                 {boundedText(record.source_url, 60)}
               </p>
+              {/* M3 费用绑定（范围 10）：P22 采集证据只显示并绑定实际
+                  provider/run/reservation 费用记录；本地手工证据不显示任何费用。 */}
+              {record.provenance?.manual === false && (
+                <p className="p19-meta-line" data-testid="m3-evidence-cost">
+                  采集费用 ${record.provenance.usage_total_usd ?? '—'} · 预留 {String(record.provenance.budget_reservation_id || '').slice(0, 8)}… · 运行 {boundedText(record.provenance.run_id, 18)}…
+                </p>
+              )}
               {modelAnalysis && (
                 <div className="p32-analysis-quick">
                   <span className="p32-analysis-model">{boundedText(modelAnalysis.model, 30)} · v{latestAnalysis.version}</span>

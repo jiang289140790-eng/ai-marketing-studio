@@ -458,7 +458,7 @@ export function ResearchWorkspacePage() {
     }
   }, [onlineMode, onlineStore, project, reloadProjects, store]);
 
-  const handleSaveAnalysisPreview = useCallback(async (evidenceId, modelResult, usage) => {
+  const handleSaveAnalysisPreview = useCallback(async (evidenceId, modelResult, usage, cost) => {
     if (!project) return null;
     const evidence = project.evidence.find((item) => item.id === evidenceId);
     if (!evidence) throw workbenchError('EVIDENCE_NOT_FOUND', '要保存分析的证据不存在。');
@@ -472,7 +472,11 @@ export function ResearchWorkspacePage() {
         media_analysis: modelResult.media_analysis || [], virality_drivers: modelResult.virality_drivers || [], reusable_methods: modelResult.reusable_methods || [],
         rewrite_suggestions: modelResult.rewrite_suggestions || [], signals: modelResult.signals || [], risks: modelResult.risks || [],
       },
-      executed_at: new Date().toISOString(), usage: usage || { total_tokens: 0 }, _request_identity: `analysis-preview:${evidenceId}:${Date.now()}`,
+      executed_at: new Date().toISOString(), usage: usage || { total_tokens: 0 },
+      // M3 费用绑定（范围 10）：把服务端实际返回的费用记录与预留身份随分析保存；
+      // 服务端只接受实际费用字段，绝不虚构或把零费用伪装为付费模型调用。
+      cost: cost || undefined,
+      _request_identity: `analysis-preview:${evidenceId}:${Date.now()}`,
     });
     let persisted = afterAnalysis;
     if (onlineMode) {
@@ -584,6 +588,8 @@ export function ResearchWorkspacePage() {
         },
         executed_at: new Date().toISOString(),
         usage: response.usage || { total_tokens: 0 },
+        // M3 费用绑定（范围 10）：服务端实际费用记录随分析保存（实际字段才绑定）。
+        cost: response.cost || undefined,
         _request_identity: `reanalysis:${evidenceId}:${Date.now()}`,
       });
       setProject(afterAnalysis);

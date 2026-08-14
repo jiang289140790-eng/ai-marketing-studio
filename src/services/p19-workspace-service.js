@@ -556,6 +556,24 @@ function ruleSummary(ruleOutputs, withModel = false) {
 }
 
 /**
+ * M3 费用绑定（范围 10）：仅当上游实际返回 provider 费用记录时，把有界的实际
+ * 费用与预留身份绑定进 model_analysis.usage（绝不虚构费用、绝不把零费用或本地
+ * 分析伪装为付费模型调用）；未提供费用时保持只有用量，确定性本地分析恒为无费用。
+ */
+function boundAnalysisCost(cost) {
+  if (!cost || typeof cost !== 'object' || Array.isArray(cost)) return {};
+  const out = {};
+  const usd = Number(cost.actual_usd);
+  if (Number.isFinite(usd) && usd >= 0) out.actual_usd = Math.round(usd * 1e6) / 1e6;
+  const cny = Number(cost.recorded_cny);
+  if (Number.isFinite(cny) && cny >= 0) out.recorded_cny = Math.round(cny * 1e6) / 1e6;
+  if (typeof cost.reservation_id === 'string' && cost.reservation_id.trim()) {
+    out.reservation_id = String(cost.reservation_id).trim().slice(0, 80);
+  }
+  return out;
+}
+
+/**
  * 登记 P29 服务端多模态分析（精确接受模型结果，绝不替换为本地确定性文本）：
  * - 模型结果以显式版本化 model_analysis 扩展持久化（p29_multimodal_model_v1），
  *   kind 保持数据库边界唯一的 deterministic_local，模型/执行身份在扩展中保留；
@@ -603,7 +621,7 @@ export async function recordAssistedAnalysis(project, evidenceId, modelResult, {
     executed_at: String(modelResult.executed_at || timestamp).slice(0, 80),
     media_ids: mediaIds,
     result: clonePlain(result),
-    usage: { total_tokens: totalTokens },
+    usage: { total_tokens: totalTokens, ...boundAnalysisCost(modelResult.cost) },
   };
   const ruleOutputs = runDeterministicRules(evidence);
   const id = previous?.id || await stableId('an-', { project_id: project.id, evidence_id: evidenceId, timestamp });
@@ -701,7 +719,7 @@ async function recordVersionedModelAnalysis(project, evidenceId, modelResult, { 
     executed_at: String(modelResult.executed_at || timestamp).slice(0, 80),
     media_ids: mediaIds,
     result: clonePlain(result),
-    usage: { total_tokens: totalTokens },
+    usage: { total_tokens: totalTokens, ...boundAnalysisCost(modelResult.cost) },
     _request_identity: requestIdentity,
   };
 
@@ -1330,6 +1348,12 @@ export async function buildKnowledgeCard(project, analysisId, { now = () => new 
   if (previous && previous.analysis_fingerprint === analysis.fingerprint && previous.analysis_version === analysis.version) {
     return clonePlain(project);
   }
+  // M3 门禁（范围 3）：新知识卡只从「当前、完整、准确绑定」的分析生成。
+  // 分析绑定的证据已变化（分析过时/来源已变化）时拒绝构建，绝不从旧证据快照
+  // 派生新卡；同分析重试仍幂等复用，旧版卡快照保持可查看（P32-A 快照语义）。
+  if (analysis.evidence_fingerprint !== evidence.fingerprint || analysis.evidence_version !== evidence.version) {
+    throw workbenchError('CARD_ANALYSIS_STALE', '知识卡构建被拒绝：该分析绑定的是旧版证据（来源内容已变化）。请先重新分析并保存最新版本，再生成知识卡。');
+  }
   const card = buildCardFromAnalysis(analysis, evidence);
   const verdict = validateKnowledgeCard(card);
   if (!verdict.valid) throw workbenchError('CARD_BUILD_FAILED', verdict.issues[0] || '知识卡构建未通过 content_knowledge_card_v1 校验。');
@@ -1892,9 +1916,13 @@ export async function reviewBrief(project, { decision, rationale, comment = '', 
     source: HANDOFF_DECISION_METHOD,
     decided_by: textOf(decidedBy) || 'local_user',
   };
-  if (comment) {
-    next.brief.review.comments = [...(next.brief.review.comments || []), boundedSlice(comment, 1000)];
-  }
+  // M3 审计（范围 5）：每次决定都追加有界审计条目到 comments——旧决定保留审计
+  // （重建后随 comments 延续），当前决定只保存在 review.decision，绝不重复
+  // 显示为 current；上限 50 条与命令边界 applyBriefDecide 口径一致。
+  const comments = [...(next.brief.review.comments || [])];
+  comments.push(boundedSlice(`[第 ${brief.version} 版 ${decision === 'approved' ? '已批准' : '已退回修改'}] ${cleanRationale}`, 1000));
+  if (comment) comments.push(boundedSlice(comment, 1000));
+  next.brief.review.comments = comments.slice(-50);
   next.brief.status = decision === 'approved' ? 'approved' : 'returned';
   next.brief.updated_at = timestamp;
   next.brief.version_note = decision === 'approved' ? `第 ${brief.version} 版已人工批准（local_manual）。` : `第 ${brief.version} 版已退回修改。`;

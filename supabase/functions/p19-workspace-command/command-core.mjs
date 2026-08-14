@@ -894,11 +894,19 @@ async function applyCardCreate(ctx) {
   const entities = await db.listProjectEntities(ctx.userId, owned.projectId);
   const analysis = (entities.analyses || []).find((item) => item.id === record.analysis_id);
   if (!analysis) return fail('CARD_BINDING_INVALID', '知识卡绑定的分析不存在，已拒绝。', { entity: { type: 'project', id: owned.projectId } });
+  const evidence = (entities.evidence || []).find((item) => item.id === analysis.evidence_id);
+  if (!evidence) return fail('CARD_BINDING_INVALID', '知识卡绑定的分析证据不存在，已拒绝。', { entity: { type: 'project', id: owned.projectId } });
   const previous = (entities.cards || []).find((item) => item.id === record.id && item.version === record.version) || null;
   const baseline = requireExpectedFingerprint(payload, previous, 'card', String(record.id || '').slice(0, 200));
   if (!baseline.ok) return baseline;
   if (record.analysis_fingerprint && analysis.fingerprint && record.analysis_fingerprint !== analysis.fingerprint) {
     return fail('CARD_SNAPSHOT_STALE', '知识卡引用的分析快照与当前记录不一致，已拒绝。', { entity: { type: 'card', id: String(record.id || '').slice(0, 40) } });
+  }
+  // M3 门禁（范围 3，在线边界）：知识卡只从「当前、完整、准确绑定」的分析生成。
+  // 分析绑定的证据已变化（分析过时/来源已变化，或证据绑定缺失）时拒绝，绝不
+  // 从旧证据快照派生新卡；同分析同版本重试仍由幂等边界复用。
+  if (analysis.evidence_fingerprint !== evidence.fingerprint || analysis.evidence_version !== evidence.version) {
+    return fail('CARD_ANALYSIS_STALE', '知识卡引用的分析绑定的是旧版证据（来源内容已变化），已拒绝。请先重新分析并保存最新版本。', { entity: { type: 'card', id: String(record.id || '').slice(0, 40) } });
   }
   const { valid, issues } = validateKnowledgeCard(record);
   if (!valid) return fail('CARD_INVALID', '知识卡未通过 content_knowledge_card_v1 校验。', { entity: { type: 'project', id: owned.projectId }, diagnostics: boundedDiagnostics(issues) });

@@ -11,9 +11,9 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import {
-  P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, boundedProviderRunId, buildQwenPrompt, buildSimilarPostPrompt,
+  P22_CNY_PER_USD, P22_EXECUTION_FLAGS, P22_LIMITS, allocatePaidAttemptBudgetReservationId, boundedProviderRunId, buildQwenPrompt, buildSimilarPostPrompt, derivePaidBudgetReservationId,
   issueCollectionProof, normalizeCollectedItems, normalizeXUrl, parseP22Request, parseQwenAnalyses,
-  parseSimilarPostDraft, persistedEvidenceToAnalyzeItem, providerDiagnostic, publicError, runApifyCollectionSequence, verifyAnalyzeSources, verifyCollectionProof,
+  parseSimilarPostDraft, persistedEvidenceToAnalyzeItem, providerDiagnostic, publicError, refreshCollectionReplayReceipt, runApifyCollectionSequence, verifyAnalyzeSources, verifyCollectionProof,
 } from '../supabase/functions/p22-research-assist/assist-core.mjs';
 import { createP22ResearchAssistClient, isP22Duplicate, toP19EvidenceInput } from '../src/services/p22-research-assist.js';
 import { createP20OnlineStore } from '../src/services/p20-online-store.js';
@@ -26,6 +26,55 @@ const USER_ID = 'user-p22-a';
 const COLLECTED_AT = '2026-08-12T00:00:00Z';
 const RESERVATION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+
+test('P22 paid replay keeps durable identity while accounting reservation rotates at UTC midnight', async () => {
+  const paidId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+  const first = await derivePaidBudgetReservationId(paidId, 'idem-1', { costDateUtc: '2026-08-14' });
+  const same = await derivePaidBudgetReservationId(paidId, 'idem-1', { costDateUtc: '2026-08-14' });
+  const next = await derivePaidBudgetReservationId(paidId, 'idem-1', { costDateUtc: '2026-08-15' });
+  assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(first, same);
+  assert.notEqual(first, next);
+  assert.equal(await derivePaidBudgetReservationId(paidId, null, { costDateUtc: '2026-08-15' }), paidId);
+});
+
+test('P22 each reclaimed provider execution receives a distinct cost reservation', async () => {
+  const paidId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+  const initial = await allocatePaidAttemptBudgetReservationId(paidId, 'idem-1', 'claimed', { costDateUtc: '2026-08-14' });
+  const retryA = await allocatePaidAttemptBudgetReservationId(paidId, 'idem-1', 'reclaimed', {
+    costDateUtc: '2026-08-14', randomUuid: () => 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
+  });
+  const retryB = await allocatePaidAttemptBudgetReservationId(paidId, 'idem-1', 'reclaimed', {
+    costDateUtc: '2026-08-14', randomUuid: () => 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2',
+  });
+  assert.notEqual(initial, retryA);
+  assert.notEqual(retryA, retryB);
+  await assert.rejects(
+    () => allocatePaidAttemptBudgetReservationId(paidId, 'idem-1', 'already_claimed'),
+    { code: 'PAID_REPLAY_STATE_INVALID' },
+  );
+});
+
+test('P22 durable collection replay reissues expired proofs without changing verified source identity', async () => {
+  const originalNow = Date.parse(COLLECTED_AT);
+  const replayNow = originalNow + P22_LIMITS.proof_ttl_ms + 60_000;
+  const item = await collectedItem();
+  await assert.rejects(
+    () => verifyCollectionProof(TEST_SECRET, USER_ID, item, item.collection_proof, { nowMs: replayNow }),
+    { code: 'SOURCE_PROOF_EXPIRED' },
+  );
+  const receipt = { items: [item], cost: { recorded_cny: 2 }, stable: 'unchanged' };
+  const refreshed = await refreshCollectionReplayReceipt(TEST_SECRET, USER_ID, receipt, { nowMs: replayNow });
+  assert.notEqual(refreshed.items[0].collection_proof, item.collection_proof);
+  assert.equal(await verifyCollectionProof(TEST_SECRET, USER_ID, refreshed.items[0], refreshed.items[0].collection_proof, { nowMs: replayNow }), true);
+  assert.equal(refreshed.items[0].content_sha256, item.content_sha256);
+  assert.deepEqual(refreshed.items[0].provenance, item.provenance);
+  assert.deepEqual(receipt.items[0], item, 'stored durable receipt must remain unchanged');
+  await assert.rejects(
+    () => refreshCollectionReplayReceipt(TEST_SECRET, USER_ID, { items: [{ ...item, content_text: 'tampered' }] }, { nowMs: replayNow }),
+    { code: 'SOURCE_PROOF_INVALID' },
+  );
+});
 
 async function collectedItem(overrides = {}) {
   const [item] = await normalizeCollectedItems([

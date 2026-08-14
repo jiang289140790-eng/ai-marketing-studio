@@ -1,7 +1,8 @@
 /* global Buffer, setTimeout, URL */
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { HarnessTaskQueue, verifySignedRequest } from './gateway-core.mjs';
+import { HarnessTaskQueue, validateDelegatedAuthorization, verifySignedRequest } from './gateway-core.mjs';
 import { createHarnessRunner, harnessReadiness } from './harness-runner.mjs';
 import { appendTaskEvent, loadTaskSnapshots } from './state-store.mjs';
 
@@ -12,12 +13,21 @@ const SECRET = process.env.AMS_GATEWAY_HMAC_SECRET_FILE
   : '';
 const EVENT_FILE = process.env.HARNESS_EVENT_FILE || '/data/gateway/events.jsonl';
 const MAX_BODY = 64 * 1024;
+const TASK_TIMEOUT_MS = Number(process.env.HARNESS_TASK_TIMEOUT_MS || 600_000);
+const TOOL_WINDOW_MS = 150_000;
+const QUEUE_CAPACITY = 2;
 
 const initialTasks = await loadTaskSnapshots(EVENT_FILE);
 const queue = new HarnessTaskQueue({
   runner: createHarnessRunner(),
+  capacity: QUEUE_CAPACITY,
   initialTasks,
   onEvent: (event) => appendTaskEvent(EVENT_FILE, event),
+  validateRuntimeContext: (runtimeContext, context) => validateDelegatedAuthorization(runtimeContext, {
+    minimumValidityMs: context.phase === 'submit'
+      ? ((context.position + 1) * TASK_TIMEOUT_MS) + TOOL_WINDOW_MS
+      : TASK_TIMEOUT_MS + TOOL_WINDOW_MS,
+  }),
 });
 
 function send(response, status, body) {
@@ -43,7 +53,8 @@ const server = createServer(async (request, response) => {
   if (request.method === 'GET' && url.pathname === '/readyz') {
     const readiness = harnessReadiness();
     const queueStatus = queue.status();
-    const ready = SECRET.length >= 32 && readiness.executable_configured && readiness.workspace_configured && queueStatus.audit_healthy;
+    const ready = SECRET.length >= 32 && readiness.executable_configured && readiness.model_credential_configured && readiness.workspace_configured
+      && readiness.tool_bridge_configured && queueStatus.audit_healthy;
     return send(response, ready ? 200 : 503, { ok: ready, service: 'ams-harness-gateway', readiness, model_ready: readiness.model_credential_configured });
   }
   let rawBody = '';
@@ -54,6 +65,10 @@ const server = createServer(async (request, response) => {
   }
   const userId = String(request.headers['x-ams-user-id'] || '').trim();
   if (!userId) return send(response, 401, { ok: false, code: 'USER_ID_REQUIRED' });
+  const delegatedAuthorization = String(request.headers['x-ams-delegated-authorization'] || '').trim();
+  const authorizationDigest = delegatedAuthorization
+    ? createHash('sha256').update(delegatedAuthorization).digest('hex')
+    : '';
   const signed = verifySignedRequest({
     secret: SECRET,
     method: request.method,
@@ -61,15 +76,19 @@ const server = createServer(async (request, response) => {
     userId,
     timestamp: String(request.headers['x-ams-timestamp'] || ''),
     signature: String(request.headers['x-ams-signature'] || ''),
+    authorizationDigest,
     rawBody,
   });
   if (!signed) return send(response, 401, { ok: false, code: 'UNAUTHORIZED' });
   if (request.method === 'POST' && url.pathname === '/v1/tasks') {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
     let body;
     try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
     if (body.user_id !== userId) return send(response, 403, { ok: false, code: 'USER_BINDING_MISMATCH' });
     let result;
-    try { result = queue.submit(body); } catch { return send(response, 503, { ok: false, code: 'AUDIT_PERSISTENCE_UNAVAILABLE' }); }
+    try { result = queue.submit(body, { delegatedAuthorization }); } catch { return send(response, 503, { ok: false, code: 'AUDIT_PERSISTENCE_UNAVAILABLE' }); }
     return send(response, result.ok ? (result.replayed ? 200 : 202) : result.code === 'QUEUE_FULL' ? 429 : result.code === 'AUDIT_PERSISTENCE_UNAVAILABLE' ? 503 : 400, result);
   }
   const taskMatch = url.pathname.match(/^\/v1\/tasks\/(ht-[0-9a-f-]{36})$/);
@@ -85,7 +104,7 @@ const server = createServer(async (request, response) => {
   }
   if (request.method === 'GET' && url.pathname === '/v1/tasks') {
     const limit = Number(url.searchParams.get('limit') || 50);
-    return send(response, 200, { ok: true, tasks: queue.list(userId, limit) });
+    return send(response, 200, { ok: true, tasks: queue.listSummaries(userId, limit) });
   }
   return send(response, 404, { ok: false, code: 'NOT_FOUND' });
 });

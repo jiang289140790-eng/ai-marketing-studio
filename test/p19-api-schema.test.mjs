@@ -16,14 +16,28 @@ const REPO_ROOT = join(import.meta.dirname, '..');
 const INDEX_PATH = join(REPO_ROOT, 'supabase', 'functions', 'p19-workspace-command', 'index.ts');
 const INDEX_SOURCE = readFileSync(INDEX_PATH, 'utf8');
 
+test('production adapter owns the replay preflight and HTTP headers remain plain strings', () => {
+  const adapterStart = INDEX_SOURCE.indexOf('function createDbAdapter');
+  const adapterEnd = INDEX_SOURCE.indexOf('Deno.serve', adapterStart);
+  const adapterSource = INDEX_SOURCE.slice(adapterStart, adapterEnd);
+  const headersStart = INDEX_SOURCE.indexOf('function corsHeaders');
+  const headersEnd = INDEX_SOURCE.indexOf('function json', headersStart);
+  const headersSource = INDEX_SOURCE.slice(headersStart, headersEnd);
+  assert.match(adapterSource, /async getCommandReplay\(userId: string, idempotencyKey: string\)/);
+  assert.match(adapterSource, /rpc\('p19_get_command_replay'/);
+  assert.doesNotMatch(headersSource, /getCommandReplay|\brpc\s*\(/);
+});
+
 /** 服务端边界函数白名单（迁移内 service_role 唯一被授予 EXECUTE 的函数）。 */
 const BOUNDARY_RPCS = new Set([
   'p20_list_projects',
   'p20_import_project',
   'p19_staging_role',
   'p19_get_project',
+  'p19_get_command_replay',
   'p19_list_project_entities',
   'p19_apply_entity_write',
+  'p19_apply_entity_write_v2',
   'p19_remove_evidence',
 ]);
 

@@ -51,7 +51,7 @@ staging/production 已被修改**；本任务全程仅本地操作。
 | # | 命令 |
 |---|------|
 | 1 | 浏览器集合（`test/p20-browser-online.test.mjs`、`test/p29-multimodal-x-evidence.browser.test.mjs`、`test/p32-multipost-synthesis-brief.browser.test.mjs`、`test/content-creation-modes.browser.test.mjs`，连续五次，同轮串行，每轮全部通过、0 skipped，每轮后零 Edge 进程/临时目录残留） |
-| 2 | `node --test test/p19-sql-integration.test.mjs`（PostgreSQL 17 顺序重放全部 44 项迁移并通过 SQL 测试） |
+| 2 | `node --test test/p19-sql-integration.test.mjs`（PostgreSQL 17 顺序重放全部 45 项迁移并通过 SQL 测试） |
 | 3 | `npm run migrations:check` |
 | 4 | `npm run lint` |
 | 5 | `npm run typecheck` |
@@ -67,7 +67,7 @@ M1 判为通过。
 
 ## 迁移可重建证据
 
-- 全部 44 项迁移在隔离的全新数据库上按顺序回放成功（数据库
+- 全部 45 项迁移在隔离的全新数据库上按顺序回放成功（数据库
   `p19_verify_<pid>` 每次新建，finally 中精确 dropdb 清理）。
 - 回放起点 bootstrap 仅复刻已验收环境（`storage` / `auth` / `extensions` /
   `graphql_public` / `vault` 架构与扩展），不构成迁移变更。

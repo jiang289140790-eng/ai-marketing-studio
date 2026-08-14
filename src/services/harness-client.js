@@ -1,0 +1,57 @@
+import { supabase } from './supabase-client.js';
+import { PROJECT_ID_PATTERN } from './p19-contracts.js';
+
+export const HARNESS_EDGE_SCHEMA_VERSION = 'ams_harness_edge_v1';
+export const HARNESS_ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
+
+export function readHarnessActiveProject(storage = globalThis.localStorage) {
+  try {
+    const value = storage?.getItem?.(HARNESS_ACTIVE_PROJECT_KEY);
+    return typeof value === 'string' && PROJECT_ID_PATTERN.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function boundedError(code, message) {
+  const error = new Error(String(message || 'AI 工作台暂时不可用。').slice(0, 240));
+  error.code = String(code || 'HARNESS_REQUEST_FAILED').slice(0, 80);
+  return error;
+}
+
+export function createHarnessClient({ client = supabase } = {}) {
+  async function invoke(body) {
+    if (!client) throw boundedError('HARNESS_NOT_CONFIGURED', 'AI 工作台尚未连接 staging。');
+    const sessionResult = body.action === 'submit'
+      ? await client.auth.refreshSession()
+      : await client.auth.getSession();
+    const { data: sessionData, error: sessionError } = sessionResult;
+    const token = sessionData?.session?.access_token;
+    if (sessionError || !token) throw boundedError('AUTH_REQUIRED', '请先登录后再运行 AI 任务。');
+    const { data, error } = await client.functions.invoke('harness-command', {
+      headers: { Authorization: `Bearer ${token}` },
+      body: { schema_version: HARNESS_EDGE_SCHEMA_VERSION, ...body },
+    });
+    if (error) {
+      const context = typeof error.context?.json === 'function' ? await error.context.json().catch(() => null) : null;
+      throw boundedError(context?.code || 'HARNESS_EDGE_UNAVAILABLE', context?.message || 'AI 任务入口暂时不可用。');
+    }
+    if (!data || data.ok !== true) throw boundedError(data?.code || 'HARNESS_RESPONSE_INVALID', data?.message || 'AI 任务未被接受。');
+    return data;
+  }
+
+  return Object.freeze({
+    submit({ requestId, projectId = null, intent, approval }) {
+      return invoke({ action: 'submit', request_id: requestId, project_id: projectId, intent, approval });
+    },
+    read(taskId) { return invoke({ action: 'read', task_id: taskId }); },
+    list(limit = 30) { return invoke({ action: 'list', limit }); },
+    cancel(taskId) { return invoke({ action: 'cancel', task_id: taskId }); },
+  });
+}
+
+export function newHarnessRequestId(randomId = () => globalThis.crypto?.randomUUID?.()) {
+  const value = randomId();
+  if (typeof value !== 'string' || !value) throw boundedError('REQUEST_ID_UNAVAILABLE', '无法创建安全任务编号。');
+  return `web-${value}`;
+}

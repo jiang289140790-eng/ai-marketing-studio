@@ -8,7 +8,6 @@ import { useAuth } from './contexts/auth-context';
 import { useCampaignContext } from './contexts/campaign-context';
 import { useAppRoute } from './utils/app-route';
 
-const CommandCenter = lazy(() => import('./pages/CommandCenter').then((module) => ({ default: module.CommandCenter })));
 const AccountsPage = lazy(() => import('./pages/AccountsPage').then((module) => ({ default: module.AccountsPage })));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((module) => ({ default: module.AnalyticsPage })));
 const DataAnalyticsPage = lazy(() => import('./pages/DataAnalyticsPage').then((module) => ({ default: module.DataAnalyticsPage })));
@@ -26,9 +25,11 @@ const SystemOverviewPage = lazy(() => import('./pages/SystemOverviewPage').then(
 const WorkflowModelConfigPage = lazy(() => import('./pages/WorkflowModelConfigPage').then((module) => ({ default: module.WorkflowModelConfigPage })));
 const KnowledgeVaultPage = lazy(() => import('./pages/KnowledgeVaultPage').then((module) => ({ default: module.KnowledgeVaultPage })));
 const ResearchWorkspacePage = lazy(() => import('./pages/ResearchWorkspacePage').then((module) => ({ default: module.ResearchWorkspacePage })));
+const AIWorkspacePage = lazy(() => import('./pages/AIWorkspacePage').then((module) => ({ default: module.AIWorkspacePage })));
 
 const pageTitles = {
-  dashboard: 'AI 运营指挥中心',
+  ai: 'AI 工作台',
+  dashboard: 'AI 工作台',
   campaigns: '运营活动',
   plan: '内容计划',
   research: '研究工作台',
@@ -93,6 +94,8 @@ export default function App() {
     };
 
     switch (activePage) {
+      case 'ai':
+        return <AIWorkspacePage {...props} />;
       case 'campaigns':
         return <CampaignStrategyPage {...props} />;
       case 'plan':
@@ -130,7 +133,7 @@ export default function App() {
       case 'workflows':
         return <WorkflowModelConfigPage {...props} />;
       default:
-        return <CommandCenter {...props} />;
+        return <AIWorkspacePage {...props} />;
     }
   }, [activePage, auxiliaryMode, auxiliaryScope, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, userId]);
 

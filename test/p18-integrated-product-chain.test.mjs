@@ -587,21 +587,21 @@ test('路由：五个主导航项存在于导航列表中', () => {
   }
 });
 
-test('路由：App.jsx 可路由到所有五页', () => {
+test('路由：App.jsx 保留既有页面并以 AI 工作台为默认入口', () => {
   const appSource = readSource('src/App.jsx');
   assert.ok(appSource.includes('research'), 'App.jsx 应路由到 research');
   assert.ok(appSource.includes('knowledge'), 'App.jsx 应路由到 knowledge');
   assert.ok(appSource.includes('workspace'), 'App.jsx 应路由到 workspace');
-  assert.ok(appSource.includes('CommandCenter'), 'App.jsx 应导入 CommandCenter');
+  assert.ok(appSource.includes('AIWorkspacePage'), 'App.jsx 应导入 AIWorkspacePage');
 });
 
-test('路由：Sidebar 包含五个主导航过滤 ID', () => {
+test('路由：Sidebar 仅突出 AI、研究、知识与连接四个核心入口', () => {
   const sidebarSource = readSource('src/components/Sidebar.jsx');
-  assert.ok(sidebarSource.includes('dashboard'));
+  assert.ok(sidebarSource.includes("'ai'"));
   assert.ok(sidebarSource.includes('research'));
   assert.ok(sidebarSource.includes('knowledge'));
-  assert.ok(sidebarSource.includes('workspace'));
-  assert.ok(sidebarSource.includes('intelligence'));
+  assert.ok(sidebarSource.includes('connections'));
+  assert.ok(!sidebarSource.includes("'publish'"));
 });
 
 // ============================================================================

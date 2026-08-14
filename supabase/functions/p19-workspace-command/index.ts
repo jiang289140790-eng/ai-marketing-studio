@@ -52,11 +52,13 @@ const BOUNDED_STATUS = Object.freeze({
 async function verifyP22EvidenceRecord(proofSecret: string, userId: string, record: Record<string, unknown>) {
   const provenance = record?.provenance as Record<string, unknown>;
   const media = record?.media_metadata as Record<string, unknown>;
+  const sourcePlatform = String(provenance?.source_platform || '').toLowerCase();
+  if (!['x', 'reddit'].includes(sourcePlatform)) throw new Error('P22_SOURCE_PLATFORM_INVALID');
   const item = {
     id: provenance.source_id,
     source_url: record.source_url,
     label: record.label,
-    platform: 'x',
+    platform: sourcePlatform,
     content_text: record.content_text,
     external_id: provenance.external_id,
     content_sha256: media?.sha256,
@@ -119,6 +121,12 @@ function createDbAdapter(supabase) {
   }
 
   return {
+    async getCommandReplay(userId: string, idempotencyKey: string) {
+      return await rpc('p19_get_command_replay', {
+        p_user_id: userId,
+        p_idempotency_key: idempotencyKey,
+      });
+    },
     async listProjects(userId: string) {
       const data = await rpc('p20_list_projects', { p_user_id: userId });
       return Array.isArray(data) ? data : [];
@@ -146,7 +154,7 @@ function createDbAdapter(supabase) {
     },
     async writeEntity(userId: string, meta: Record<string, unknown>) {
       try {
-        return await rpc('p19_apply_entity_write', {
+        return await rpc('p19_apply_entity_write_v2', {
           p_user_id: userId,
           p_idempotency_key: meta.idempotency_key,
           p_command: meta.command,
@@ -158,6 +166,7 @@ function createDbAdapter(supabase) {
           p_declared_sha: meta.declared_sha || null,
           p_expected_base_version: meta.expected_base_version ?? null,
           p_expected_entity_fingerprint: meta.expected_entity_fingerprint ?? null,
+          p_expected_project_revision: meta.expected_project_revision ?? null,
         });
       } catch (error) {
         throw mapBoundaryError(error);

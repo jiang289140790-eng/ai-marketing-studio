@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ams-harness-gateway:0.1.0-h1
+    image: ams-harness-gateway:0.2.0-h2
     container_name: ams-harness-gateway
     restart: unless-stopped
     read_only: true
@@ -21,8 +21,11 @@ services:
       AMS_GATEWAY_HMAC_SECRET_FILE: /run/secrets/ams_gateway_hmac_secret
       DEEPSEEK_API_KEY: internal-model-proxy
       DEEPSEEK_BASE_URL: http://model-proxy:8791
+      AMS_TOOL_BRIDGE_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge
+      AMS_TOOL_BRIDGE_SECRET_FILE: /run/secrets/ams_tool_bridge_secret
     secrets:
       - ams_gateway_hmac_secret
+      - ams_tool_bridge_secret
     volumes:
       - harness_gateway_data:/data
       - harness_workspace:/workspace:ro
@@ -30,9 +33,10 @@ services:
       - /tmp:size=128m,mode=1777
     networks:
       - harness_private
+      - tool_egress
 
   model-proxy:
-    image: ams-harness-gateway:0.1.0-h1
+    image: ams-harness-gateway:0.2.0-h2
     container_name: ams-harness-model-proxy
     restart: unless-stopped
     read_only: true
@@ -62,9 +66,12 @@ networks:
   harness_private:
     internal: true
   model_egress: {}
+  tool_egress: {}
 
 secrets:
   ams_gateway_hmac_secret:
     file: ${AMS_GATEWAY_HMAC_SECRET_FILE:?required}
   deepseek_api_key:
     file: ${DEEPSEEK_API_KEY_FILE:?required}
+  ams_tool_bridge_secret:
+    file: ${AMS_TOOL_BRIDGE_SECRET_FILE:?required}

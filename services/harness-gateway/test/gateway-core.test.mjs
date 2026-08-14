@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-/* global setImmediate, setTimeout */
+/* global Buffer, setImmediate, setTimeout */
+import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { GATEWAY_SCHEMA_VERSION, HarnessTaskQueue, signRequest, validateTaskRequest, verifySignedRequest } from '../gateway-core.mjs';
+import { GATEWAY_SCHEMA_VERSION, HarnessTaskQueue, signRequest, validateDelegatedAuthorization, validateTaskRequest, verifySignedRequest } from '../gateway-core.mjs';
 
 function request(overrides = {}) {
   return {
@@ -26,6 +27,7 @@ test('HMAC is body-bound, timestamp-bound, and time-bounded', () => {
   const timestamp = '1786686000000';
   const body = JSON.stringify(request());
   const envelope = { method: 'POST', path: '/v1/tasks', userId: 'user-a', timestamp, rawBody: body };
+  envelope.authorizationDigest = 'a'.repeat(64);
   const signature = signRequest(secret, envelope);
   assert.equal(verifySignedRequest({ secret, signature, ...envelope, now: 1786686000000 }), true);
   const weakSecret = 'weak';
@@ -34,6 +36,7 @@ test('HMAC is body-bound, timestamp-bound, and time-bounded', () => {
   assert.equal(verifySignedRequest({ secret, signature, ...envelope, userId: 'user-b', now: 1786686000000 }), false);
   assert.equal(verifySignedRequest({ secret, signature, ...envelope, path: '/v1/tasks/other', now: 1786686000000 }), false);
   assert.equal(verifySignedRequest({ secret, signature, ...envelope, rawBody: `${body} `, now: 1786686000000 }), false);
+  assert.equal(verifySignedRequest({ secret, signature, ...envelope, authorizationDigest: 'b'.repeat(64), now: 1786686000000 }), false);
   assert.equal(verifySignedRequest({ secret, signature, ...envelope, now: 1786686200000 }), false);
 });
 
@@ -74,6 +77,28 @@ test('idempotent request replay never launches a duplicate task', async () => {
   assert.equal(queue.submit(request({ intent: 'different intent' })).code, 'IDEMPOTENCY_CONFLICT');
 });
 
+test('terminal idempotent replay does not require a new execution-lifetime window', async () => {
+  let runs = 0;
+  const queue = new HarnessTaskQueue({
+    runner: async () => { runs += 1; return { final_response: 'durable result' }; },
+    validateRuntimeContext: (context) => context?.fullWindow === true
+      ? { ok: true }
+      : { ok: false, code: 'DELEGATED_AUTHORIZATION_EXPIRES_TOO_SOON' },
+  });
+  const input = request({ request_id: 'terminal-replay' });
+  const first = queue.submit(input, { fullWindow: true });
+  assert.equal(first.ok, true);
+  await queue.whenIdle();
+  assert.equal(runs, 1);
+
+  const replay = queue.submit(input, { fullWindow: false });
+  assert.equal(replay.ok, true);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.task.state, 'succeeded');
+  assert.equal(replay.task.result.final_response, 'durable result');
+  assert.equal(runs, 1);
+});
+
 test('idempotent replay wins over queue saturation', async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -96,21 +121,61 @@ test('tasks are isolated by verified user identity', async () => {
   await queue.whenIdle();
 });
 
+test('delegated authorization is delivered only as ephemeral runner context and never persisted', async () => {
+  const events = [];
+  let observedContext;
+  const delegatedAuthorization = `Bearer ${'z'.repeat(48)}`;
+  const queue = new HarnessTaskQueue({
+    runner: async (_input, _taskId, _signal, runtimeContext) => {
+      observedContext = runtimeContext;
+      return { final_response: 'ok' };
+    },
+    onEvent: (event) => events.push(event),
+  });
+  const submitted = queue.submit(request({ request_id: 'runtime-context-only' }), { delegatedAuthorization });
+  assert.equal(JSON.stringify(submitted).includes(delegatedAuthorization), false);
+  await queue.whenIdle();
+  assert.deepEqual(observedContext, { delegatedAuthorization });
+  assert.equal(JSON.stringify(events).includes(delegatedAuthorization), false);
+  assert.equal(JSON.stringify(queue.read(submitted.task.id, 'user-a')).includes(delegatedAuthorization), false);
+});
+
+test('queued execution validates delegated JWT lifetime without persisting refresh credentials', async () => {
+  const jwt = (expiresAt) => `Bearer a.${Buffer.from(JSON.stringify({ exp: Math.floor(expiresAt / 1000) })).toString('base64url')}.signature`;
+  const now = 1786686000000;
+  assert.equal(validateDelegatedAuthorization({ delegatedAuthorization: jwt(now + 800_000) }, { now, minimumValidityMs: 750_000 }).ok, true);
+  assert.equal(validateDelegatedAuthorization({ delegatedAuthorization: jwt(now + 700_000) }, { now, minimumValidityMs: 750_000 }).code, 'DELEGATED_AUTHORIZATION_EXPIRES_TOO_SOON');
+  assert.equal(validateDelegatedAuthorization({ delegatedAuthorization: 'Bearer opaque' }, { now }).code, 'DELEGATED_AUTHORIZATION_INVALID');
+
+  let runs = 0;
+  const queue = new HarnessTaskQueue({
+    runner: async () => { runs += 1; return { final_response: 'ok' }; },
+    validateRuntimeContext: (context) => validateDelegatedAuthorization(context, { now, minimumValidityMs: 750_000 }),
+  });
+  const rejected = queue.submit(request({ request_id: 'expiring-jwt' }), { delegatedAuthorization: jwt(now + 700_000) });
+  assert.equal(rejected.code, 'DELEGATED_AUTHORIZATION_EXPIRES_TOO_SOON');
+  assert.equal(runs, 0);
+  assert.deepEqual(queue.list('user-a'), []);
+});
+
 test('queue rejects overflow and permits exact queued cancellation', async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const queue = new HarnessTaskQueue({ runner: async () => { await gate; return { final_response: 'ok' }; }, capacity: 2 });
-  const active = queue.submit(request());
+  const active = queue.submit(request(), { delegatedAuthorization: 'Bearer active' });
   await new Promise((resolve) => setImmediate(resolve));
-  const queued = queue.submit(request({ request_id: 'request-2' }));
+  const queued = queue.submit(request({ request_id: 'request-2' }), { delegatedAuthorization: 'Bearer queued' });
+  assert.equal(queue.status().delegated_contexts, 2);
   assert.equal(queue.submit(request({ request_id: 'request-3' })).code, 'QUEUE_FULL');
   const cancelled = queue.cancel(queued.task.id, 'user-a');
   assert.equal(cancelled.task.state, 'cancelled');
+  assert.equal(queue.status().delegated_contexts, 1, 'queued cancellation must erase its delegated credential immediately');
   const requested = queue.cancel(active.task.id, 'user-a');
   assert.equal(requested.cancellation_requested, true);
   release();
   await queue.whenIdle();
   assert.equal(queue.read(active.task.id, 'user-a').task.state, 'cancelled');
+  assert.equal(queue.status().delegated_contexts, 0);
 });
 
 test('restart recovery fails interrupted tasks closed and preserves terminal results', async () => {
@@ -133,6 +198,35 @@ test('restart recovery fails interrupted tasks closed and preserves terminal res
   assert.equal(events.some((event) => event.event === 'recovered_failed' && event.task_id === interrupted.task.id), true);
 });
 
+test('restart recovery migrates legacy approval fingerprints before exact replay', () => {
+  const legacyRequest = request({
+    request_id: 'legacy-approval-fingerprint',
+    approval: { paid_external_calls: false, online_writes: false },
+  });
+  const queue = new HarnessTaskQueue({
+    runner: async () => ({ final_response: 'must not rerun' }),
+    initialTasks: [{
+      id: 'ht-00000000-0000-4000-8000-000000000003',
+      state: 'succeeded',
+      created_at: '2026-08-14T00:00:00.000Z',
+      updated_at: '2026-08-14T00:00:01.000Z',
+      request: legacyRequest,
+      request_fingerprint: createHash('sha256').update(JSON.stringify(legacyRequest)).digest('hex'),
+      result: { final_response: 'legacy durable result', artifact_refs: [] },
+      error: null,
+    }],
+  });
+  const replay = queue.submit(legacyRequest);
+  assert.equal(replay.ok, true);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.task.result.final_response, 'legacy durable result');
+  assert.deepEqual(replay.task.request.approval, {
+    paid_external_calls: false,
+    online_writes: false,
+    handoff_creation: false,
+  });
+});
+
 test('history and list results remain bounded', async () => {
   const events = [];
   const queue = new HarnessTaskQueue({ runner: async () => ({ final_response: 'ok' }), maxHistory: 2, onEvent: (event) => events.push(event) });
@@ -143,6 +237,20 @@ test('history and list results remain bounded', async () => {
   assert.equal(queue.list('user-a', 100).length, 2);
   assert.equal(events.filter((event) => event.event === 'pruned').length, 2);
   assert.equal(queue.list('user-a', 1).length, 1);
+  const summaries = queue.listSummaries('user-a', 100);
+  assert.equal(summaries.length, 2);
+  assert.equal(Object.hasOwn(summaries[0].result || {}, 'final_response'), false);
+});
+
+test('terminal responses are bounded by UTF-8 bytes for the Edge envelope', async () => {
+  const queue = new HarnessTaskQueue({ runner: async () => ({ final_response: '中'.repeat(32_000) }) });
+  const submitted = queue.submit(request({ request_id: 'utf8-result' }));
+  assert.equal(submitted.ok, true);
+  await queue.whenIdle();
+  const completed = queue.read(submitted.task.id, submitted.task.request.user_id);
+  assert.equal(completed.ok, true);
+  assert.ok(Buffer.byteLength(completed.task.result.final_response, 'utf8') <= 12 * 1024);
+  assert.doesNotMatch(completed.task.result.final_response, /\uFFFD/u);
 });
 
 test('audit persistence failure rejects submission without leaving an orphan task', () => {

@@ -6,7 +6,7 @@
 // 判为通过）。
 //
 // 覆盖（要求验证 #1 与 #8 的真实 SQL 执行部分）：
-//   - 全新数据库上回放全部 44 个迁移（bootstrap 仅复刻已验收环境：
+//   - 全新数据库上回放全部 45 个迁移（bootstrap 仅复刻已验收环境：
 //     storage/auth/extensions/graphql_public/vault 架构与扩展，非迁移变更）；
 //   - 全部 SQL 测试（已验收 P17 系列 + P19 + P20 + P22 + P17-B2 对抗测试）
 //     逐一通过；其中 P17-B2 的 helper 由本文件从 P17-A4 迁移提取并同源注入
@@ -101,7 +101,7 @@ const CONCURRENT_USER = '44444444-4444-4444-8444-444444444444';
 const CONCURRENT_PROJECT = 'prj-eeeeeeeeeeeeeeeeeeeeeeee';
 const CONCURRENT_KEY = 'conc-key-1';
 
-test('SQL 集成：全新数据库回放 44 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
+test('SQL 集成：全新数据库回放 45 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
   // 基础设施前置：Docker/PostgreSQL 17 缺失时给出明确基础设施失败（M1 验收）。
   const docker = dockerReady();
   assert.ok(docker.ok, `基础设施失败：Docker CLI/daemon 不可用（${docker.version || '无法探测'}），无法回放真实 PostgreSQL 17 迁移`);
@@ -122,11 +122,11 @@ test('SQL 集成：全新数据库回放 44 迁移 + SQL 测试 + 并发幂等�
     result = psql(dbName, null, { stdin: ext });
     assert.equal(result.status, 0, `扩展引导失败：${result.stderr || result.stdout}`);
 
-    // ---- 44 个迁移按顺序回放 ----
+    // ---- 45 个迁移按顺序回放 ----
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 44, '迁移集必须是规范 39 + P19 + P20 + P20 ACL repair + P22 + P26 共 44 个');
+    assert.equal(migrations.length, 45, '迁移集必须是既有 44 项加 Harness 原子项目修订门禁，共 45 项');
     for (const name of migrations) {
       const sql = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', name), 'utf8');
       const run = psql(dbName, null, { stdin: sql });
@@ -134,6 +134,52 @@ test('SQL 集成：全新数据库回放 44 迁移 + SQL 测试 + 并发幂等�
     }
 
     // ---- 全部 SQL 测试逐一通过（已验收 P17 系列 + P19/P20/P22 + P17-B2 对抗）----
+    // Harness paid-operation receipts are private, exact, and replayable.
+    const receiptUser = '55555555-5555-4555-8555-555555555555';
+    const receiptId = '66666666-6666-4666-8666-666666666666';
+    const receiptRequest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const receipt = `jsonb_build_object('items',jsonb_build_array(jsonb_build_object('id','source-1')),'cost',jsonb_build_object('recorded_cny',2))`;
+    const claimReceipt = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}');`);
+    assert.equal(claimReceipt.status, 0, claimReceipt.stderr || claimReceipt.stdout);
+    assert.equal(claimReceipt.stdout.trim(), 'claimed');
+    const replayPending = psql(dbName, `select api.p22_get_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}')::text;`);
+    assert.equal(replayPending.status, 0, replayPending.stderr || replayPending.stdout);
+    assert.equal(replayPending.stdout.trim(), '');
+    const failReceipt = psql(dbName, `select api.p22_fail_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}','APIFY_TIMEOUT');`);
+    assert.equal(failReceipt.status, 0, failReceipt.stderr || failReceipt.stdout);
+    assert.equal(failReceipt.stdout.trim(), 'failed');
+    const reclaimReceipt = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}');`);
+    assert.equal(reclaimReceipt.status, 0, reclaimReceipt.stderr || reclaimReceipt.stdout);
+    assert.equal(reclaimReceipt.stdout.trim(), 'reclaimed');
+    const concurrentReceiptId = '77777777-7777-4777-8777-777777777777';
+    const concurrentClaim = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}');`);
+    assert.equal(concurrentClaim.stdout.trim(), 'claimed');
+    const concurrentFail = psql(dbName, `select api.p22_fail_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}','MODEL_TIMEOUT');`);
+    assert.equal(concurrentFail.stdout.trim(), 'failed');
+    const concurrentReclaims = await Promise.all([
+      psqlAsync(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}');`),
+      psqlAsync(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}');`),
+    ]);
+    const reclaimOutcomes = concurrentReclaims.map((run) => {
+      assert.equal(run.status, 0, run.stderr || run.stdout);
+      return run.stdout.trim();
+    }).sort();
+    assert.deepEqual(reclaimOutcomes, ['already_claimed', 'reclaimed'], 'only one concurrent retry may reclaim a failed paid operation');
+    const claimConflict = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');`);
+    assert.notEqual(claimConflict.status, 0);
+    assert.match(claimConflict.stderr, /P22_PAID_REPLAY_IDENTITY_CONFLICT/);
+    const completeReceipt = `select api.p22_complete_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}',${receipt})::text;`;
+    const firstReceipt = psql(dbName, completeReceipt);
+    assert.equal(firstReceipt.status, 0, firstReceipt.stderr || firstReceipt.stdout);
+    const replayReceipt = psql(dbName, `select api.p22_get_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}')::text;`);
+    assert.equal(replayReceipt.status, 0, replayReceipt.stderr || replayReceipt.stdout);
+    assert.deepEqual(JSON.parse(replayReceipt.stdout.trim()), { cost: { recorded_cny: 2 }, items: [{ id: 'source-1' }] });
+    const conflictReceipt = psql(dbName, `select api.p22_complete_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}',jsonb_build_object('items','[]'::jsonb))::text;`);
+    assert.notEqual(conflictReceipt.status, 0);
+    assert.match(conflictReceipt.stderr, /P22_PAID_REPLAY_IDENTITY_CONFLICT/);
+    const receiptAcl = psql(dbName, `select c.relrowsecurity,c.relforcerowsecurity,has_function_privilege('anon','api.p22_get_paid_operation_replay(uuid,uuid,text,text,integer,text)','execute'),has_function_privilege('authenticated','api.p22_complete_paid_operation_replay(uuid,uuid,text,text,integer,text,jsonb)','execute'),has_function_privilege('service_role','api.p22_claim_paid_operation_replay(uuid,uuid,text,text,integer,text)','execute') from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='ams_private' and c.relname='p22_paid_operation_replays_v1';`);
+    assert.deepEqual(receiptAcl.stdout.trim().split('|'), ['t', 't', 'f', 'f', 't']);
+
     const tests = readdirSync(join(REPO_ROOT, 'supabase', 'tests'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
@@ -187,6 +233,42 @@ test('SQL 集成：全新数据库回放 44 迁移 + SQL 测试 + 并发幂等�
     assert.match(mutationRun.stderr, /P19_PROJECT_ARCHIVED/);
     const raceCounts = psql(dbName, `select (select status from ams_private.p19_research_projects_v1 where user_id='${CONCURRENT_USER}' and project_id='${raceProject}' order by project_version desc limit 1), (select count(*) from ams_private.p19_evidence_records_v1 where project_id='${raceProject}'), (select count(*) from ams_private.p19_command_ledger_v1 where idempotency_key='race-mutate');`);
     assert.deepEqual(raceCounts.stdout.trim().split(/[\s|]+/).filter(Boolean), ['archived', '0', '0'], '归档胜出后不得留下实体或失败台账');
+
+    // ---- Harness project revision race: the v2 wrapper and mutation share one lock/transaction. ----
+    const revisionProject = 'prj-abababababababababababab';
+    const revisionEvidence = 'ev-abababababababababababab';
+    const createRevisionProject = psql(dbName, `select api.p19_apply_entity_write('${CONCURRENT_USER}','revision-create','project.create','project','${revisionProject}','{}'::jsonb,'p19_research_projects_v1',jsonb_build_object('id','${revisionProject}','version',1,'schema_version','p19_research_project_v1','status','active','topic','revision','objective','o','audience','a','channel','c','constraints','[]'::jsonb),null,null,null)::text;`);
+    assert.equal(createRevisionProject.status, 0, createRevisionProject.stderr || createRevisionProject.stdout);
+    const projectAdvance = `begin; select 1 from ams_private.p19_project_locks_v1 where user_id='${CONCURRENT_USER}' and project_id='${revisionProject}' for update; select pg_sleep(1); select api.p19_apply_entity_write('${CONCURRENT_USER}','revision-advance','project.update','project','${revisionProject}','{}'::jsonb,'p19_research_projects_v1',jsonb_build_object('id','${revisionProject}','version',2,'schema_version','p19_research_project_v1','status','active','topic','revision 2','objective','o','audience','a','channel','c','constraints','[]'::jsonb),null,1,null)::text; commit;`;
+    const staleEntity = `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','revision-stale-entity','evidence.create','evidence','${revisionEvidence}','{}'::jsonb,'p19_evidence_records_v1',jsonb_build_object('id','${revisionEvidence}','project_id','${revisionProject}','schema_version','p19_evidence_record_v1','source_url','https://example.com/revision','label','revision','platform','manual','content_text','revision','recorded_at','2026-08-12T00:00:00Z','provenance',jsonb_build_object('manual',true),'created_at','2026-08-12T00:00:00Z','updated_at','2026-08-12T00:00:00Z'),null,null,null,1)::text;`;
+    const advancePromise = psqlAsync(dbName, projectAdvance);
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 200));
+    const stalePromise = psqlAsync(dbName, staleEntity);
+    const [advanceResult, staleResult] = await Promise.all([advancePromise, stalePromise]);
+    assert.equal(advanceResult.status, 0, advanceResult.stderr || advanceResult.stdout);
+    assert.notEqual(staleResult.status, 0, 'stale Harness entity write must fail after the concurrent project revision commits');
+    assert.match(staleResult.stderr, /P19_PROJECT_REVISION_STALE/);
+    const revisionState = psql(dbName, `select (select max(project_version) from ams_private.p19_research_projects_v1 where user_id='${CONCURRENT_USER}' and project_id='${revisionProject}'), (select count(*) from ams_private.p19_evidence_records_v1 where user_id='${CONCURRENT_USER}' and project_id='${revisionProject}'), (select count(*) from ams_private.p19_command_ledger_v1 where user_id='${CONCURRENT_USER}' and idempotency_key='revision-stale-entity');`);
+    assert.deepEqual(revisionState.stdout.trim().split('|'), ['2', '0', '0'], 'atomic revision rejection leaves no entity or ledger row');
+
+    // ---- Exact retry after a successful revision-changing update must replay. ----
+    const replayProject = 'prj-acacacacacacacacacacacac';
+    const createReplayProject = psql(dbName, `select api.p19_apply_entity_write('${CONCURRENT_USER}','replay-create','project.create','project','${replayProject}','{}'::jsonb,'p19_research_projects_v1',jsonb_build_object('id','${replayProject}','version',1,'schema_version','p19_research_project_v1','status','active','topic','replay','objective','o','audience','a','channel','c','constraints','[]'::jsonb),null,null,null)::text;`);
+    assert.equal(createReplayProject.status, 0, createReplayProject.stderr || createReplayProject.stdout);
+    const replaySummary = `jsonb_build_object('command','project.update','request_payload',jsonb_build_object('project_id','${replayProject}','patch',jsonb_build_object('topic','revision two'),'expected_revision',1),'payload_sha256',null)`;
+    const replayPayload = `jsonb_build_object('id','${replayProject}','version',2,'schema_version','p19_research_project_v1','status','active','topic','revision two','objective','o','audience','a','channel','c','constraints','[]'::jsonb)`;
+    const replayCall = `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','replay-update','project.update','project','${replayProject}',${replaySummary},'p19_research_projects_v1',${replayPayload},null,1,null,1)::text;`;
+    const replayFirst = psql(dbName, replayCall);
+    assert.equal(replayFirst.status, 0, replayFirst.stderr || replayFirst.stdout);
+    assert.match(replayFirst.stdout, /applied/);
+    const replaySecond = psql(dbName, replayCall);
+    assert.equal(replaySecond.status, 0, replaySecond.stderr || replaySecond.stdout);
+    assert.match(replaySecond.stdout, /replayed/, 'same key and request must replay before revision-stale validation');
+    const replayConflict = psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','replay-update','project.update','project','${replayProject}',jsonb_build_object('command','project.update','request_payload',jsonb_build_object('project_id','${replayProject}','patch',jsonb_build_object('topic','different'),'expected_revision',1),'payload_sha256',null),'p19_research_projects_v1',${replayPayload},null,1,null,1)::text;`);
+    assert.notEqual(replayConflict.status, 0);
+    assert.match(replayConflict.stderr, /P19_IDEMPOTENCY_CONFLICT/);
+    const replayState = psql(dbName, `select (select max(project_version) from ams_private.p19_research_projects_v1 where user_id='${CONCURRENT_USER}' and project_id='${replayProject}'), (select count(*) from ams_private.p19_command_ledger_v1 where user_id='${CONCURRENT_USER}' and idempotency_key='replay-update');`);
+    assert.deepEqual(replayState.stdout.trim().split('|'), ['2', '1']);
     // ---- Entity optimistic fingerprint: one stale snapshot can win only once. ----
     const entityEvidence = 'ev-dddddddddddddddddddddddd';
     const oldFingerprint = 'a'.repeat(64);

@@ -59,14 +59,14 @@ export const P22_EXECUTION_FLAGS = Object.freeze({ generation_executed: false, r
 export const P22_CNY_PER_USD = 7.5;
 
 const ACTION_FIELDS = Object.freeze({
-  status: new Set(['action']),
-  collect: new Set(['action', 'topic', 'count']),
-  collect_url: new Set(['action', 'url']),
-  search: new Set(['action', 'keyword', 'count', 'sort']),
-  search_reddit: new Set(['action', 'keyword', 'count', 'sort', 'subreddit', 'time_filter']),
-  analyze: new Set(['action', 'items']),
-  analyze_persisted: new Set(['action', 'project_id', 'evidence_id']),
-  generate_similar: new Set(['action', 'project_id', 'evidence_id', 'analysis_id']),
+  status: new Set(['action', 'idempotency_key']),
+  collect: new Set(['action', 'topic', 'count', 'idempotency_key']),
+  collect_url: new Set(['action', 'url', 'idempotency_key']),
+  search: new Set(['action', 'keyword', 'count', 'sort', 'idempotency_key']),
+  search_reddit: new Set(['action', 'keyword', 'count', 'sort', 'subreddit', 'time_filter', 'idempotency_key']),
+  analyze: new Set(['action', 'items', 'idempotency_key']),
+  analyze_persisted: new Set(['action', 'project_id', 'evidence_id', 'idempotency_key']),
+  generate_similar: new Set(['action', 'project_id', 'evidence_id', 'analysis_id', 'idempotency_key']),
 });
 const ITEM_FIELDS = new Set(['id', 'source_url', 'label', 'platform', 'content_text', 'external_id', 'content_sha256', 'provenance', 'collection_proof', 'source_metadata', 'media_assets']);
 const PROVENANCE_FIELDS = new Set(['schema_version', 'provider', 'run_id', 'collected_at', 'usage_total_usd', 'budget_reservation_id']);
@@ -159,20 +159,25 @@ export function parseP22Request(raw) {
   const action = text(input.action, 'action', 24);
   if (!ACTION_FIELDS[action]) throw new P22Error('UNKNOWN_ACTION', '未知操作。', 400, { field: 'action' });
   exactFields(input, ACTION_FIELDS[action]);
-  if (action === 'status') return { action };
+  const idempotencyKey = input.idempotency_key === undefined ? null : text(input.idempotency_key, 'idempotency_key', 200);
+  if (idempotencyKey !== null && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(idempotencyKey)) {
+    throw new P22Error('IDEMPOTENCY_KEY_INVALID', 'idempotency_key format is invalid.', 400, { field: 'idempotency_key' });
+  }
+  const identified = (value) => idempotencyKey === null ? value : { ...value, idempotency_key: idempotencyKey };
+  if (action === 'status') return identified({ action });
   if (action === 'collect') {
     const count = Number(input.count ?? P22_LIMITS.collect);
     if (!Number.isInteger(count) || count < 1 || count > P22_LIMITS.collect) {
       throw new P22Error('COUNT_OUT_OF_RANGE', '采集数量必须为 1–5。', 400, { field: 'count' });
     }
-    return { action, topic: text(input.topic, 'topic', 240), count };
+    return identified({ action, topic: text(input.topic, 'topic', 240), count });
   }
   if (action === 'collect_url') {
     const identity = identifyPublicPostUrl(text(input.url, 'url', 1000));
     if (!identity.supported) {
       throw new P22Error('UNSUPPORTED_PLATFORM', `${identity.platform} 链接已识别，但当前采集器尚未接入该平台。`, 422, { field: 'url' });
     }
-    return { action, url: identity.canonical_url, platform: identity.platform, external_id: identity.external_id, count: 1 };
+    return identified({ action, url: identity.canonical_url, platform: identity.platform, external_id: identity.external_id, count: 1 });
   }
   if (action === 'search') {
     // P32-B：关键词规范化（trim + 折叠空白）并有界；URL 一律失败关闭——
@@ -191,7 +196,7 @@ export function parseP22Request(raw) {
     if (!['latest'].includes(sort)) {
       throw new P22Error('SORT_INTENT_UNSUPPORTED', '当前仅支持按最新发布采集搜索结果。', 400, { field: 'sort' });
     }
-    return { action, keyword, count, sort };
+    return identified({ action, keyword, count, sort });
   }
   if (action === 'search_reddit') {
     const keyword = text(input.keyword, 'keyword', P22_LIMITS.search_keyword_max).replace(/\s+/gu, ' ');
@@ -217,14 +222,14 @@ export function parseP22Request(raw) {
         throw new P22Error('SUBREDDIT_INVALID', 'subreddit 只能包含字母、数字和下划线。', 400, { field: 'subreddit' });
       }
     }
-    return { action, keyword, count, sort, subreddit, time_filter: timeFilter };
+    return identified({ action, keyword, count, sort, subreddit, time_filter: timeFilter });
   }
   if (action === 'analyze_persisted' || action === 'generate_similar') {
     const projectId = text(input.project_id, 'project_id', 28);
     if (!/^prj-[0-9a-f]{24}$/.test(projectId)) throw new P22Error('PROJECT_ID_INVALID', '项目身份格式无效。', 400, { field: 'project_id' });
     const evidenceId = text(input.evidence_id, 'evidence_id', 200);
-    if (action === 'analyze_persisted') return { action, project_id: projectId, evidence_id: evidenceId };
-    return { action, project_id: projectId, evidence_id: evidenceId, analysis_id: text(input.analysis_id, 'analysis_id', 200) };
+    if (action === 'analyze_persisted') return identified({ action, project_id: projectId, evidence_id: evidenceId });
+    return identified({ action, project_id: projectId, evidence_id: evidenceId, analysis_id: text(input.analysis_id, 'analysis_id', 200) });
   }
   if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > P22_LIMITS.analyze) {
     throw new P22Error('ITEM_COUNT_OUT_OF_RANGE', '分析项目必须为 1–2 条。', 400, { field: 'items' });
@@ -264,7 +269,7 @@ export function parseP22Request(raw) {
     ids.add(normalized.id);
     return normalized;
   });
-  return { action, items };
+  return identified({ action, items });
 }
 
 export async function persistedEvidenceToAnalyzeItem(evidence, { hasher = async (value) => {
@@ -1198,6 +1203,51 @@ export async function verifyAnalyzeSources(secret, userId, items, options = {}) 
     await verifyCollectionProof(secret, userId, item, item?.collection_proof, options);
   }
   return true;
+}
+
+export async function derivePaidBudgetReservationId(paidOperationId, idempotencyKey, { costDateUtc = new Date().toISOString().slice(0, 10) } = {}) {
+  if (!idempotencyKey) return paidOperationId;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(paidOperationId || ''))
+    || !/^\d{4}-\d{2}-\d{2}$/.test(String(costDateUtc || ''))) {
+    throw new P22Error('PAID_REPLAY_IDENTITY_INVALID', '付费操作的日期绑定身份无效。', 500);
+  }
+  const digest = await sha256Hex(`${paidOperationId}\nbudget\n${costDateUtc}`);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
+export async function allocatePaidAttemptBudgetReservationId(
+  paidOperationId,
+  idempotencyKey,
+  claimOutcome,
+  { costDateUtc = new Date().toISOString().slice(0, 10), randomUuid = () => globalThis.crypto.randomUUID() } = {},
+) {
+  if (claimOutcome === 'reclaimed') {
+    const attemptId = randomUuid();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(attemptId || ''))) {
+      throw new P22Error('PAID_ATTEMPT_IDENTITY_INVALID', '付费重试的费用身份无效。', 500);
+    }
+    return attemptId;
+  }
+  if (claimOutcome !== 'claimed') {
+    throw new P22Error('PAID_REPLAY_STATE_INVALID', '付费操作状态不允许创建费用记录。', 500);
+  }
+  return derivePaidBudgetReservationId(paidOperationId, idempotencyKey, { costDateUtc });
+}
+
+export async function refreshCollectionReplayReceipt(secret, userId, replay, { nowMs = Date.now() } = {}) {
+  if (!replay || typeof replay !== 'object' || Array.isArray(replay)
+    || !Array.isArray(replay.items) || replay.items.length < 1 || replay.items.length > P22_LIMITS.search_max) {
+    throw new P22Error('PAID_REPLAY_INVALID', '持久化采集回执无法安全重放。', 503);
+  }
+  const items = await Promise.all(replay.items.map(async (storedItem) => {
+    if (!storedItem || typeof storedItem !== 'object' || Array.isArray(storedItem)) {
+      throw new P22Error('PAID_REPLAY_INVALID', '持久化采集回执包含无效条目。', 503);
+    }
+    const item = { ...storedItem, collection_proof: await issueCollectionProof(secret, userId, storedItem, { nowMs }) };
+    await verifyCollectionProof(secret, userId, item, item.collection_proof, { nowMs });
+    return item;
+  }));
+  return { ...replay, items };
 }
 
 /**

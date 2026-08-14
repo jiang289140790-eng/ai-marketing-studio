@@ -159,6 +159,9 @@ function memoryDb(seed = {}) {
     return { outcome: 'applied', entity: { type: 'evidence', id: meta.evidence_id } };
   }
   return {
+    async getCommandReplay(userId, idempotencyKey) {
+      return state.commands.find((entry) => entry.user_id === userId && entry.idempotency_key === idempotencyKey) || null;
+    },
     _state: state,
     async getProject(userId, projectId) {
       const project = state.projects.get(`${userId}:${projectId}`);
@@ -339,7 +342,7 @@ test('幂等：同键换命令或换载荷必须返回 IDEMPOTENCY_CONFLICT', as
   assert.equal(changedPayload.code, 'IDEMPOTENCY_CONFLICT');
   const changedCommand = await executeCommand({ ...request('project.archive', { project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa' }, 'identity-key'), user_id: USER_A, access_role: 'operator' }, { db });
   assert.equal(changedCommand.ok, false);
-  assert.equal(changedCommand.code, 'PROJECT_NOT_FOUND');
+  assert.equal(changedCommand.code, 'IDEMPOTENCY_CONFLICT');
   assert.equal(db._state.commands.length, 1);
 });
 
@@ -1107,4 +1110,38 @@ test('P38 evidence.update refreshes same-identity provenance and verifies the ne
   const rejected = await executeCommand({ ...request('evidence.update', { project_id: projectId, evidence_id: after.id, expected_fingerprint: after.fingerprint, patch: { provenance: { ...refreshed, external_id: 'wrong' } } }, 'p38-bad-identity'), ...role }, { db, verifyP22Evidence: verify });
   assert.equal(rejected.ok, false);
   assert.equal(rejected.code, 'EVIDENCE_PROVENANCE_IDENTITY_MISMATCH');
+});
+
+test('idempotency: exact project.update replay wins before stale revision, while a changed request conflicts', async () => {
+  const db = memoryDb();
+  const created = await executeCommand({
+    ...request('project.create', { project: { topic: 'replay', objective: 'o', audience: 'a', channel: 'c', constraints: [] } }, 'replay-create'),
+    user_id: USER_A,
+    access_role: 'operator',
+  }, { db });
+  const updateRequest = {
+    ...request('project.update', {
+      project_id: created.entity.id,
+      patch: { topic: 'revision two' },
+      expected_revision: 1,
+    }, 'replay-update'),
+    user_id: USER_A,
+    access_role: 'operator',
+  };
+  const first = await executeCommand(updateRequest, { db });
+  assert.equal(first.applied, true, JSON.stringify(first));
+  assert.equal(db._state.projects.get(`${USER_A}:${created.entity.id}`).version, 2);
+
+  const replay = await executeCommand(updateRequest, { db });
+  assert.equal(replay.ok, true, JSON.stringify(replay));
+  assert.equal(replay.applied, false);
+  assert.ok(replay.replay_of);
+
+  const conflict = await executeCommand({
+    ...updateRequest,
+    payload: { ...updateRequest.payload, patch: { topic: 'different request' } },
+  }, { db });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.code, 'IDEMPOTENCY_CONFLICT');
+  assert.equal(db._state.projects.get(`${USER_A}:${created.entity.id}`).topic, 'revision two');
 });

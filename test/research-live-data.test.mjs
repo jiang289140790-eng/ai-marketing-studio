@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { HARNESS_INTEGRATION_OWNED_PATHS } from './helpers/harness-integration-owned-paths.mjs';
 import {
   RESEARCH_EXECUTION_FLAGS,
   RESEARCH_READ_SCOPE,
@@ -520,7 +521,7 @@ test('所有权与删除防护：仅授权路径发生受跟踪修改，无删�
       continue;
     }
     for (const path of paths) {
-      assert.ok(OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
+      assert.ok(OWNED_PATHS.has(path) || HARNESS_INTEGRATION_OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
     }
   }
 });

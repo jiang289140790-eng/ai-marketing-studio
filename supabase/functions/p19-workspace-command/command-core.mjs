@@ -90,16 +90,16 @@ const COMMAND_FIELDS = Object.freeze({
   'project.read': ['project_id'],
   'project.import': ['package'],
   'project.create': ['project'],
-  'project.update': ['project_id', 'patch'],
+  'project.update': ['project_id', 'patch', 'expected_revision'],
   'project.archive': ['project_id'],
-  'evidence.create': ['project_id', 'evidence'],
+  'evidence.create': ['project_id', 'evidence', 'expected_revision'],
   'evidence.update': ['project_id', 'evidence_id', 'expected_fingerprint', 'patch'],
   'evidence.remove': ['project_id', 'evidence_id', 'expected_fingerprint'],
-  'analysis.create': ['project_id', 'expected_fingerprint', 'analysis'],
-  'card.create': ['project_id', 'expected_fingerprint', 'card'],
-  'brief.assemble': ['project_id', 'expected_fingerprint', 'brief'],
+  'analysis.create': ['project_id', 'expected_fingerprint', 'analysis', 'expected_revision'],
+  'card.create': ['project_id', 'expected_fingerprint', 'card', 'expected_revision'],
+  'brief.assemble': ['project_id', 'expected_fingerprint', 'brief', 'expected_revision'],
   'brief.decide': ['project_id', 'expected_fingerprint', 'decision'],
-  'handoff.create': ['project_id', 'expected_fingerprint', 'handoff'],
+  'handoff.create': ['project_id', 'expected_fingerprint', 'handoff', 'expected_revision'],
   'lineage.audit': ['project_id'],
 });
 
@@ -173,6 +173,34 @@ export async function executeCommand({ command, idempotency_key: idempotencyKey,
     return fail('ROLE_DENIED', `当前 staging 角色无权执行 ${definition.label}（需要 ${definition.role}）。`, { command, idempotency_key: idempotencyKey });
   }
 
+  // Resolve an exact completed replay before reading mutable project state.
+  // Otherwise a successful project.update whose response was lost advances the
+  // revision and an exact retry would be misreported as PROJECT_REVISION_STALE.
+  if (typeof db.getCommandReplay === 'function') {
+    const ledger = await db.getCommandReplay(userId, idempotencyKey);
+    if (ledger) {
+      const expectedSummary = {
+        command,
+        request_payload: clonePlain(payload),
+        payload_sha256: payloadSha256 || null,
+      };
+      const sameRequest = ledger.command === command
+        && await hasher(ledger.request_summary || {}) === await hasher(expectedSummary);
+      if (!sameRequest) {
+        return fail('IDEMPOTENCY_CONFLICT', 'Idempotency key is already bound to a different request.', { command, idempotency_key: idempotencyKey });
+      }
+      return {
+        ok: true,
+        command,
+        idempotency_key: idempotencyKey,
+        applied: false,
+        replay_of: ledger.id || ledger.idempotency_key || idempotencyKey,
+        entity: { type: ledger.entity_type || null, id: ledger.entity_id || null },
+        diagnostics: ledger.diagnostics || { issues: [] },
+      };
+    }
+  }
+
   const applied = await applyCommand(command, payload, payloadSha256, userId, idempotencyKey, { db, hasher, verifyP22Evidence });
   if (!applied.ok) return applied;
   if (applied.replayed) {
@@ -235,6 +263,7 @@ async function boundaryWrite(ctx, { table, entityType, entityId, payload, expect
       declared_sha: declaredSha,
       expected_base_version: expectedBaseVersion,
       expected_entity_fingerprint: expectedEntityFingerprint,
+      expected_project_revision: Number.isSafeInteger(ctx.payload?.expected_revision) ? ctx.payload.expected_revision : null,
     });
   } catch (error) {
     const code = String((error && error.code) || '');
@@ -479,6 +508,15 @@ async function requireOwnedProject(payload, userId, db, { forMutation = true } =
   if (!check.ok) return check;
   const project = await db.getProject(userId, check.projectId);
   if (!project) return fail('PROJECT_NOT_FOUND', '项目不存在或不属于当前用户。', { entity: { type: 'project', id: check.projectId } });
+  if (payload.expected_revision !== undefined) {
+    if (!Number.isSafeInteger(payload.expected_revision) || payload.expected_revision < 1) {
+      return fail('EXPECTED_REVISION_INVALID', 'expected_revision must be a positive integer.', { entity: { type: 'project', id: check.projectId } });
+    }
+    const actualRevision = Number(project.version);
+    if (!Number.isSafeInteger(actualRevision) || actualRevision !== payload.expected_revision) {
+      return fail('PROJECT_REVISION_STALE', 'The project revision changed; the stale write was rejected.', { entity: { type: 'project', id: check.projectId } });
+    }
+  }
   if (forMutation && project.status === 'archived') {
     return fail('PROJECT_ARCHIVED', '项目已归档（只读）：变更命令已拒绝；归档快照不会被修改。', { entity: { type: 'project', id: check.projectId } });
   }

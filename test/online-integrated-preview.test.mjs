@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { HARNESS_INTEGRATION_OWNED_PATHS } from './helpers/harness-integration-owned-paths.mjs';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
 
@@ -172,12 +173,12 @@ test('P17-C 边界：staging-preview-service 使用 schema("api") 只读模式�
 // ==============================================================================
 // P17-C 路由边界：App.jsx
 // ==============================================================================
-test('P17-C 边界：App.jsx 将 #/dashboard 默认路由指向 CommandCenter', () => {
+test('P17-C 边界：App.jsx 将 #/dashboard 默认路由指向安全 AI 工作台', () => {
   const source = readSource('src/App.jsx');
-  assert.ok(source.includes("import('./pages/CommandCenter')"),
-    'App.jsx 必须延迟导入 CommandCenter');
-  assert.ok(source.includes('<CommandCenter {...props} />'),
-    '默认路由（dashboard）必须渲染 CommandCenter');
+  assert.ok(source.includes("import('./pages/AIWorkspacePage')"),
+    'App.jsx 必须延迟导入 AIWorkspacePage');
+  assert.ok(source.includes('<AIWorkspacePage {...props} />'),
+    '默认路由（dashboard）必须渲染安全 AI 工作台');
   // Dashboard.jsx 不再是活跃路由页面
   assert.ok(!source.includes("import('./pages/Dashboard')"),
     'App.jsx 不得导入旧 Dashboard');
@@ -273,7 +274,7 @@ test('所有权与删除防护：仅授权路径发生受跟踪修改，无删�
       continue;
     }
     for (const path of paths) {
-      assert.ok(OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
+      assert.ok(OWNED_PATHS.has(path) || HARNESS_INTEGRATION_OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
     }
   }
 });

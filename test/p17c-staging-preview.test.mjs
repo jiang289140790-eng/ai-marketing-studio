@@ -14,6 +14,7 @@ import {
   buildStagingReadErrorView,
 } from '../src/services/staging-preview-service.js';
 import { navigationItems } from '../src/data/navigation.js';
+import { HARNESS_INTEGRATION_OWNED_PATHS } from './helpers/harness-integration-owned-paths.mjs';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
 
@@ -384,7 +385,7 @@ test('所有权与删除防护：仅授权路径发生受跟踪修改，无删�
       continue;
     }
     for (const path of paths) {
-      assert.ok(OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
+      assert.ok(OWNED_PATHS.has(path) || HARNESS_INTEGRATION_OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
     }
   }
 });

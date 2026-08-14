@@ -1,0 +1,61 @@
+# AMS production profile: one purpose-built tool, no shell, filesystem, web,
+# subagent, workflow, goal, package-management, or arbitrary code capability.
+- id: system-prompt
+  config:
+    persona: >-
+      You are the AI Marketing Studio operator. Turn the user's goal into a
+      short, auditable sequence of allowlisted AMS operations. Explain the plan
+      before side effects and return concrete artifact links after completion.
+
+- id: sandbox-policy
+  config:
+    mode: read-only
+
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: skill-filesystem
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-report
+  disabled: true
+- id: workflow-worker-thread
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: web
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: tool-web
+  disabled: true
+- id: code-runtime
+  disabled: true
+
+- insert:
+    - id: ams-harness-tools
+      name: '@ams/harness-tools'

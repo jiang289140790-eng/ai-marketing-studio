@@ -1,5 +1,9 @@
 export const navigationSections = [
   {
+    label: '智能工作',
+    items: [{ id: 'ai', label: 'AI 工作台', icon: '✦' }],
+  },
+  {
     label: '总览',
     items: [{ id: 'dashboard', label: 'AI 运营指挥中心', icon: '◉' }],
   },

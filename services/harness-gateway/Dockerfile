@@ -4,7 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force
-COPY gateway-core.mjs harness-runner.mjs model-proxy.mjs state-store.mjs server.mjs ./
+COPY gateway-core.mjs harness-runner.mjs model-proxy.mjs state-store.mjs server.mjs tool-contract.mjs tool-client.mjs init-profile.mjs start.mjs home-lockdown.patch.yml ./
+COPY plugins ./plugins
+COPY profile ./profile
 
 RUN mkdir -p /data/gateway /data/harness /workspace \
   && chown -R node:node /data /workspace /app
@@ -18,4 +20,4 @@ ENV NODE_ENV=production \
     HARNESS_HOME=/data/harness \
     HARNESS_EVENT_FILE=/data/gateway/events.jsonl
 EXPOSE 8790
-CMD ["node", "server.mjs"]
+CMD ["node", "start.mjs"]

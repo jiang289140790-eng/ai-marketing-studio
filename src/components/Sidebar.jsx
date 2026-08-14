@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
-const PREVIEW_NAV_IDS = new Set(['dashboard', 'research', 'knowledge', 'workspace', 'intelligence']);
+const PREVIEW_NAV_IDS = new Set(['ai', 'research', 'knowledge', 'connections']);
 
 export function Sidebar({ activePage, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
+  const activeNavigationId = activePage === 'dashboard' ? 'ai' : activePage;
   const previewNavigationSections = navigationSections
     .map((section) => ({
       ...section,
@@ -42,7 +43,7 @@ export function Sidebar({ activePage, onNavigate }) {
             {section.items.map((item) => (
               <button
                 key={item.id}
-                className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+                className={`nav-item ${activeNavigationId === item.id ? 'active' : ''}`}
                 onClick={() => navigate(item.id)}
                 type="button"
               >

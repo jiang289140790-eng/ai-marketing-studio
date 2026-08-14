@@ -1,0 +1,70 @@
+services:
+  gateway:
+    image: ams-harness-gateway:0.1.0-h1
+    container_name: ams-harness-gateway
+    restart: unless-stopped
+    read_only: true
+    init: true
+    mem_limit: 1536m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8790:8790"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8790
+      HARNESS_EXECUTABLE: /app/node_modules/.bin/dsh
+      HARNESS_WORKSPACE: /workspace
+      HARNESS_HOME: /data/harness
+      HARNESS_EVENT_FILE: /data/gateway/events.jsonl
+      AMS_GATEWAY_HMAC_SECRET_FILE: /run/secrets/ams_gateway_hmac_secret
+      DEEPSEEK_API_KEY: internal-model-proxy
+      DEEPSEEK_BASE_URL: http://model-proxy:8791
+    secrets:
+      - ams_gateway_hmac_secret
+    volumes:
+      - harness_gateway_data:/data
+      - harness_workspace:/workspace:ro
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    networks:
+      - harness_private
+
+  model-proxy:
+    image: ams-harness-gateway:0.1.0-h1
+    container_name: ams-harness-model-proxy
+    restart: unless-stopped
+    read_only: true
+    init: true
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    command: ["node", "model-proxy.mjs"]
+    environment:
+      HOST: 0.0.0.0
+      MODEL_PROXY_PORT: 8791
+      DEEPSEEK_API_KEY_FILE: /run/secrets/deepseek_api_key
+    secrets:
+      - deepseek_api_key
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - harness_private
+      - model_egress
+
+volumes:
+  harness_gateway_data:
+  harness_workspace:
+
+networks:
+  harness_private:
+    internal: true
+  model_egress: {}
+
+secrets:
+  ams_gateway_hmac_secret:
+    file: ${AMS_GATEWAY_HMAC_SECRET_FILE:?required}
+  deepseek_api_key:
+    file: ${DEEPSEEK_API_KEY_FILE:?required}

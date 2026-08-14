@@ -1,0 +1,5 @@
+# Merge only after the gateway HMAC secret and readiness gates pass.
+# The upstream port is published on host loopback by compose.yaml.
+harness.47-251-244-196.sslip.io {
+    reverse_proxy 127.0.0.1:8790
+}

@@ -23,6 +23,13 @@ test('gateway installs the AMS tool plugin at the loader resolution root', async
   assert.deepEqual(plugin.inject, ['tools', 'systemPrompt']);
 });
 
+test('AMS operator prompt binds persisted analysis to one exact Evidence per call', async () => {
+  const plugin = await text('plugins/ams-tools/index.mjs');
+  assert.match(plugin, /research\.analyze_persisted use payload exactly \{project_id,evidence_id\}/);
+  assert.match(plugin, /never send evidence_ids, count, or a batch payload/);
+  assert.match(plugin, /once per exact evidence_id, sequentially, with a distinct idempotency_key and stop on the first failure/);
+});
+
 test('Docker build makes the local plugin available before npm ci', async () => {
   const dockerfile = await text('Dockerfile');
   const copyPlugin = dockerfile.indexOf('COPY plugins ./plugins');

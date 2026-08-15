@@ -22,13 +22,13 @@ const definitions = {
   'workspace.brief.assemble': { endpoint: 'p19-workspace-command', command: 'brief.assemble', fields: ['project_id', 'expected_fingerprint', 'brief'], approval: ['online_writes'], requiresRevision: true },
   'workspace.handoff.create': { endpoint: 'p19-workspace-command', command: 'handoff.create', fields: ['project_id', 'expected_fingerprint', 'handoff'], approval: ['online_writes', 'handoff_creation'], requiresRevision: true },
   // The model may echo the already trusted project binding while asking for
-  // global research capability/cost status. Accept only that exact trusted
-  // project id, then strip it before crossing the P22 status boundary (whose
-  // public request contract intentionally contains no project field).
-  'research.status': { endpoint: 'p22-research-assist', action: 'status', fields: ['project_id'], optional: ['project_id'], approval: [] },
-  'research.collect_url': { endpoint: 'p22-research-assist', action: 'collect_url', fields: ['url'], approval: ['paid_external_calls'] },
-  'research.search_x': { endpoint: 'p22-research-assist', action: 'search', fields: ['keyword', 'count', 'sort'], optional: ['count', 'sort'], approval: ['paid_external_calls'] },
-  'research.search_reddit': { endpoint: 'p22-research-assist', action: 'search_reddit', fields: ['keyword', 'count', 'sort', 'subreddit', 'time_filter'], optional: ['count', 'sort', 'subreddit', 'time_filter'], approval: ['paid_external_calls'] },
+  // a global P22 research operation. Accept only that exact trusted project
+  // id, then strip it before crossing the P22 boundary (whose public request
+  // contracts intentionally contain no project field for these operations).
+  'research.status': { endpoint: 'p22-research-assist', action: 'status', fields: ['project_id'], optional: ['project_id'], approval: [], stripProjectId: true },
+  'research.collect_url': { endpoint: 'p22-research-assist', action: 'collect_url', fields: ['url', 'project_id'], optional: ['project_id'], approval: ['paid_external_calls'], stripProjectId: true },
+  'research.search_x': { endpoint: 'p22-research-assist', action: 'search', fields: ['keyword', 'count', 'sort', 'project_id'], optional: ['count', 'sort', 'project_id'], approval: ['paid_external_calls'], stripProjectId: true },
+  'research.search_reddit': { endpoint: 'p22-research-assist', action: 'search_reddit', fields: ['keyword', 'count', 'sort', 'subreddit', 'time_filter', 'project_id'], optional: ['count', 'sort', 'subreddit', 'time_filter', 'project_id'], approval: ['paid_external_calls'], stripProjectId: true },
   'research.analyze_persisted': { endpoint: 'p22-research-assist', action: 'analyze_persisted', fields: ['project_id', 'evidence_id'], approval: ['paid_external_calls'] },
   'research.generate_similar': { endpoint: 'p22-research-assist', action: 'generate_similar', fields: ['project_id', 'evidence_id', 'analysis_id'], approval: ['paid_external_calls'] },
 };
@@ -138,11 +138,14 @@ export function toBoundaryRequest(validated) {
       },
     };
   }
-  if (validated.operation === 'research.status') {
+  if (definition.stripProjectId === true) {
+    const payload = structuredClone(validated.payload);
+    delete payload.project_id;
     return {
       endpoint: definition.endpoint,
       body: {
         action: definition.action,
+        ...payload,
         idempotency_key: boundaryIdempotencyKey,
       },
     };

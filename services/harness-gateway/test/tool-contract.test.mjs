@@ -76,6 +76,23 @@ test('trusted identity is derived outside model payload and boundary mappings ar
   assert.equal(validateToolCall(call('research.status', { project_id: context.project_id, extra: true }), context).code, 'UNKNOWN_PAYLOAD_FIELD');
 });
 
+test('global research operations accept only the trusted project echo and strip it before P22', () => {
+  const cases = [
+    ['research.collect_url', { url: 'https://x.com/a/status/123', project_id: context.project_id }, 'collect_url'],
+    ['research.search_x', { keyword: 'ai marketing', count: 5, sort: 'latest', project_id: context.project_id }, 'search'],
+    ['research.search_reddit', { keyword: 'ai marketing', count: 5, sort: 'relevance', time_filter: 'week', project_id: context.project_id }, 'search_reddit'],
+  ];
+  for (const [operation, payload, action] of cases) {
+    const accepted = validateToolCall(call(operation, payload), context);
+    assert.equal(accepted.ok, true, operation);
+    const boundary = toBoundaryRequest(accepted.value);
+    assert.equal(boundary.body.action, action);
+    assert.equal(Object.hasOwn(boundary.body, 'project_id'), false, operation);
+    assert.equal(validateToolCall(call(operation, { ...payload, project_id: 'prj-bbbbbbbbbbbbbbbbbbbbbbbb' }), context).code, 'PROJECT_BINDING_MISMATCH');
+    assert.equal(validateToolCall(call(operation, { ...payload, extra: true }), context).code, 'UNKNOWN_PAYLOAD_FIELD');
+  }
+});
+
 test('boundary idempotency is stable within one task and isolated across tasks', () => {
   const modelCall = call('research.collect_url', { url: 'https://x.com/a/status/123' }, { idempotency_key: 'model-repeat' });
   const first = validateToolCall(modelCall, context);

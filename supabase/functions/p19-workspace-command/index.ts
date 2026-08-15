@@ -45,6 +45,7 @@ const ALLOWED_ORIGINS = new Set([
  */
 const BOUNDED_STATUS = Object.freeze({
   PROJECT_REVISION_STALE: 409,
+  ENTITY_REVISION_STALE: 409,
   PROJECT_ARCHIVED: 409,
   IDEMPOTENCY_CONFLICT: 409,
 });
@@ -111,10 +112,13 @@ function createDbAdapter(supabase) {
    */
   function mapBoundaryError(error: unknown) {
     const message = String(error instanceof Error ? error.message : error);
-    const matched = message.match(/P(?:19|20)_([A-Z_]+)/);
-    if (matched) {
+    const matches = [...message.matchAll(/P(?:19|20)_([A-Z_]+)/g)]
+      .map((matched) => matched[1])
+      .filter((code) => code !== 'RPC_FAILED');
+    const code = matches.at(-1);
+    if (code) {
       const mapped = new Error(message);
-      mapped.code = matched[1];
+      mapped.code = code;
       return mapped;
     }
     return error;

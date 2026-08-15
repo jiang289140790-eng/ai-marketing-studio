@@ -158,7 +158,7 @@ test('Harness writes carry an exact project revision and stale writes fail close
 });
 
 test('Harness revision guard remains function-only while P22 adds a private exact-request binding', () => {
-  const migration = readFileSync(new URL('../supabase/migrations/20260814094040_harness_atomic_project_revision_guard.sql', import.meta.url), 'utf8');
+  const migration = readFileSync(new URL('../supabase/migrations/20260815085353_harness_brief_version_concurrency_guard.sql', import.meta.url), 'utf8');
   const binding = readFileSync(new URL('../supabase/migrations/20260815035041_p22_full_request_idempotency_binding.sql', import.meta.url), 'utf8');
   const p22 = readFileSync(new URL('../supabase/functions/p22-research-assist/index.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(migration, /\b(?:create|alter)\s+table\b/i);
@@ -425,10 +425,10 @@ test('gateway transport, task, queue and JWT windows are bounded without retaini
   const edge = readFileSync(new URL('../supabase/functions/harness-command/index.ts', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../services/harness-gateway/server.mjs', import.meta.url), 'utf8');
   const runner = readFileSync(new URL('../services/harness-gateway/harness-runner.mjs', import.meta.url), 'utf8');
-  assert.match(edge, /GATEWAY_TRANSPORT_TIMEOUT_MS = 30_000/);
+  assert.match(edge, /AbortSignal\.timeout\(20_000\)/);
   assert.match(server, /TASK_TIMEOUT_MS[^\n]+600_000/);
-  assert.match(server, /JWT_COMPLETION_OVERHEAD_MS = 15_000/);
-  assert.match(server, /QUEUE_CAPACITY = 1/);
+  assert.match(server, /TOOL_WINDOW_MS = 150_000/);
+  assert.match(server, /QUEUE_CAPACITY = 2/);
   assert.match(runner, /HARNESS_TASK_TIMEOUT_MS \|\| 600_000/);
   assert.doesNotMatch(server, /refresh[_-]?token/i);
 });

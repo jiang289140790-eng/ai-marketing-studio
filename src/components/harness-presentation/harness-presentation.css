@@ -1,0 +1,32 @@
+.harp-presentation { display: grid; gap: 14px; margin-top: 16px; }
+.harp-block { margin: 0; padding: 16px; border: 1px solid #253550; border-radius: 14px; background: #0f1a2b; }
+.harp-block figcaption { margin-bottom: 12px; color: #71e4d4; font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.harp-chart-scroll, .harp-flow-scroll, .harp-table-scroll { overflow-x: auto; }
+.harp-chart-svg { display: block; width: 100%; min-width: 420px; height: auto; }
+.harp-chart-value, .harp-chart-axis, .harp-flow-node-text, .harp-flow-edge-label, .harp-donut-total, .harp-donut-caption { fill: #c7d1e2; font-size: 12px; }
+.harp-chart-value { fill: #e8eefc; font-weight: 700; }
+.harp-chart-label { fill: #7888a2; font-size: 11px; }
+.harp-flow-svg { display: block; height: auto; }
+.harp-flow-node rect, .harp-flow-node polygon, .harp-flow-node circle { fill: #16233a; stroke: #26d6be; stroke-width: 1.5; }
+.harp-flow-node-text { fill: #dbe4f4; font-size: 13px; }
+.harp-flow-edge-label { fill: #8b9bb8; font-size: 11px; }
+.harp-donut-wrap { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: center; }
+.harp-donut { min-width: 220px; width: 220px; }
+.harp-donut-total { fill: #f7f9ff; font-size: 22px; font-weight: 700; }
+.harp-donut-caption { fill: #7888a2; font-size: 12px; }
+.harp-donut-legend { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.harp-donut-legend li { display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center; color: #c7d1e2; font-size: 13px; }
+.harp-donut-swatch { width: 12px; height: 12px; border-radius: 4px; }
+.harp-donut-value { color: #8b9bb8; font-variant-numeric: tabular-nums; }
+.harp-table table { width: 100%; border-collapse: collapse; min-width: 320px; font-size: 13px; }
+.harp-table th { text-align: left; padding: 10px 12px; color: #9fb0cc; background: #131f33; border-bottom: 1px solid #2b3c59; white-space: nowrap; }
+.harp-table td { padding: 10px 12px; border-bottom: 1px solid #1d2b44; color: #dbe4f4; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harp-summary-body { margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.7; color: #dbe4f4; font: inherit; }
+.harp-fallback { border-color: rgba(240, 185, 92, .35); background: rgba(240, 185, 92, .06); }
+.harp-fallback figcaption { color: #f0b95c; }
+.harp-fallback-body { color: #e6cfa0; font-size: 13px; line-height: 1.6; }
+.harp-flow-source { margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: 8px; background: #09101c; color: #71e4d4; font-size: 12px; line-height: 1.6; white-space: pre; }
+.harp-fragment-frame { display: block; width: 100%; height: 340px; border: 1px solid #2b3c59; border-radius: 10px; background: #0d1626; }
+@media (max-width: 640px) {
+  .harp-donut-wrap { grid-template-columns: 1fr; }
+}

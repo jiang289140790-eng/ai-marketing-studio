@@ -253,6 +253,36 @@ test('terminal responses are bounded by UTF-8 bytes for the Edge envelope', asyn
   assert.doesNotMatch(completed.task.result.final_response, /\uFFFD/u);
 });
 
+test('required tool failure keeps prior artifacts but marks the outer task failed and refresh-safe', async () => {
+  const diagnostic = {
+    code: 'HARNESS_EXIT_FAILED', category: 'ams_tool_plugin', stage: 'tool_call', exit_code: null,
+    summary: 'A required AI Marketing Studio tool failed; dependent actions were stopped.',
+    tool_code: 'ENTITY_REVISION_STALE', operation: 'workspace.brief.assemble',
+  };
+  const queue = new HarnessTaskQueue({
+    runner: async () => {
+      throw Object.assign(new Error('required tool failed'), {
+        code: 'ENTITY_REVISION_STALE', diagnostic,
+        partialResult: { final_response: 'Evidence and cards were preserved.', artifact_refs: ['ev-a', 'kc-a'], partial_completion: true },
+      });
+    },
+  });
+  const submitted = queue.submit(request({ request_id: 'partial-required-failure' }));
+  await queue.whenIdle();
+  const task = queue.read(submitted.task.id, 'user-a').task;
+  assert.equal(task.state, 'failed');
+  assert.equal(task.result.partial_completion, true);
+  assert.deepEqual(task.result.artifact_refs, ['ev-a', 'kc-a']);
+  assert.equal(task.error.tool_code, 'ENTITY_REVISION_STALE');
+  assert.equal(task.error.operation, 'workspace.brief.assemble');
+
+  const restored = new HarnessTaskQueue({ runner: async () => ({ final_response: 'must not run' }), initialTasks: [task] });
+  const refreshed = restored.read(task.id, 'user-a').task;
+  assert.equal(refreshed.state, 'failed');
+  assert.equal(refreshed.result.partial_completion, true);
+  assert.deepEqual(refreshed.result.artifact_refs, ['ev-a', 'kc-a']);
+});
+
 test('audit persistence failure rejects submission without leaving an orphan task', () => {
   const queue = new HarnessTaskQueue({
     runner: async () => ({ final_response: 'never' }),

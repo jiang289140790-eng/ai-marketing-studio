@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createHarnessClient, newHarnessRequestId, readHarnessActiveProject } from '../services/harness-client.js';
+import { resolvePresentationBlocks } from '../services/harness-presentation.js';
+import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
 import './AIWorkspacePage.css';
 
 const suggestions = [
@@ -73,6 +75,8 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
       globalThis.clearInterval(timer);
     };
   }, [activeTask, harnessClient, refreshHistory]);
+
+  const presentationBlocks = useMemo(() => resolvePresentationBlocks(activeTask), [activeTask]);
 
   const plan = useMemo(() => {
     if (!intent.trim()) return [];
@@ -177,7 +181,17 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
           </div>
           <div className="ai-progress" aria-label="任务进度"><span className={activeTask.state} /></div>
           <p>{activeTask.request?.intent}</p>
-          {activeTask.result?.final_response && <div className="ai-result-copy">{activeTask.result.final_response}</div>}
+          {presentationBlocks.length > 0 && <PresentationPanel blocks={presentationBlocks} />}
+          {activeTask.result?.final_response && (
+            presentationBlocks.length > 0 ? (
+              <details className="ai-raw-response">
+                <summary>查看原始回复</summary>
+                <div className="ai-result-copy">{activeTask.result.final_response}</div>
+              </details>
+            ) : (
+              <div className="ai-result-copy">{activeTask.result.final_response}</div>
+            )
+          )}
           {activeTask.error && <div className="notice error">{activeTask.error.message || activeTask.error.code}</div>}
           {activeTask.result?.artifact_refs?.length > 0 && (
             <div className="ai-artifacts">

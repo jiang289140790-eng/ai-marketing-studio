@@ -11,6 +11,12 @@
   disabled: true
 - id: tool-jobs
   disabled: true
+- id: subprocess
+  disabled: true
+- id: bash-sandbox
+  disabled: true
+- id: permission
+  disabled: true
 - id: tool-fs
   disabled: true
 - id: tool-fs-search

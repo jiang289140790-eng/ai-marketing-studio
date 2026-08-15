@@ -1,5 +1,7 @@
 /* global AbortController, Buffer, queueMicrotask, setTimeout, structuredClone */
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { HARNESS_DIAGNOSTIC_CATEGORIES, HARNESS_DIAGNOSTIC_CODES, HARNESS_DIAGNOSTIC_STAGES, MAX_HARNESS_DIAGNOSTIC_SUMMARY, redactSensitive } from './harness-runner.mjs';
+import { derivePresentation, normalizePresentation } from './presentation/presentation-contract.mjs';
 
 export const GATEWAY_SCHEMA_VERSION = 'ams_harness_gateway_v1';
 export const TASK_STATES = Object.freeze(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
@@ -7,6 +9,66 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const TASK_ID = /^ht-[0-9a-f-]{36}$/;
 const MAX_PROMPT = 12_000;
 const MAX_RESULT_BYTES = 12 * 1024;
+
+// Allowlisted harness failure diagnostic shape, sourced from the same
+// constants the classifier emits (a single source of truth so the producer
+// and the persistence gate cannot drift). Every field has an explicit
+// size/type boundary; anything outside this shape is rejected and replaced by
+// the safe fallback below, never persisted.
+const HARNESS_DIAGNOSTIC_KEYS = new Set(['code', 'category', 'stage', 'exit_code', 'summary', 'tool_code', 'operation']);
+const SAFE_HARNESS_DIAGNOSTIC = Object.freeze({
+  code: 'HARNESS_FAILED',
+  category: 'harness_runtime_unknown',
+  stage: 'unknown',
+  exit_code: null,
+  summary: 'Harness process failed without a valid diagnostic.',
+});
+
+/**
+ * Fail-closed validation of a structured Harness failure diagnostic before
+ * persistence. Returns null when the value is not exactly the allowlisted
+ * shape (wrong keys, wrong types, unknown category/stage/code, out-of-range
+ * exit code, empty or oversized summary). The persisted summary is passed
+ * through redaction at this persistence boundary as a final guarantee.
+ */
+export function normalizeDiagnostic(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (Object.keys(value).some((key) => !HARNESS_DIAGNOSTIC_KEYS.has(key))) return null;
+  const { code, category, stage, exit_code: exitCode, summary, tool_code: toolCode, operation } = value;
+  if (typeof code !== 'string' || !HARNESS_DIAGNOSTIC_CODES.includes(code)) return null;
+  if (typeof category !== 'string' || !HARNESS_DIAGNOSTIC_CATEGORIES.includes(category)) return null;
+  if (typeof stage !== 'string' || !HARNESS_DIAGNOSTIC_STAGES.includes(stage)) return null;
+  if (exitCode !== null && (typeof exitCode !== 'number' || !Number.isSafeInteger(exitCode) || exitCode < -2_147_483_648 || exitCode > 2_147_483_647)) return null;
+  if (typeof summary !== 'string' || !summary.trim() || summary.length > MAX_HARNESS_DIAGNOSTIC_SUMMARY) return null;
+  const normalized = {
+    code,
+    category,
+    stage,
+    exit_code: exitCode,
+    summary: redactSensitive(summary),
+  };
+  if (toolCode !== undefined) {
+    if (typeof toolCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,79}$/.test(toolCode)) return null;
+    normalized.tool_code = toolCode;
+  }
+  if (operation !== undefined) {
+    if (typeof operation !== 'string' || !/^[a-z0-9._-]{1,80}$/i.test(operation)) return null;
+    normalized.operation = operation;
+  }
+  return normalized;
+}
+
+function boundedErrorView(error) {
+  const view = { code: bounded(error?.code, 80) };
+  if (typeof error?.category === 'string') view.category = bounded(error.category, 32);
+  if (typeof error?.stage === 'string') view.stage = bounded(error.stage, 40);
+  if (error?.exit_code != null) view.exit_code = Number.isSafeInteger(error.exit_code) ? error.exit_code : null;
+  if (typeof error?.summary === 'string') view.summary = bounded(error.summary, 240);
+  if (typeof error?.tool_code === 'string') view.tool_code = bounded(error.tool_code, 80);
+  if (typeof error?.operation === 'string') view.operation = bounded(error.operation, 80);
+  if (typeof error?.message === 'string') view.message = bounded(error.message, 240);
+  return view;
+}
 
 function boundedUtf8(value, maxBytes) {
   const text = String(value ?? '');
@@ -118,6 +180,10 @@ export class HarnessTaskQueue {
       const validated = validateTaskRequest(candidate.request);
       if (!validated.ok) continue;
       const task = clone({ ...candidate, request: validated.value });
+      // A persisted snapshot's presentation is validated again at this
+      // boundary; a tampered or legacy payload degrades to null and the
+      // client re-derives structured blocks, never crashing the queue.
+      if (task.result?.presentation) task.result.presentation = normalizePresentation(task.result.presentation);
       // Persisted snapshots may predate newly defaulted envelope fields. Never
       // trust a historical fingerprint after normalization: migrate it to the
       // exact current request shape so a post-upgrade exact replay stays valid.
@@ -207,8 +273,11 @@ export class HarnessTaskQueue {
         intent: bounded(task.request?.intent, 500),
         project_id: task.request?.project_id || null,
       },
-      result: task.result ? { artifact_refs: task.result.artifact_refs.slice(0, 10) } : null,
-      error: task.error ? { code: bounded(task.error.code, 80), message: bounded(task.error.message, 240) } : null,
+      result: task.result ? {
+        artifact_refs: task.result.artifact_refs.slice(0, 10),
+        partial_completion: task.result.partial_completion === true,
+      } : null,
+      error: task.error ? boundedErrorView(task.error) : null,
     }));
   }
 
@@ -282,9 +351,20 @@ export class HarnessTaskQueue {
       task.result = {
         final_response: boundedUtf8(output?.final_response, MAX_RESULT_BYTES),
         artifact_refs: Array.isArray(output?.artifact_refs) ? output.artifact_refs.slice(0, 50).map((value) => bounded(value, 500)) : [],
+        presentation: derivePresentation(output?.final_response, task),
       };
       this.#transition(task, 'succeeded');
     } catch (error) {
+      if (error?.partialResult && !controller.signal.aborted) {
+        task.result = {
+          final_response: boundedUtf8(error.partialResult.final_response, MAX_RESULT_BYTES),
+          artifact_refs: Array.isArray(error.partialResult.artifact_refs)
+            ? error.partialResult.artifact_refs.slice(0, 50).map((value) => bounded(value, 500))
+            : [],
+          partial_completion: error.partialResult.partial_completion === true,
+          presentation: derivePresentation(error.partialResult.final_response, task),
+        };
+      }
       if (error?.code === 'AUDIT_PERSISTENCE_UNAVAILABLE') {
         task.result = null;
         task.state = 'failed';
@@ -293,7 +373,9 @@ export class HarnessTaskQueue {
       } else {
         task.error = controller.signal.aborted
           ? null
-          : { code: bounded(error?.code || 'HARNESS_FAILED', 80), message: bounded(error?.message || 'Harness task failed.', 500) };
+          : error?.diagnostic
+            ? (normalizeDiagnostic(error.diagnostic) || SAFE_HARNESS_DIAGNOSTIC)
+            : { code: bounded(error?.code || 'HARNESS_FAILED', 80), message: bounded(error?.message || 'Harness task failed.', 500) };
         try {
           this.#transition(task, controller.signal.aborted ? 'cancelled' : 'failed');
         } catch {

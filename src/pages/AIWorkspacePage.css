@@ -24,6 +24,9 @@
 .ai-progress span.succeeded { background: #28ca8b; }
 .ai-progress span.failed, .ai-progress span.cancelled { background: #ef6472; }
 .ai-result-copy { padding: 16px; white-space: pre-wrap; line-height: 1.7; border-radius: 14px; background: #121e31; }
+.ai-raw-response { margin-top: 14px; }
+.ai-raw-response summary { cursor: pointer; color: #9fb0cc; font-size: 13px; padding: 6px 0; }
+.ai-raw-response .ai-result-copy { margin-top: 10px; }
 .ai-artifacts { display: grid; gap: 8px; margin-top: 16px; }
 .ai-artifacts code { padding: 10px; border-radius: 8px; background: #09101c; color: #71e4d4; overflow-wrap: anywhere; }
 .ai-task-list { display: grid; gap: 10px; margin-top: 16px; }

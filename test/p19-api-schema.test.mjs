@@ -15,6 +15,20 @@ import { join } from 'node:path';
 const REPO_ROOT = join(import.meta.dirname, '..');
 const INDEX_PATH = join(REPO_ROOT, 'supabase', 'functions', 'p19-workspace-command', 'index.ts');
 const INDEX_SOURCE = readFileSync(INDEX_PATH, 'utf8');
+const BRIEF_GUARD_MIGRATION = readFileSync(join(
+  REPO_ROOT, 'supabase', 'migrations', '20260815085353_harness_brief_version_concurrency_guard.sql',
+), 'utf8');
+
+test('Brief v1→v2 guard compares the latest logical Brief under the project lock', () => {
+  assert.match(BRIEF_GUARD_MIGRATION, /from ams_private\.p19_project_locks_v1[\s\S]*for update/);
+  assert.match(BRIEF_GUARD_MIGRATION, /and brief_id = p_entity_id[\s\S]*order by brief_version desc, id asc[\s\S]*limit 1/);
+  assert.match(BRIEF_GUARD_MIGRATION, /p_expected_entity_fingerprint is distinct from v_latest_brief_fingerprint/);
+  assert.match(BRIEF_GUARD_MIGRATION, /v_incoming_brief_version = v_latest_brief_version \+ 1/);
+  assert.match(BRIEF_GUARD_MIGRATION, /p_table = 'p19_briefs_v1'[\s\S]+p_expected_project_revision is null[\s\S]+P19_PROJECT_REVISION_STALE/);
+  assert.doesNotMatch(BRIEF_GUARD_MIGRATION, /alter table|create policy/i);
+  assert.match(BRIEF_GUARD_MIGRATION, /revoke all on function api\.p19_apply_entity_write_v2\([\s\S]+from public, anon, authenticated/i);
+  assert.match(BRIEF_GUARD_MIGRATION, /grant execute on function api\.p19_apply_entity_write_v2\([\s\S]+to service_role/i);
+});
 
 test('production adapter owns the replay preflight and HTTP headers remain plain strings', () => {
   const adapterStart = INDEX_SOURCE.indexOf('function createDbAdapter');
@@ -91,7 +105,7 @@ test('客户端路径：绝不命名 ams_private，绝不以表名访问私有�
 
 test('适配器映射：边界 P19/P20_<CODE> 错误映射为有界公开错误码，绝不降级为 INTERNAL_ERROR', () => {
   // 复现 index.ts mapBoundaryError 的映射规则（源码必须同时携带 P19/P20 前缀提取）。
-  assert.ok(INDEX_SOURCE.includes('/P(?:19|20)_([A-Z_]+)/'), '源码必须包含 P19/P20_<CODE> 前缀提取规则');
+  assert.ok(INDEX_SOURCE.includes('matchAll(/P(?:19|20)_([A-Z_]+)/g)'), '源码必须扫描完整 P19/P20 错误链');
   const extract = (message) => {
     const matched = String(message).match(/P(?:19|20)_([A-Z_]+)/);
     return matched ? matched[1] : null;
@@ -103,6 +117,11 @@ test('适配器映射：边界 P19/P20_<CODE> 错误映射为有界公开错误�
   assert.equal(extract('P19_EVIDENCE_NOT_FOUND'), 'EVIDENCE_NOT_FOUND');
   assert.equal(extract('P19_PAYLOAD_HASH_MISMATCH'), 'PAYLOAD_HASH_MISMATCH');
   assert.equal(extract('P20_IMPORT_PROJECT_COLLISION'), 'IMPORT_PROJECT_COLLISION');
+  const wrapped = [...'P19_RPC_FAILED(p19_apply_entity_write_v2): P19_ENTITY_REVISION_STALE'
+    .matchAll(/P(?:19|20)_([A-Z_]+)/g)]
+    .map((match) => match[1])
+    .filter((code) => code !== 'RPC_FAILED');
+  assert.equal(wrapped.at(-1), 'ENTITY_REVISION_STALE', '外层 RPC_FAILED 不得遮蔽真实并发错误');
   assert.equal(extract('connection refused'), null, '非 P19/P20_ 前缀错误不得映射为有界码');
 });
 
@@ -110,6 +129,7 @@ test('适配器映射：PROJECT_REVISION_STALE 是 409-equivalent，绝不返回
   // index.ts 必须有界状态映射表且把 PROJECT_REVISION_STALE 映射到 409。
   assert.ok(INDEX_SOURCE.includes('BOUNDED_STATUS'), '必须存在有界状态映射表');
   assert.ok(INDEX_SOURCE.includes('PROJECT_REVISION_STALE: 409'), 'PROJECT_REVISION_STALE 必须映射为 409');
+  assert.ok(INDEX_SOURCE.includes('ENTITY_REVISION_STALE: 409'), 'ENTITY_REVISION_STALE 必须映射为 409');
   // 有界失败绝不落入 INTERNAL_ERROR 分支：INTERNAL_ERROR 只用于非边界异常
   // （catch-all 处理器本身，取其最后一次出现处）。
   assert.ok(INDEX_SOURCE.includes("code: 'INTERNAL_ERROR'"), 'INTERNAL_ERROR 分支必须存在（只用于非边界异常）');

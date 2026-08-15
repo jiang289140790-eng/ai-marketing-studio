@@ -1,6 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { readFileSync } from 'node:fs';
 import { appendTaskArtifactRefs } from './artifact-journal.mjs';
+import { writeRequiredFailure } from './required-failure-journal.mjs';
 
 const name = 'ams-harness-tools';
 const inject = ['tools', 'systemPrompt'];
@@ -30,6 +31,7 @@ async function loadClient() {
 }
 
 function apply(ctx) {
+  let requiredFailure = null;
   ctx.systemPrompt.section({
     name: 'ams:operator',
     order: 40,
@@ -68,11 +70,32 @@ function apply(ctx) {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args, execution) {
+      if (requiredFailure) {
+        throw Object.assign(new Error('A required predecessor tool failed; dependent actions are blocked.'), {
+          code: 'AMS_DEPENDENCY_BLOCKED',
+        });
+      }
       const client = await loadClient();
       const context = runtimeContext();
-      const result = await client(args, context, execution?.signal);
-      appendTaskArtifactRefs(process.env.DSH_HOME || process.env.HOME || '', context.task_id, result);
-      return result;
+      try {
+        const result = await client(args, context, execution?.signal);
+        if (!result || result.ok === false) {
+          requiredFailure = {
+            code: String(result?.code || 'AMS_REQUIRED_TOOL_FAILED'),
+            operation: args.operation,
+          };
+          writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
+          throw Object.assign(new Error('A required AI Marketing Studio tool failed.'), { code: requiredFailure.code });
+        }
+        appendTaskArtifactRefs(process.env.DSH_HOME || process.env.HOME || '', context.task_id, result);
+        return result;
+      } catch (error) {
+        if (!requiredFailure) {
+          requiredFailure = { code: String(error?.code || 'AMS_REQUIRED_TOOL_FAILED'), operation: args.operation };
+          writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
+        }
+        throw error;
+      }
     },
     presentCall: (args) => ({ card: 'generic', title: args.operation, kind: 'action', rawInput: args.operation }),
   }));

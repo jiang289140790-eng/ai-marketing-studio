@@ -2,10 +2,12 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY plugins ./plugins
+COPY vendor ./vendor
+COPY presentation ./presentation
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force
 COPY gateway-core.mjs harness-runner.mjs model-proxy.mjs state-store.mjs server.mjs tool-contract.mjs tool-client.mjs init-profile.mjs start.mjs home-lockdown.patch.yml ./
-COPY plugins ./plugins
 COPY profile ./profile
 
 RUN mkdir -p /data/gateway /data/harness /workspace \

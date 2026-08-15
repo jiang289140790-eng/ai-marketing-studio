@@ -41,6 +41,10 @@ test('AMS profile exposes its single business plugin and disables general execut
     assert.equal(dumped.status, 0, dumped.stderr);
     assert.doesNotMatch(dumped.stderr, /patch: entry|Error:/);
     assert.match(blockFor(dumped.stdout, 'ams-harness-tools'), /name: ['"]@ams\/harness-tools['"]/);
+    // The two promoted rendering plugins resolve and load in the dumped
+    // composition; both stay display-only next to the locked-down rows.
+    assert.match(blockFor(dumped.stdout, 'genui'), /name: ['"]@omdsh-dev\/dsh-genui['"]/);
+    assert.match(blockFor(dumped.stdout, 'dsh-visualize'), /name: ['"]@dsh-external\/dsh-visualize['"]/);
     for (const id of denied) assert.match(blockFor(dumped.stdout, id), /disabled: true/, `${id} must stay disabled`);
   } finally {
     await rm(home, { recursive: true, force: true });

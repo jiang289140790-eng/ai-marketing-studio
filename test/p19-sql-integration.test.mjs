@@ -101,7 +101,7 @@ const CONCURRENT_USER = '44444444-4444-4444-8444-444444444444';
 const CONCURRENT_PROJECT = 'prj-eeeeeeeeeeeeeeeeeeeeeeee';
 const CONCURRENT_KEY = 'conc-key-1';
 
-test('SQL 集成：全新数据库回放 46 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
+test('SQL 集成：全新数据库回放 47 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
   // 基础设施前置：Docker/PostgreSQL 17 缺失时给出明确基础设施失败（M1 验收）。
   const docker = dockerReady();
   assert.ok(docker.ok, `基础设施失败：Docker CLI/daemon 不可用（${docker.version || '无法探测'}），无法回放真实 PostgreSQL 17 迁移`);
@@ -126,7 +126,7 @@ test('SQL 集成：全新数据库回放 46 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 46, '迁移集必须包含 Harness 修订门禁与 P22 精确请求绑定，共 46 项');
+    assert.equal(migrations.length, 47, '迁移集必须包含 Harness Brief 版本并发门禁，共 47 项');
     for (const name of migrations) {
       if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
         const legacy = `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous)
@@ -242,7 +242,7 @@ test('SQL 集成：全新数据库回放 46 迁移 + SQL 测试 + 并发幂等�
     const cleanPaid = psql(dbName, `delete from ams_private.p22_paid_operation_bindings_v1 where user_id in ('${paidUser}','${concurrentPaidUser}'); delete from public.cost_records where user_id in ('${paidUser}','${concurrentPaidUser}'); delete from auth.users where id in ('${paidUser}','${concurrentPaidUser}');`);
     assert.equal(cleanPaid.status, 0, cleanPaid.stderr || cleanPaid.stdout);
 
-    const harnessMigration = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', '20260814094040_harness_atomic_project_revision_guard.sql'), 'utf8');
+    const harnessMigration = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', '20260815085353_harness_brief_version_concurrency_guard.sql'), 'utf8');
     assert.doesNotMatch(harnessMigration, /\b(?:create|alter)\s+table\b/i);
     assert.doesNotMatch(harnessMigration, /\b(?:enable|force)\s+row\s+level\s+security\b/i);
     assert.doesNotMatch(harnessMigration, /\bcreate\s+policy\b/i);
@@ -362,7 +362,7 @@ test('SQL 集成：全新数据库回放 46 迁移 + SQL 测试 + 并发幂等�
     const pendingBriefFingerprint = 'd'.repeat(64);
     const approvedBriefFingerprint = 'e'.repeat(64);
     const returnedBriefFingerprint = 'f'.repeat(64);
-    const briefPayload = (status, fingerprint, decision) => `jsonb_build_object('id','${entityBrief}','project_id','${CONCURRENT_PROJECT}','schema_version','ams_content_brief_v1','version',1,'status','${status}','topic','entity race','objective','o','audience','a','channel','c','constraints','[]'::jsonb,'knowledge_citation_ids',jsonb_build_array('kc-dddddddddddddddddddddddd'),'structural_guidance','[]'::jsonb,'evidence_provenance',jsonb_build_object('local_only',true),'review',jsonb_build_object('schema_version','ams_brief_review_v1','brief_id','${entityBrief}','decision',${decision},'comments','[]'::jsonb),'fingerprint','${fingerprint}','created_at','2026-08-12T00:00:00Z','updated_at','2026-08-12T00:00:00Z')`;
+    const briefPayload = (status, fingerprint, decision, version = 1, cardIds = ['kc-dddddddddddddddddddddddd'], projectId = CONCURRENT_PROJECT) => `jsonb_build_object('id','${entityBrief}','project_id','${projectId}','schema_version','ams_content_brief_v1','version',${version},'status','${status}','topic','entity race','objective','o','audience','a','channel','c','constraints','[]'::jsonb,'knowledge_citation_ids','${JSON.stringify(cardIds)}'::jsonb,'structural_guidance','[]'::jsonb,'evidence_provenance',jsonb_build_object('local_only',true),'review',jsonb_build_object('schema_version','ams_brief_review_v1','brief_id','${entityBrief}','decision',${decision},'comments','[]'::jsonb),'fingerprint','${fingerprint}','created_at','2026-08-12T00:00:00Z','updated_at','2026-08-12T00:00:00Z')`;
     const createBrief = psql(dbName, `select api.p19_apply_entity_write('${CONCURRENT_USER}','brief-create','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', pendingBriefFingerprint, "'null'::jsonb")},null,null,null)::text;`);
     assert.equal(createBrief.status, 0, createBrief.stderr || createBrief.stdout);
     const approvedDecision = `jsonb_build_object('value','approved','source','local_manual','rationale','approved','decided_by','left','decided_at','2026-08-12T00:00:01Z')`;
@@ -376,6 +376,43 @@ test('SQL 集成：全新数据库回放 46 迁移 + SQL 测试 + 并发幂等�
     const [winningBriefStatus, winningBriefFingerprint, decisionLedgerCount] = briefState.stdout.trim().split('|');
     assert.ok((winningBriefStatus === 'approved' && winningBriefFingerprint === approvedBriefFingerprint) || (winningBriefStatus === 'returned' && winningBriefFingerprint === returnedBriefFingerprint));
     assert.equal(decisionLedgerCount, '1', 'the rejected stale decision must not leave a command ledger row');
+
+    const projectRevision = psql(dbName, `select max(project_version) from ams_private.p19_research_projects_v1 where user_id='${CONCURRENT_USER}' and project_id='${CONCURRENT_PROJECT}';`).stdout.trim();
+    const v2LeftFingerprint = '1'.repeat(64);
+    const v2RightFingerprint = '2'.repeat(64);
+    const threeCards = ['kc-dddddddddddddddddddddddd', 'kc-eeeeeeeeeeeeeeeeeeeeeeee', 'kc-ffffffffffffffffffffffff'];
+    const rejectedV2Keys = ['brief-v2-missing-revision', 'brief-v2-stale-revision', 'brief-v2-missing-fingerprint', 'brief-v2-old-fingerprint', 'brief-v2-wrong-project', 'brief-v2-wrong-user'];
+    const rejectedV2 = [
+      psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','${rejectedV2Keys[0]}','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards)},null,null,'${winningBriefFingerprint}',null)::text;`),
+      psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','${rejectedV2Keys[1]}','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards)},null,null,'${winningBriefFingerprint}',${Number(projectRevision) + 1})::text;`),
+      psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','${rejectedV2Keys[2]}','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards)},null,null,null,${projectRevision})::text;`),
+      psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','${rejectedV2Keys[3]}','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards)},null,null,'${'0'.repeat(64)}',${projectRevision})::text;`),
+    ];
+    assert.match(rejectedV2[0].stderr, /P19_PROJECT_REVISION_STALE/);
+    assert.match(rejectedV2[1].stderr, /P19_PROJECT_REVISION_STALE/);
+    assert.match(rejectedV2[2].stderr, /P19_ENTITY_REVISION_STALE/);
+    assert.match(rejectedV2[3].stderr, /P19_ENTITY_REVISION_STALE/);
+
+    const otherProject = 'prj-dededededededededededede';
+    const createOtherProject = psql(dbName, `select api.p19_apply_entity_write('${CONCURRENT_USER}','brief-other-project-create','project.create','project','${otherProject}','{}'::jsonb,'p19_research_projects_v1',jsonb_build_object('id','${otherProject}','version',1,'schema_version','p19_research_project_v1','status','active','topic','other','objective','o','audience','a','channel','c','constraints','[]'::jsonb),null,null,null)::text;`);
+    assert.equal(createOtherProject.status, 0, createOtherProject.stderr || createOtherProject.stdout);
+    const wrongProject = psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','${rejectedV2Keys[4]}','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards, otherProject)},null,null,'${winningBriefFingerprint}',1)::text;`);
+    assert.match(wrongProject.stderr, /P19_ENTITY_REVISION_STALE/);
+    const wrongBriefUser = '99999999-9999-4999-8999-999999999999';
+    const seedWrongBriefUser = psql(dbName, `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous) values ('${wrongBriefUser}','authenticated','authenticated','wrong-brief@example.invalid','{}','{}',now(),now(),false,false);`);
+    assert.equal(seedWrongBriefUser.status, 0, seedWrongBriefUser.stderr || seedWrongBriefUser.stdout);
+    const wrongUser = psql(dbName, `select api.p19_apply_entity_write_v2('${wrongBriefUser}','${rejectedV2Keys[5]}','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards)},null,null,'${winningBriefFingerprint}',${projectRevision})::text;`);
+    assert.match(wrongUser.stderr, /P19_PROJECT_REVISION_STALE/);
+    const rejectedV2State = psql(dbName, `select (select count(*) from ams_private.p19_briefs_v1 where user_id='${CONCURRENT_USER}' and project_id='${CONCURRENT_PROJECT}' and brief_id='${entityBrief}' and brief_version=2), (select count(*) from ams_private.p19_command_ledger_v1 where idempotency_key = any(array['${rejectedV2Keys.join("','")}']));`);
+    assert.deepEqual(rejectedV2State.stdout.trim().split('|'), ['0', '0'], 'all rejected baselines must leave zero v2 rows and zero command ledger rows');
+
+    const v2Left = `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','brief-v2-left','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2LeftFingerprint, "'null'::jsonb", 2, threeCards)},null,null,'${winningBriefFingerprint}',${projectRevision})::text;`;
+    const v2Right = `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','brief-v2-right','brief.assemble','brief','${entityBrief}','{}'::jsonb,'p19_briefs_v1',${briefPayload('pending_review', v2RightFingerprint, "'null'::jsonb", 2, threeCards)},null,null,'${winningBriefFingerprint}',${projectRevision})::text;`;
+    const v2Runs = await Promise.all([psqlAsync(dbName, v2Left), psqlAsync(dbName, v2Right)]);
+    assert.equal(v2Runs.filter((run) => run.status === 0).length, 1, `the latest v1 fingerprint must permit exactly one concurrent v2: ${JSON.stringify(v2Runs)}`);
+    assert.match(v2Runs.find((run) => run.status !== 0)?.stderr || '', /P19_ENTITY_REVISION_STALE/);
+    const v2State = psql(dbName, `select brief_version, jsonb_array_length(payload->'knowledge_citation_ids'), (select count(*) from ams_private.p19_command_ledger_v1 where idempotency_key in ('brief-v2-left','brief-v2-right')) from ams_private.p19_briefs_v1 where user_id='${CONCURRENT_USER}' and project_id='${CONCURRENT_PROJECT}' and brief_id='${entityBrief}' order by brief_version desc limit 1;`);
+    assert.deepEqual(v2State.stdout.trim().split('|'), ['2', '3', '1']);
 
     const removeLeft = `select api.p19_remove_evidence('${CONCURRENT_USER}','entity-remove-left','evidence.remove','{}'::jsonb,'${CONCURRENT_PROJECT}','${entityEvidence}','${winningFingerprint}')::text;`;
     const removeRight = `select api.p19_remove_evidence('${CONCURRENT_USER}','entity-remove-right','evidence.remove','{}'::jsonb,'${CONCURRENT_PROJECT}','${entityEvidence}','${winningFingerprint}')::text;`;

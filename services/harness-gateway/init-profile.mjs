@@ -9,11 +9,22 @@ const home = process.env.HARNESS_HOME || '/data/harness';
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 const profileSource = join(appRoot, 'profile');
 const pluginSource = join(appRoot, 'plugins', 'ams-tools');
+const vendorSource = join(appRoot, 'vendor');
 const homeLockdownSource = join(appRoot, 'home-lockdown.patch.yml');
 const target = join(home, 'profiles', 'ams');
 const marker = join(target, '.ams-profile-version');
-const version = 'ams-profile-v6';
-const peerPackages = ['dsh-system-prompt', 'dsh-tools'];
+const version = 'ams-profile-v8';
+// The only plugins promoted from the isolated plugin lab, pinned by exact
+// version. Each entry maps a vendored directory (name) to its npm scope and
+// the exact published version the promotion is bound to; a mismatch aborts
+// initialization so an unpinned or substituted package can never boot.
+const promotedPlugins = [
+  { name: 'dsh-genui', scope: '@omdsh-dev', version: '0.8.3' },
+  { name: 'dsh-visualize', scope: '@dsh-external', version: '0.1.2' },
+];
+// Symlinked peers the profile row resolution needs beyond the bundle rows:
+// dsh-visualize imports schemastery and dsh-skill directly at load time.
+const peerPackages = ['dsh-system-prompt', 'dsh-tools', 'dsh-skill', 'schemastery'];
 
 async function current() {
   try { return (await readFile(marker, 'utf8')).trim(); } catch { return ''; }
@@ -40,9 +51,24 @@ if (await current() !== version) {
     await rm(destination, { recursive: true, force: true });
     await symlink(source, destination, process.platform === 'win32' ? 'junction' : 'dir');
   }
+  for (const promoted of promotedPlugins) {
+    const source = join(vendorSource, promoted.name);
+    const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'));
+    if (manifest.version !== promoted.version) {
+      throw new Error(`Promoted plugin ${promoted.scope}/${promoted.name} must be pinned to ${promoted.version}, found ${manifest.version}.`);
+    }
+    const pluginScope = join(target, 'node_modules', ...promoted.scope.split('/'));
+    const destination = join(pluginScope, promoted.name);
+    await mkdir(pluginScope, { recursive: true });
+    await rm(destination, { recursive: true, force: true });
+    await cp(source, destination, { recursive: true, force: true });
+  }
   await writeFile(marker, `${version}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 await access(join(target, 'node_modules', '@ams', 'harness-tools', 'index.mjs'), constants.R_OK);
 for (const peer of peerPackages) {
   await access(join(target, 'node_modules', '@deepseek-ai', peer), constants.R_OK);
+}
+for (const promoted of promotedPlugins) {
+  await access(join(target, 'node_modules', ...promoted.scope.split('/'), promoted.name, 'package.json'), constants.R_OK);
 }

@@ -17,6 +17,12 @@
   disabled: true
 - id: tool-jobs
   disabled: true
+- id: subprocess
+  disabled: true
+- id: bash-sandbox
+  disabled: true
+- id: permission
+  disabled: true
 - id: tool-fs
   disabled: true
 - id: tool-fs-search
@@ -59,3 +65,16 @@
 - insert:
     - id: ams-harness-tools
       name: '@ams/harness-tools'
+
+# The only two plugins promoted from the isolated plugin lab, pinned by
+# exact version and vendored into this repository (no remote installation).
+# dsh-genui teaches the model the ```dsh-ui fence and its render_ui tool;
+# dsh-visualize registers the bounded visualize tool and its bundled skill.
+# Both are rendering-only capabilities: no shell, filesystem, web, subagent,
+# or arbitrary-code surface is granted by either row.
+- insert:
+    - id: genui
+      name: '@omdsh-dev/dsh-genui'
+- insert:
+    - id: dsh-visualize
+      name: '@dsh-external/dsh-visualize'

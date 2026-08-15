@@ -981,8 +981,11 @@ async function applyBriefAssemble(ctx) {
   for (const cardId of record.knowledge_citation_ids || []) {
     if (!cardIds.has(cardId)) return fail('BRIEF_BINDING_INVALID', 'Brief 引用的知识卡不存在，已拒绝。', { entity: { type: 'project', id: owned.projectId } });
   }
-  const previous = (entities.briefs || []).find((item) => item.id === record.id && item.version === record.version)
-    || (entities.brief && entities.brief.id === record.id && entities.brief.version === record.version ? entities.brief : null);
+  const matchingBriefs = (entities.briefs || [])
+    .filter((item) => item.id === record.id)
+    .sort((left, right) => Number(right.version || 0) - Number(left.version || 0));
+  const previous = matchingBriefs[0]
+    || (entities.brief && entities.brief.id === record.id ? entities.brief : null);
   const baseline = requireExpectedFingerprint(payload, previous, 'brief', String(record.id || '').slice(0, 200));
   if (!baseline.ok) return baseline;
   const { valid, issues } = validateBrief(record);

@@ -1,4 +1,4 @@
-/* global ReadableStream, Request, TextEncoder */
+/* global Buffer, ReadableStream, Request, TextEncoder */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EDGE_SCHEMA_VERSION, fixedGatewayBase, signGatewayRequest, validateEdgeRequest } from '../supabase/functions/harness-command/edge-core.mjs';
@@ -6,12 +6,39 @@ import { OPERATIONS, readBoundedText, sha256Hex, summarizeBridgeResponse, valida
 import { signRequest, verifySignedRequest } from '../services/harness-gateway/gateway-core.mjs';
 import { TOOL_DEFINITIONS, TOOL_SCHEMA_VERSION, toBoundaryRequest } from '../services/harness-gateway/tool-contract.mjs';
 import { executeCommand, parseCommandRequest } from '../supabase/functions/p19-workspace-command/command-core.mjs';
-import { parseP22Request } from '../supabase/functions/p22-research-assist/assist-core.mjs';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+
+async function loadP22CostContract() {
+  const path = new URL('../supabase/functions/p22-research-assist/index.ts', import.meta.url);
+  const edge = readFileSync(path, 'utf8');
+  const shaSource = edge.slice(edge.indexOf('async function sha256'), edge.indexOf('function configured'));
+  const costSource = edge.slice(edge.indexOf('async function paidReservationId'), edge.indexOf('async function costStatus'));
+  let source = `${shaSource}\n${costSource}`
+    .replace('async function sha256(value: string)', 'async function sha256(value)')
+    .replace('function canonicalJson(value: unknown, depth=0, state={nodes:0}): string', 'function canonicalJson(value, depth=0, state={nodes:0})')
+    .replace('const record=value as Record<string,unknown>;', 'const record=value;')
+    .replace('async function canonicalRequestSha256(value: unknown)', 'async function canonicalRequestSha256(value)')
+    .replace('function hasDatabaseCode(error, code: string)', 'function hasDatabaseCode(error, code)')
+    .replace('async function paidReservationId(userId: string, provider: string, operation: string, idempotencyKey: string | null, sequence = 0)', 'async function paidReservationId(userId, provider, operation, idempotencyKey, sequence = 0)')
+    .replace('async function recordProviderCost(db, userId: string, provider: string, operation: string, amount: number, idempotencyKey: string | null, sequence = 0, requestBinding: unknown = {})', 'async function recordProviderCost(db, userId, provider, operation, amount, idempotencyKey, sequence = 0, requestBinding = {})');
+  source = `class P22Error extends Error {
+    constructor(code, message, status, details = {}) { super(message); this.code = code; this.status = status; this.details = details; }
+  }\n${source}\nexport { canonicalRequestSha256, paidReservationId, recordProviderCost };\n`;
+  return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#p22-cost-${Date.now()}`);
+}
+
+function costDb({ rpc }) {
+  return {
+    schema(schema) {
+      assert.equal(schema, 'api');
+      return { rpc };
+    },
+  };
+}
 
 test('gateway base is HTTPS root-only so routed paths cannot discard configuration', () => {
   assert.equal(fixedGatewayBase('https://gateway.example/').toString(), 'https://gateway.example/');
@@ -130,49 +157,159 @@ test('Harness writes carry an exact project revision and stale writes fail close
   assert.equal(writes, 0);
 });
 
-test('Harness P22 boundary durably replays duplicate paid execution', () => {
-  assert.equal(parseP22Request({ action: 'collect_url', url: 'https://x.com/a/status/123', idempotency_key: 'harness-paid-1' }).idempotency_key, 'harness-paid-1');
-  assert.equal(parseP22Request({ action: 'status' }).idempotency_key, undefined);
-  const edge = readFileSync(new URL('../supabase/functions/p22-research-assist/index.ts', import.meta.url), 'utf8');
-  assert.match(edge, /sha256\(`\$\{userId\}\\n\$\{provider\}\\n\$\{operation\}\\n\$\{idempotencyKey\}\\n\$\{sequence\}`\)/);
-  assert.match(edge, /recordProviderCost\(db,userId,'apify',input\.action,/);
-  assert.match(edge, /recordProviderCost\(db,userId,'qwen',operation,/);
-  assert.match(edge, /recordProviderCost\(db,userId,'qwen',input\.action,/);
-  assert.match(edge, /\['already_completed','already_claimed'\]\.includes\(claimOutcome\)[\s\S]+readPaidReplay/);
-  assert.ok(
-    edge.indexOf("['already_completed','already_claimed'].includes(claimOutcome)") < edge.indexOf("rpc('p22_reserve_daily_budget'"),
-    'completed durable receipts must be read before the UTC-day-scoped cost reservation path',
-  );
-  assert.match(edge, /allocatePaidAttemptBudgetReservationId\(id,idempotencyKey,claimOutcome\)/, 'each real paid attempt must receive an accounting identity independent of the durable replay identity');
-  assert.match(edge, /p_reservation_id:budgetId/, 'the budget RPC must use the day-scoped reservation identity');
-  assert.match(edge, /reservation_id:id,budget_reservation_id:budgetId/, 'the response must preserve both paid-operation and accounting identities');
-  assert.match(edge, /refreshCollectionReplayReceipt\(proofSecret,userId,costRecord\.replay\)/, 'collection receipt replay must refresh expiring proofs');
-  const reserveFailure = edge.slice(edge.indexOf("rpc('p22_reserve_daily_budget'"), edge.indexOf('async function costStatus'));
-  assert.match(reserveFailure, /if \(error\)[\s\S]+rpc\('p22_fail_paid_operation_replay'/);
-  assert.match(reserveFailure, /p_failure_code:'COST_RECORDING_FAILED'/);
-  assert.match(reserveFailure, /releaseError\|\|released!=='failed'/);
-  assert.match(edge, /canonicalJson\(requestBinding\)/);
-  assert.match(edge, /p22_claim_paid_operation_replay/);
-  assert.match(edge, /p22_complete_paid_operation_replay/);
-  assert.match(edge, /p22_fail_paid_operation_replay/);
-  assert.match(edge, /if\(costRecord\.replay\) return costRecord\.replay/);
-  assert.doesNotMatch(edge, /IDEMPOTENT_REPLAY_BLOCKED/);
+test('Harness revision guard remains function-only while P22 adds a private exact-request binding', () => {
   const migration = readFileSync(new URL('../supabase/migrations/20260814094040_harness_atomic_project_revision_guard.sql', import.meta.url), 'utf8');
-  assert.match(migration, /create table if not exists ams_private\.p22_paid_operation_replays_v1/i);
-  assert.match(migration, /request_sha256 text not null/i);
-  assert.match(migration, /p22_claim_paid_operation_replay[\s\S]+P22_PAID_REPLAY_IDENTITY_CONFLICT/i);
-  assert.match(migration, /state text not null default 'claimed'[\s\S]+lease_expires_at/i);
-  assert.match(migration, /p22_fail_paid_operation_replay[\s\S]+state = 'failed'/i);
-  assert.match(migration, /force row level security/i);
-  assert.match(migration, /p22_get_paid_operation_replay[\s\S]+p22_complete_paid_operation_replay/i);
-  assert.match(migration, /revoke all on function api\.p22_get_paid_operation_replay[\s\S]+from public, anon, authenticated/i);
+  const binding = readFileSync(new URL('../supabase/migrations/20260815035041_p22_full_request_idempotency_binding.sql', import.meta.url), 'utf8');
+  const p22 = readFileSync(new URL('../supabase/functions/p22-research-assist/index.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(migration, /\b(?:create|alter)\s+table\b/i);
+  assert.doesNotMatch(migration, /\bcreate\s+policy\b/i);
+  assert.match(binding, /create table ams_private\.p22_paid_operation_bindings_v1/i);
+  assert.match(binding, /insert into ams_private\.p22_paid_operation_bindings_v1[\s\S]+from ams_private\.p22_paid_operation_replays_v1/i);
+  assert.ok(
+    binding.indexOf('insert into ams_private.p22_paid_operation_bindings_v1')
+      < binding.indexOf('drop table if exists ams_private.p22_paid_operation_replays_v1'),
+    'legacy replay receipts must be copied before the old table is retired',
+  );
+  assert.match(binding, /drop function if exists api\.p22_claim_paid_operation_replay\(uuid,uuid,text,text,integer,text\)/i);
+  assert.match(binding, /drop function if exists api\.p22_get_paid_operation_replay\(uuid,uuid,text,text,integer,text\)/i);
+  assert.match(binding, /drop function if exists api\.p22_complete_paid_operation_replay\(uuid,uuid,text,text,integer,text,jsonb\)/i);
+  assert.match(binding, /drop function if exists api\.p22_fail_paid_operation_replay\(uuid,uuid,text,text,integer,text,text\)/i);
+  assert.match(binding, /drop table if exists ams_private\.p22_paid_operation_replays_v1/i);
+  assert.match(binding, /unique \(user_id, provider, operation, sequence, idempotency_key\)/i);
+  assert.match(binding, /request_sha256 ~ '\^\[0-9a-f\]\{64\}\$'/i);
+  assert.match(binding, /enable row level security[\s\S]+force row level security/i);
+  assert.match(binding, /revoke all on table[\s\S]+from public, anon, authenticated/i);
+  assert.match(binding, /grant select on table[\s\S]+to service_role/i);
+  assert.match(binding, /revoke all on function api\.p22_claim_paid_operation[\s\S]+from public, anon, authenticated/i);
+  assert.match(binding, /grant execute on function api\.p22_claim_paid_operation[\s\S]+to service_role/i);
+  assert.match(p22, /rpc\('p22_claim_paid_operation'/);
+  assert.match(p22, /sha256\(`\$\{userId\}\\n\$\{provider\}\\n\$\{operation\}\\n\$\{idempotencyKey\}\\n\$\{sequence\}`\)/);
+  assert.match(p22, /data\?\.outcome !== 'claimed'[\s\S]+IDEMPOTENT_RESULT_UNAVAILABLE/);
+  assert.match(p22, /P22_IDEMPOTENCY_CONFLICT'[\s\S]+IDEMPOTENCY_CONFLICT/);
+  assert.match(p22, /analyzePersisted[\s\S]+evidence_version:loaded\.evidence\.version[\s\S]+evidence_fingerprint:loaded\.evidence\.fingerprint[\s\S]+requestBinding/);
+  assert.match(p22, /generateSimilar[\s\S]+evidence_version:loaded\.evidence\.version[\s\S]+evidence_fingerprint:loaded\.evidence\.fingerprint[\s\S]+analysis_version:analysis\.version[\s\S]+analysis_fingerprint:analysis\.fingerprint[\s\S]+requestBinding/);
+  assert.match(migration, /p19_apply_entity_write_v2[\s\S]+p_expected_project_revision/);
 });
 
-test('durable paid receipt storage covers every accepted P22 response envelope', () => {
-  const migration = readFileSync('supabase/migrations/20260814094040_harness_atomic_project_revision_guard.sql', 'utf8');
-  assert.match(migration, /result_json::text\) <= 2097152/);
-  assert.match(migration, /octet_length\(p_result_json::text\) > 2097152/);
-  assert.doesNotMatch(migration, /result_json::text\) <= 1048576|p_result_json::text\) > 1048576/);
+test('P22 same-day idempotent retry is terminal and never reaches the paid provider', async () => {
+  const { recordProviderCost } = await loadP22CostContract();
+  let providerCalls = 0;
+  const db = costDb({
+    rpc: async () => ({ data: { outcome: 'already_claimed' }, error: null }),
+  });
+  await assert.rejects(
+    async () => {
+      await recordProviderCost(db, userId, 'apify', 'collect_url', 2, 'same-day-key', 0, { action: 'collect_url', url: 'https://x.com/a/status/1' });
+      providerCalls += 1;
+    },
+    (error) => error?.code === 'IDEMPOTENT_RESULT_UNAVAILABLE' && error?.status === 409,
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test('P22 cross-UTC-date retry is terminal because the database binding is date-independent', async () => {
+  const { recordProviderCost } = await loadP22CostContract();
+  let providerCalls = 0;
+  const db = costDb({
+    rpc: async () => ({ data: { outcome: 'already_claimed' }, error: null }),
+  });
+  await assert.rejects(
+    async () => {
+      await recordProviderCost(db, userId, 'qwen', 'analyze_persisted', 1, 'cross-date-key', 0, { action: 'analyze_persisted', project_id: projectId, evidence_id: 'ev-1' });
+      providerCalls += 1;
+    },
+    (error) => error?.code === 'IDEMPOTENT_RESULT_UNAVAILABLE' && error?.status === 409,
+  );
+  assert.equal(providerCalls, 0);
+
+});
+
+test('P22 same key with a different canonical request fails as an explicit conflict', async () => {
+  const { canonicalRequestSha256, recordProviderCost } = await loadP22CostContract();
+  assert.equal(
+    await canonicalRequestSha256({ action: 'collect_url', url: 'https://x.com/a/status/1', idempotency_key: 'key' }),
+    await canonicalRequestSha256({ url: 'https://x.com/a/status/1', action: 'collect_url', idempotency_key: 'other' }),
+  );
+  const persistedBase = {
+    action: 'analyze_persisted', project_id: projectId, evidence_id: 'ev-1',
+    evidence_version: 3, evidence_fingerprint: 'a'.repeat(64),
+  };
+  assert.equal(
+    await canonicalRequestSha256(persistedBase),
+    await canonicalRequestSha256({ ...persistedBase }),
+  );
+  assert.notEqual(
+    await canonicalRequestSha256(persistedBase),
+    await canonicalRequestSha256({ ...persistedBase, evidence_version: 4, evidence_fingerprint: 'b'.repeat(64) }),
+    'a changed persisted Evidence snapshot must be a different paid request',
+  );
+  const generationBase = {
+    action: 'generate_similar', project_id: projectId, evidence_id: 'ev-1', analysis_id: 'an-1',
+    evidence_version: 3, evidence_fingerprint: 'a'.repeat(64), analysis_version: 2, analysis_fingerprint: 'c'.repeat(64),
+  };
+  assert.notEqual(
+    await canonicalRequestSha256(generationBase),
+    await canonicalRequestSha256({ ...generationBase, analysis_version: 3, analysis_fingerprint: 'd'.repeat(64) }),
+    'a changed persisted Analysis snapshot must be a different paid request',
+  );
+  assert.notEqual(
+    await canonicalRequestSha256({ action: 'collect_url', url: 'https://x.com/a/status/1' }),
+    await canonicalRequestSha256({ action: 'collect_url', url: 'https://x.com/b/status/2' }),
+  );
+  assert.equal(
+    await canonicalRequestSha256({ action: 'analyze', items: [], source_metadata: undefined, media_assets: undefined }),
+    await canonicalRequestSha256({ action: 'analyze', items: [] }),
+    'omitted optional fields and parsed undefined properties must have the same canonical request identity',
+  );
+  const db = costDb({ rpc: async (_name, args) => {
+    assert.equal(args.p_operation, 'collect_url');
+    assert.match(args.p_request_sha256, /^[0-9a-f]{64}$/);
+    return { data: null, error: { message: 'P22_IDEMPOTENCY_CONFLICT' } };
+  } });
+  await assert.rejects(
+    recordProviderCost(db, userId, 'apify', 'collect_url', 2, 'shared-key', 0, { action: 'collect_url', url: 'https://x.com/b/status/2' }),
+    (error) => error?.code === 'IDEMPOTENCY_CONFLICT' && error?.status === 409,
+  );
+});
+
+test('P22 deterministic reservation identity isolates user, provider, operation and sequence', async () => {
+  const { paidReservationId } = await loadP22CostContract();
+  const base = await paidReservationId(userId, 'apify', 'collect_url', 'isolation-key', 0);
+  const variants = await Promise.all([
+    paidReservationId('22222222-2222-4222-8222-222222222222', 'apify', 'collect_url', 'isolation-key', 0),
+    paidReservationId(userId, 'qwen', 'collect_url', 'isolation-key', 0),
+    paidReservationId(userId, 'apify', 'search', 'isolation-key', 0),
+    paidReservationId(userId, 'apify', 'collect_url', 'isolation-key', 1),
+  ]);
+  assert.equal(new Set([base, ...variants]).size, 5);
+  for (const id of [base, ...variants]) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test('P22 concurrent duplicate paid requests admit exactly one provider call', async () => {
+  const { recordProviderCost } = await loadP22CostContract();
+  let claimed = false;
+  let providerCalls = 0;
+  const db = costDb({
+    rpc: async () => {
+      if (!claimed) {
+        claimed = true;
+        await Promise.resolve();
+        return { data: { outcome: 'claimed', reservation_id: '11111111-1111-4111-a111-111111111111', cost: { outcome: 'recorded' } }, error: null };
+      }
+      return { data: { outcome: 'already_claimed' }, error: null };
+    },
+  });
+  const attempt = async () => {
+    await recordProviderCost(db, userId, 'apify', 'collect_url', 2, 'concurrent-key', 0, { action: 'collect_url', url: 'https://x.com/a/status/1' });
+    providerCalls += 1;
+  };
+  const results = await Promise.allSettled([attempt(), attempt()]);
+  assert.equal(results.filter((item) => item.status === 'fulfilled').length, 1);
+  const rejected = results.filter((item) => item.status === 'rejected');
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason?.code, 'IDEMPOTENT_RESULT_UNAVAILABLE');
+  assert.equal(rejected[0].reason?.status, 409);
+  assert.equal(providerCalls, 1);
 });
 
 test('Reddit proof verification preserves the exact signed source platform', () => {
@@ -282,4 +419,16 @@ test('signed tool bridge envelope accommodates two exact copies of the 64 KiB bu
 test('tool bridge timeout stays below the hosted 150 second edge limit while covering P22', () => {
   const bridge = readFileSync(new URL('../supabase/functions/harness-tool-bridge/index.ts', import.meta.url), 'utf8');
   assert.match(bridge, /AbortSignal\.timeout\(140_000\)/);
+});
+
+test('gateway transport, task, queue and JWT windows are bounded without retaining queued credentials', () => {
+  const edge = readFileSync(new URL('../supabase/functions/harness-command/index.ts', import.meta.url), 'utf8');
+  const server = readFileSync(new URL('../services/harness-gateway/server.mjs', import.meta.url), 'utf8');
+  const runner = readFileSync(new URL('../services/harness-gateway/harness-runner.mjs', import.meta.url), 'utf8');
+  assert.match(edge, /GATEWAY_TRANSPORT_TIMEOUT_MS = 30_000/);
+  assert.match(server, /TASK_TIMEOUT_MS[^\n]+600_000/);
+  assert.match(server, /JWT_COMPLETION_OVERHEAD_MS = 15_000/);
+  assert.match(server, /QUEUE_CAPACITY = 1/);
+  assert.match(runner, /HARNESS_TASK_TIMEOUT_MS \|\| 600_000/);
+  assert.doesNotMatch(server, /refresh[_-]?token/i);
 });

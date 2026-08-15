@@ -101,7 +101,7 @@ const CONCURRENT_USER = '44444444-4444-4444-8444-444444444444';
 const CONCURRENT_PROJECT = 'prj-eeeeeeeeeeeeeeeeeeeeeeee';
 const CONCURRENT_KEY = 'conc-key-1';
 
-test('SQL 集成：全新数据库回放 45 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
+test('SQL 集成：全新数据库回放 46 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
   // 基础设施前置：Docker/PostgreSQL 17 缺失时给出明确基础设施失败（M1 验收）。
   const docker = dockerReady();
   assert.ok(docker.ok, `基础设施失败：Docker CLI/daemon 不可用（${docker.version || '无法探测'}），无法回放真实 PostgreSQL 17 迁移`);
@@ -126,60 +126,126 @@ test('SQL 集成：全新数据库回放 45 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 45, '迁移集必须是既有 44 项加 Harness 原子项目修订门禁，共 45 项');
+    assert.equal(migrations.length, 46, '迁移集必须包含 Harness 修订门禁与 P22 精确请求绑定，共 46 项');
     for (const name of migrations) {
+      if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
+        const legacy = `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous)
+          values ('99999999-9999-4999-8999-999999999999','authenticated','authenticated','legacy-paid@example.invalid','{}','{}',now(),now(),false,false);
+          do $fixture$
+          begin
+            if to_regclass('ams_private.p22_paid_operation_replays_v1') is null then
+              create table ams_private.p22_paid_operation_replays_v1 (
+                user_id uuid not null, reservation_id uuid not null, provider text not null,
+                operation text not null, sequence integer not null, request_sha256 text not null,
+                state text not null default 'claimed', lease_expires_at timestamptz not null default (now() + interval '15 minutes'),
+                failure_code text, result_json jsonb, claimed_at timestamptz not null default now(), completed_at timestamptz,
+                primary key (user_id,reservation_id)
+              );
+            end if;
+          end;
+          $fixture$;
+          insert into ams_private.p22_paid_operation_replays_v1
+            (user_id,reservation_id,provider,operation,sequence,request_sha256,state,result_json,completed_at)
+          values
+            ('99999999-9999-4999-8999-999999999999','99999999-9999-4999-a999-999999999991','qwen','analyze',0,'${'c'.repeat(64)}','completed','{"ok":true}',now());
+          ;`;
+        const legacyRun = psql(dbName, null, { stdin: legacy });
+        assert.equal(legacyRun.status, 0, legacyRun.stderr || legacyRun.stdout);
+      }
       const sql = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', name), 'utf8');
       const run = psql(dbName, null, { stdin: sql });
       assert.equal(run.status, 0, `迁移失败：${name}\n${run.stderr || run.stdout}`);
+      if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
+        const retired = psql(dbName, `select
+          to_regclass('ams_private.p22_paid_operation_replays_v1') is null,
+          to_regprocedure('api.p22_claim_paid_operation_replay(uuid,uuid,text,text,integer,text)') is null,
+          to_regprocedure('api.p22_get_paid_operation_replay(uuid,uuid,text,text,integer,text)') is null,
+          to_regprocedure('api.p22_complete_paid_operation_replay(uuid,uuid,text,text,integer,text,jsonb)') is null,
+          to_regprocedure('api.p22_fail_paid_operation_replay(uuid,uuid,text,text,integer,text,text)') is null;`);
+        assert.equal(retired.status, 0, retired.stderr || retired.stdout);
+        assert.deepEqual(retired.stdout.trim().split('|'), ['t', 't', 't', 't', 't']);
+        const preserved = psql(dbName, `select user_id,provider,operation,sequence,request_sha256,reservation_id,amount_cny
+          from ams_private.p22_paid_operation_bindings_v1
+          where reservation_id='99999999-9999-4999-a999-999999999991';`);
+        assert.equal(preserved.status, 0, preserved.stderr || preserved.stdout);
+        assert.deepEqual(preserved.stdout.trim().split('|'), [
+          '99999999-9999-4999-8999-999999999999', 'qwen', 'analyze', '0', 'c'.repeat(64),
+          '99999999-9999-4999-a999-999999999991', '1.0000',
+        ]);
+        const preservedRetry = psql(dbName, `select api.p22_claim_paid_operation(
+          '99999999-9999-4999-8999-999999999999','qwen','analyze',0,'original-key','${'c'.repeat(64)}',1,
+          '99999999-9999-4999-a999-999999999991')::text;`);
+        assert.equal(preservedRetry.status, 0, preservedRetry.stderr || preservedRetry.stdout);
+        assert.equal(JSON.parse(preservedRetry.stdout.trim()).outcome, 'already_claimed');
+        const preservedConflict = psql(dbName, `select api.p22_claim_paid_operation(
+          '99999999-9999-4999-8999-999999999999','qwen','analyze',0,'original-key','${'d'.repeat(64)}',1,
+          '99999999-9999-4999-a999-999999999991')::text;`);
+        assert.notEqual(preservedConflict.status, 0);
+        assert.match(preservedConflict.stderr, /P22_IDEMPOTENCY_CONFLICT/);
+        const cleanLegacy = psql(dbName, `delete from ams_private.p22_paid_operation_bindings_v1
+          where user_id='99999999-9999-4999-8999-999999999999';
+          delete from auth.users where id='99999999-9999-4999-8999-999999999999';`);
+        assert.equal(cleanLegacy.status, 0, cleanLegacy.stderr || cleanLegacy.stdout);
+      }
     }
 
     // ---- 全部 SQL 测试逐一通过（已验收 P17 系列 + P19/P20/P22 + P17-B2 对抗）----
-    // Harness paid-operation receipts are private, exact, and replayable.
-    const receiptUser = '55555555-5555-4555-8555-555555555555';
-    const receiptId = '66666666-6666-4666-8666-666666666666';
-    const receiptRequest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    const receipt = `jsonb_build_object('items',jsonb_build_array(jsonb_build_object('id','source-1')),'cost',jsonb_build_object('recorded_cny',2))`;
-    const claimReceipt = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}');`);
-    assert.equal(claimReceipt.status, 0, claimReceipt.stderr || claimReceipt.stdout);
-    assert.equal(claimReceipt.stdout.trim(), 'claimed');
-    const replayPending = psql(dbName, `select api.p22_get_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}')::text;`);
-    assert.equal(replayPending.status, 0, replayPending.stderr || replayPending.stdout);
-    assert.equal(replayPending.stdout.trim(), '');
-    const failReceipt = psql(dbName, `select api.p22_fail_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}','APIFY_TIMEOUT');`);
-    assert.equal(failReceipt.status, 0, failReceipt.stderr || failReceipt.stdout);
-    assert.equal(failReceipt.stdout.trim(), 'failed');
-    const reclaimReceipt = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}');`);
-    assert.equal(reclaimReceipt.status, 0, reclaimReceipt.stderr || reclaimReceipt.stdout);
-    assert.equal(reclaimReceipt.stdout.trim(), 'reclaimed');
-    const concurrentReceiptId = '77777777-7777-4777-8777-777777777777';
-    const concurrentClaim = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}');`);
-    assert.equal(concurrentClaim.stdout.trim(), 'claimed');
-    const concurrentFail = psql(dbName, `select api.p22_fail_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}','MODEL_TIMEOUT');`);
-    assert.equal(concurrentFail.stdout.trim(), 'failed');
-    const concurrentReclaims = await Promise.all([
-      psqlAsync(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}');`),
-      psqlAsync(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${concurrentReceiptId}','qwen','analyze',1,'${receiptRequest}');`),
-    ]);
-    const reclaimOutcomes = concurrentReclaims.map((run) => {
-      assert.equal(run.status, 0, run.stderr || run.stdout);
-      return run.stdout.trim();
-    }).sort();
-    assert.deepEqual(reclaimOutcomes, ['already_claimed', 'reclaimed'], 'only one concurrent retry may reclaim a failed paid operation');
-    const claimConflict = psql(dbName, `select api.p22_claim_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');`);
-    assert.notEqual(claimConflict.status, 0);
-    assert.match(claimConflict.stderr, /P22_PAID_REPLAY_IDENTITY_CONFLICT/);
-    const completeReceipt = `select api.p22_complete_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}',${receipt})::text;`;
-    const firstReceipt = psql(dbName, completeReceipt);
-    assert.equal(firstReceipt.status, 0, firstReceipt.stderr || firstReceipt.stdout);
-    const replayReceipt = psql(dbName, `select api.p22_get_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}')::text;`);
-    assert.equal(replayReceipt.status, 0, replayReceipt.stderr || replayReceipt.stdout);
-    assert.deepEqual(JSON.parse(replayReceipt.stdout.trim()), { cost: { recorded_cny: 2 }, items: [{ id: 'source-1' }] });
-    const conflictReceipt = psql(dbName, `select api.p22_complete_paid_operation_replay('${receiptUser}','${receiptId}','apify','collect_url',0,'${receiptRequest}',jsonb_build_object('items','[]'::jsonb))::text;`);
-    assert.notEqual(conflictReceipt.status, 0);
-    assert.match(conflictReceipt.stderr, /P22_PAID_REPLAY_IDENTITY_CONFLICT/);
-    const receiptAcl = psql(dbName, `select c.relrowsecurity,c.relforcerowsecurity,has_function_privilege('anon','api.p22_get_paid_operation_replay(uuid,uuid,text,text,integer,text)','execute'),has_function_privilege('authenticated','api.p22_complete_paid_operation_replay(uuid,uuid,text,text,integer,text,jsonb)','execute'),has_function_privilege('service_role','api.p22_claim_paid_operation_replay(uuid,uuid,text,text,integer,text)','execute') from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='ams_private' and c.relname='p22_paid_operation_replays_v1';`);
-    assert.deepEqual(receiptAcl.stdout.trim().split('|'), ['t', 't', 'f', 'f', 't']);
+    // The Harness forward migration is function-only. Paid-operation replay
+    // storage is intentionally outside this authorization and must not be
+    // introduced as a side effect of the concurrency guard.
+    const paidUser = '77777777-7777-4777-8777-777777777777';
+    const requestA = 'a'.repeat(64);
+    const requestB = 'b'.repeat(64);
+    const reservationA = '55555555-5555-4555-a555-555555555551';
+    const reservationProvider = '55555555-5555-4555-a555-555555555552';
+    const seedPaidUsers = psql(dbName, `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous) values
+      ('${paidUser}','authenticated','authenticated','paid@example.invalid','{}','{}',now(),now(),false,false),
+      ('88888888-8888-4888-8888-888888888888','authenticated','authenticated','paid-concurrent@example.invalid','{}','{}',now(),now(),false,false);`);
+    assert.equal(seedPaidUsers.status, 0, seedPaidUsers.stderr || seedPaidUsers.stdout);
+    const claim = (sha, reservation, provider = 'apify', sequence = 0) =>
+      `select api.p22_claim_paid_operation('${paidUser}','${provider}','collect_url',${sequence},'exact-key','${sha}',2,'${reservation}')::text;`;
+    const firstClaim = psql(dbName, claim(requestA, reservationA));
+    assert.equal(firstClaim.status, 0, firstClaim.stderr || firstClaim.stdout);
+    assert.equal(JSON.parse(firstClaim.stdout.trim()).outcome, 'claimed');
+    const exactRetry = psql(dbName, claim(requestA, reservationA));
+    assert.equal(exactRetry.status, 0, exactRetry.stderr || exactRetry.stdout);
+    assert.equal(JSON.parse(exactRetry.stdout.trim()).outcome, 'already_claimed');
+    const conflict = psql(dbName, claim(requestB, reservationA));
+    assert.notEqual(conflict.status, 0);
+    assert.match(conflict.stderr, /P22_IDEMPOTENCY_CONFLICT/);
+    const providerIsolation = psql(dbName, claim(requestA, reservationProvider, 'qwen'));
+    assert.equal(providerIsolation.status, 0, providerIsolation.stderr || providerIsolation.stdout);
+    assert.equal(JSON.parse(providerIsolation.stdout.trim()).outcome, 'claimed');
+    const paidCounts = psql(dbName, `select (select count(*) from ams_private.p22_paid_operation_bindings_v1 where user_id='${paidUser}'), (select count(*) from public.cost_records where user_id='${paidUser}');`);
+    assert.deepEqual(paidCounts.stdout.trim().split('|'), ['2', '2']);
+    const paidAcl = psql(dbName, `select
+      has_table_privilege('anon','ams_private.p22_paid_operation_bindings_v1','select'),
+      has_table_privilege('authenticated','ams_private.p22_paid_operation_bindings_v1','select'),
+      has_table_privilege('service_role','ams_private.p22_paid_operation_bindings_v1','select'),
+      has_function_privilege('anon','api.p22_claim_paid_operation(uuid,text,text,integer,text,text,numeric,uuid)','execute'),
+      has_function_privilege('authenticated','api.p22_claim_paid_operation(uuid,text,text,integer,text,text,numeric,uuid)','execute'),
+      has_function_privilege('service_role','api.p22_claim_paid_operation(uuid,text,text,integer,text,text,numeric,uuid)','execute');`);
+    assert.deepEqual(paidAcl.stdout.trim().split('|'), ['f', 'f', 't', 'f', 'f', 't']);
 
+    const concurrentPaidUser = '88888888-8888-4888-8888-888888888888';
+    const concurrentPaidReservation = '66666666-6666-4666-a666-666666666661';
+    const concurrentPaidSql = `select api.p22_claim_paid_operation('${concurrentPaidUser}','apify','search',0,'concurrent-paid-key','${requestA}',2,'${concurrentPaidReservation}')::text;`;
+    const concurrentPaidRuns = await Promise.all(Array.from({ length: 6 }, () => psqlAsync(dbName, concurrentPaidSql)));
+    const concurrentPaidOutcomes = concurrentPaidRuns.map((run) => {
+      assert.equal(run.status, 0, run.stderr || run.stdout);
+      return JSON.parse(run.stdout.trim()).outcome;
+    });
+    assert.equal(concurrentPaidOutcomes.filter((outcome) => outcome === 'claimed').length, 1);
+    assert.equal(concurrentPaidOutcomes.filter((outcome) => outcome === 'already_claimed').length, 5);
+    const concurrentPaidCounts = psql(dbName, `select (select count(*) from ams_private.p22_paid_operation_bindings_v1 where user_id='${concurrentPaidUser}'), (select count(*) from public.cost_records where user_id='${concurrentPaidUser}');`);
+    assert.deepEqual(concurrentPaidCounts.stdout.trim().split('|'), ['1', '1']);
+    const cleanPaid = psql(dbName, `delete from ams_private.p22_paid_operation_bindings_v1 where user_id in ('${paidUser}','${concurrentPaidUser}'); delete from public.cost_records where user_id in ('${paidUser}','${concurrentPaidUser}'); delete from auth.users where id in ('${paidUser}','${concurrentPaidUser}');`);
+    assert.equal(cleanPaid.status, 0, cleanPaid.stderr || cleanPaid.stdout);
+
+    const harnessMigration = readFileSync(join(REPO_ROOT, 'supabase', 'migrations', '20260814094040_harness_atomic_project_revision_guard.sql'), 'utf8');
+    assert.doesNotMatch(harnessMigration, /\b(?:create|alter)\s+table\b/i);
+    assert.doesNotMatch(harnessMigration, /\b(?:enable|force)\s+row\s+level\s+security\b/i);
+    assert.doesNotMatch(harnessMigration, /\bcreate\s+policy\b/i);
     const tests = readdirSync(join(REPO_ROOT, 'supabase', 'tests'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
@@ -239,6 +305,10 @@ test('SQL 集成：全新数据库回放 45 迁移 + SQL 测试 + 并发幂等�
     const revisionEvidence = 'ev-abababababababababababab';
     const createRevisionProject = psql(dbName, `select api.p19_apply_entity_write('${CONCURRENT_USER}','revision-create','project.create','project','${revisionProject}','{}'::jsonb,'p19_research_projects_v1',jsonb_build_object('id','${revisionProject}','version',1,'schema_version','p19_research_project_v1','status','active','topic','revision','objective','o','audience','a','channel','c','constraints','[]'::jsonb),null,null,null)::text;`);
     assert.equal(createRevisionProject.status, 0, createRevisionProject.stderr || createRevisionProject.stdout);
+    const browserEvidence = 'ev-acababababababababababab';
+    const browserCompatibleWrite = psql(dbName, `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','browser-compatible-entity','evidence.create','evidence','${browserEvidence}','{}'::jsonb,'p19_evidence_records_v1',jsonb_build_object('id','${browserEvidence}','project_id','${revisionProject}','schema_version','p19_evidence_record_v1','source_url','https://example.com/browser','label','browser','platform','manual','content_text','browser','recorded_at','2026-08-12T00:00:00Z','provenance',jsonb_build_object('manual',true),'created_at','2026-08-12T00:00:00Z','updated_at','2026-08-12T00:00:00Z'),null,null,null,null)::text;`);
+    assert.equal(browserCompatibleWrite.status, 0, browserCompatibleWrite.stderr || browserCompatibleWrite.stdout);
+    assert.match(browserCompatibleWrite.stdout, /applied/, 'existing browser write path remains compatible when no project revision is supplied');
     const projectAdvance = `begin; select 1 from ams_private.p19_project_locks_v1 where user_id='${CONCURRENT_USER}' and project_id='${revisionProject}' for update; select pg_sleep(1); select api.p19_apply_entity_write('${CONCURRENT_USER}','revision-advance','project.update','project','${revisionProject}','{}'::jsonb,'p19_research_projects_v1',jsonb_build_object('id','${revisionProject}','version',2,'schema_version','p19_research_project_v1','status','active','topic','revision 2','objective','o','audience','a','channel','c','constraints','[]'::jsonb),null,1,null)::text; commit;`;
     const staleEntity = `select api.p19_apply_entity_write_v2('${CONCURRENT_USER}','revision-stale-entity','evidence.create','evidence','${revisionEvidence}','{}'::jsonb,'p19_evidence_records_v1',jsonb_build_object('id','${revisionEvidence}','project_id','${revisionProject}','schema_version','p19_evidence_record_v1','source_url','https://example.com/revision','label','revision','platform','manual','content_text','revision','recorded_at','2026-08-12T00:00:00Z','provenance',jsonb_build_object('manual',true),'created_at','2026-08-12T00:00:00Z','updated_at','2026-08-12T00:00:00Z'),null,null,null,1)::text;`;
     const advancePromise = psqlAsync(dbName, projectAdvance);
@@ -249,7 +319,7 @@ test('SQL 集成：全新数据库回放 45 迁移 + SQL 测试 + 并发幂等�
     assert.notEqual(staleResult.status, 0, 'stale Harness entity write must fail after the concurrent project revision commits');
     assert.match(staleResult.stderr, /P19_PROJECT_REVISION_STALE/);
     const revisionState = psql(dbName, `select (select max(project_version) from ams_private.p19_research_projects_v1 where user_id='${CONCURRENT_USER}' and project_id='${revisionProject}'), (select count(*) from ams_private.p19_evidence_records_v1 where user_id='${CONCURRENT_USER}' and project_id='${revisionProject}'), (select count(*) from ams_private.p19_command_ledger_v1 where user_id='${CONCURRENT_USER}' and idempotency_key='revision-stale-entity');`);
-    assert.deepEqual(revisionState.stdout.trim().split('|'), ['2', '0', '0'], 'atomic revision rejection leaves no entity or ledger row');
+    assert.deepEqual(revisionState.stdout.trim().split('|'), ['2', '1', '0'], 'atomic revision rejection leaves only the prior browser-compatible entity and no stale ledger row');
 
     // ---- Exact retry after a successful revision-changing update must replay. ----
     const replayProject = 'prj-acacacacacacacacacacacac';

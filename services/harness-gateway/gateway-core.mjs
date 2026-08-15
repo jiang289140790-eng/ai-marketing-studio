@@ -355,6 +355,11 @@ export class HarnessTaskQueue {
       };
       this.#transition(task, 'succeeded');
     } catch (error) {
+      const taskFailure = controller.signal.aborted
+        ? null
+        : error?.diagnostic
+          ? (normalizeDiagnostic(error.diagnostic) || SAFE_HARNESS_DIAGNOSTIC)
+          : { code: bounded(error?.code || 'HARNESS_FAILED', 80), message: bounded(error?.message || 'Harness task failed.', 500) };
       if (error?.partialResult && !controller.signal.aborted) {
         task.result = {
           final_response: boundedUtf8(error.partialResult.final_response, MAX_RESULT_BYTES),
@@ -362,7 +367,10 @@ export class HarnessTaskQueue {
             ? error.partialResult.artifact_refs.slice(0, 50).map((value) => bounded(value, 500))
             : [],
           partial_completion: error.partialResult.partial_completion === true,
-          presentation: derivePresentation(error.partialResult.final_response, task),
+          // Failed/partial tasks need the bounded tool diagnostic inside the
+          // persisted presentation too. Derive against an immutable view so
+          // the task state machine and transition order stay unchanged.
+          presentation: derivePresentation(error.partialResult.final_response, { ...task, error: taskFailure }),
         };
       }
       if (error?.code === 'AUDIT_PERSISTENCE_UNAVAILABLE') {
@@ -371,11 +379,7 @@ export class HarnessTaskQueue {
         task.updated_at = new Date().toISOString();
         task.error = { code: 'AUDIT_PERSISTENCE_UNAVAILABLE', message: 'Task stopped because its audit state could not be persisted.' };
       } else {
-        task.error = controller.signal.aborted
-          ? null
-          : error?.diagnostic
-            ? (normalizeDiagnostic(error.diagnostic) || SAFE_HARNESS_DIAGNOSTIC)
-            : { code: bounded(error?.code || 'HARNESS_FAILED', 80), message: bounded(error?.message || 'Harness task failed.', 500) };
+        task.error = taskFailure;
         try {
           this.#transition(task, controller.signal.aborted ? 'cancelled' : 'failed');
         } catch {

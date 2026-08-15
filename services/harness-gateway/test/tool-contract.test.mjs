@@ -59,6 +59,21 @@ test('trusted identity is derived outside model payload and boundary mappings ar
     endpoint: 'p22-research-assist',
     body: { action: 'search_reddit', keyword: 'AI marketing', count: 5, sort: 'hot', time_filter: 'week', idempotency_key: 'h-560722f68a6d9697f1397da4d9abf9a0ef78a02f3d5b63acb458f7296f0a55b3' },
   });
+
+  const status = validateToolCall(call('research.status', { project_id: context.project_id }), context);
+  assert.equal(status.ok, true, 'the model may repeat the exact trusted project binding for status');
+  assert.deepEqual(toBoundaryRequest(status.value), {
+    endpoint: 'p22-research-assist',
+    body: {
+      action: 'status',
+      idempotency_key: 'h-b768d2147111f45d5ec756931da92280ba19bd039c81046bd24fa0c0797b457f',
+    },
+  }, 'project context is stripped before the global P22 status boundary');
+  assert.equal(
+    validateToolCall(call('research.status', { project_id: 'prj-bbbbbbbbbbbbbbbbbbbbbbbb' }), context).code,
+    'PROJECT_BINDING_MISMATCH',
+  );
+  assert.equal(validateToolCall(call('research.status', { project_id: context.project_id, extra: true }), context).code, 'UNKNOWN_PAYLOAD_FIELD');
 });
 
 test('boundary idempotency is stable within one task and isolated across tasks', () => {

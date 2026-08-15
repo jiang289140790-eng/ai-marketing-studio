@@ -192,7 +192,12 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
               <div className="ai-result-copy">{activeTask.result.final_response}</div>
             )
           )}
-          {activeTask.error && <div className="notice error">{activeTask.error.message || activeTask.error.code}</div>}
+          {activeTask.error && (
+            <div className="notice error" data-testid="harness-task-error">
+              {activeTask.error.operation ? `${activeTask.error.operation} · ` : ''}
+              {activeTask.error.tool_code || activeTask.error.message || activeTask.error.summary || activeTask.error.code}
+            </div>
+          )}
           {activeTask.result?.artifact_refs?.length > 0 && (
             <div className="ai-artifacts">
               <strong>本次产物</strong>

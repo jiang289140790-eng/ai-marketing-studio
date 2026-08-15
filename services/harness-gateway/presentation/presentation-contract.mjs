@@ -229,7 +229,7 @@ function deriveStructuredBlocks(task) {
     blocks.push({ kind: 'table', title: '本次产物', columns: ['artifact_ref'], rows: refs.map((ref) => [ref]) });
   }
   if (task?.error) {
-    blocks.push(fallbackBlock('任务诊断', `${boundedText(task.error.code || task.error.tool_code, 80)}: ${boundedText(task.error.message || task.error.summary, 240)}`));
+    blocks.push(fallbackBlock('任务诊断', `${boundedText(task.error.tool_code || task.error.code, 80)}: ${boundedText(task.error.message || task.error.summary, 240)}`));
   }
   return blocks;
 }

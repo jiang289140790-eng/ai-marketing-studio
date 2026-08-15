@@ -383,7 +383,7 @@ export function deriveStructuredBlocks(task) {
     blocks.push({
       kind: 'fallback',
       title: '任务诊断',
-      text: `${boundedText(task.error.code || task.error.tool_code, 80)}: ${boundedText(task.error.message || task.error.summary, 240)}`.slice(0, MAX_FALLBACK_CHARS),
+      text: `${boundedText(task.error.tool_code || task.error.code, 80)}: ${boundedText(task.error.message || task.error.summary, 240)}`.slice(0, MAX_FALLBACK_CHARS),
     });
   }
   return blocks.slice(0, MAX_PRESENTATION_BLOCKS);

@@ -281,6 +281,9 @@ test('presentation never changes failure or partial-completion semantics', async
   assert.equal(readPartial.task.error.tool_code, 'AMS_REQUIRED_TOOL_FAILED');
   assert.equal(readPartial.task.result.partial_completion, false);
   assert.equal(readPartial.task.result.presentation.schema_version, PRESENTATION_SCHEMA_VERSION, 'partial results still carry a safe presentation');
+  const diagnosticBlock = readPartial.task.result.presentation.blocks.find((block) => block.title === '任务诊断');
+  assert.ok(diagnosticBlock, 'failed partial result persists a structured diagnostic block');
+  assert.match(diagnosticBlock.text, /AMS_REQUIRED_TOOL_FAILED/);
 });
 
 test('tampered persisted presentations are re-validated on snapshot restore', () => {

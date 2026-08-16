@@ -11,6 +11,14 @@
 // project/approval/revision/idempotency rules) before bridge contact. A
 // planner or template bug surfaces as a bounded INTERNAL_PLAN_VALIDATION_ERROR
 // with zero bridge calls.
+//
+// The tool client contract is one canonical shape: every call crossing it —
+// project reads, normal tool steps, lineage audit and retries alike — is the
+// external ams_harness_tool_v1 call ({schema_version, operation, payload,
+// idempotency_key, expected_revision?}). The client performs the single
+// bridge-boundary validation on that shape; the executor's internal
+// validateToolCall check above only guards plan construction and its enriched
+// value is never forwarded to the client.
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { p22ItemFromEvidence, toP19EvidenceInput } from '../../src/services/p22-research-assist.js';
@@ -143,11 +151,15 @@ function exactToolCall(taskId, plan, trustedContext, step, itemIndex, payload) {
     idempotency_key: stepIdempotencyKey(taskId, plan, step, itemIndex),
   };
   if (revision != null) call.expected_revision = revision;
+  // Internal construction guard: a planner or template bug surfaces here as
+  // INTERNAL_PLAN_VALIDATION_ERROR with zero bridge calls. Only the canonical
+  // external call above is ever returned (and forwarded to the tool client);
+  // the enriched validated value never crosses the client boundary.
   const checked = validateToolCall(call, trustedContext);
   if (!checked.ok) {
     throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `内部调用校验失败（${checked.code}）：未发起任何业务调用。`);
   }
-  return checked.value;
+  return call;
 }
 
 // ---------------------------------------------------------------------------
@@ -860,7 +872,10 @@ export async function executeConfirmedPlan({
   const refreshState = async () => {
     const state = await stateReader(trustedContext, plan.project_id, signal);
     if (!state || state.ok !== true) {
-      throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', '刷新当前项目状态失败。');
+      throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', state?.diagnostics?.issues?.[0] || '刷新当前项目状态失败。', {
+        operation: bounded(state?.diagnostics?.operation || 'workspace.project.read', 80),
+        ...(state?.diagnostics?.field ? { field: bounded(state.diagnostics.field, 80) } : {}),
+      });
     }
     ctx.revision = state.revision;
     return state.project;
@@ -1072,16 +1087,19 @@ export async function executeConfirmedPlan({
 
   const runOneCall = async (step, itemIndex, payloadBuilder) => {
     if (signal?.aborted) throw Object.assign(new Error('Task cancelled.'), { code: 'CANCELLED' });
-    const validated = exactToolCall(taskView.id, plan, trustedContext, step, itemIndex, await payloadBuilder());
+    // The canonical external tool-call shape crosses the tool client, which
+    // performs the single bridge-boundary validation on it.
+    const call = exactToolCall(taskView.id, plan, trustedContext, step, itemIndex, await payloadBuilder());
     recordStep(step, { state: STEP_STATE_RUNNING });
-    const result = await toolClient(validated, trustedContext, signal);
+    const result = await toolClient(call, trustedContext, signal);
     if (!result || result.ok !== true) {
       const code = String(result?.code || 'BOUNDARY_FAILED');
       const ambiguous = step.cost === true && PAID_AMBIGUOUS_CODES.includes(code);
       if (ambiguous) retryUnsafeStep = step.step;
       throw boundedError(code, result?.diagnostics?.issues?.[0] || `边界拒绝了操作：${code}。`, {
         step: step.step,
-        operation: step.operation,
+        operation: bounded(result?.diagnostics?.operation || step.operation, 80),
+        ...(result?.diagnostics?.field ? { field: bounded(result.diagnostics.field, 80) } : {}),
         retry_unsafe: ambiguous === true,
       });
     }
@@ -1136,7 +1154,12 @@ export async function executeConfirmedPlan({
         // downstream steps keep the same precise bindings.
         if (step.kind === 'read_state') {
           const state = await stateReader(trustedContext, plan.project_id, signal);
-          if (!state || state.ok !== true) throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', '刷新当前项目状态失败。');
+          if (!state || state.ok !== true) {
+            throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', state?.diagnostics?.issues?.[0] || '刷新当前项目状态失败。', {
+              operation: bounded(state?.diagnostics?.operation || 'workspace.project.read', 80),
+              ...(state?.diagnostics?.field ? { field: bounded(state.diagnostics.field, 80) } : {}),
+            });
+          }
           derived.project = state.project;
           ctx.revision = state.revision;
           if (plan.workflow === 'analyze_evidence') {
@@ -1164,7 +1187,12 @@ export async function executeConfirmedPlan({
       if (step.kind === 'read_state') {
         if (!plan.project_id) throw boundedError('PROJECT_BINDING_REQUIRED', '当前任务未绑定项目，无法读取项目状态。');
         const state = await stateReader(trustedContext, plan.project_id, signal);
-        if (!state || state.ok !== true) throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', '读取当前项目状态失败。');
+        if (!state || state.ok !== true) {
+          throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', state?.diagnostics?.issues?.[0] || '读取当前项目状态失败。', {
+            operation: bounded(state?.diagnostics?.operation || 'workspace.project.read', 80),
+            ...(state?.diagnostics?.field ? { field: bounded(state.diagnostics.field, 80) } : {}),
+          });
+        }
         derived.project = state.project;
         ctx.revision = state.revision;
         if (plan.workflow === 'analyze_evidence') {
@@ -1199,11 +1227,15 @@ export async function executeConfirmedPlan({
       }
 
       if (step.operation === 'workspace.lineage.audit') {
-        const validated = exactToolCall(taskView.id, plan, trustedContext, step, 0, { project_id: plan.project_id });
+        const call = exactToolCall(taskView.id, plan, trustedContext, step, 0, { project_id: plan.project_id });
         recordStep(step, { state: STEP_STATE_RUNNING });
-        const result = await toolClient(validated, trustedContext, signal);
+        const result = await toolClient(call, trustedContext, signal);
         if (!result || result.ok !== true) {
-          throw boundedError(String(result?.code || 'BOUNDARY_FAILED'), result?.diagnostics?.issues?.[0] || '血缘审计失败。');
+          throw boundedError(String(result?.code || 'BOUNDARY_FAILED'), result?.diagnostics?.issues?.[0] || '血缘审计失败。', {
+            step: step.step,
+            operation: bounded(result?.diagnostics?.operation || step.operation, 80),
+            ...(result?.diagnostics?.field ? { field: bounded(result.diagnostics.field, 80) } : {}),
+          });
         }
         derived.terminal_results = { ...(derived.terminal_results || {}), [step.key]: boundedTerminalResult(result.data || result) };
         recordStep(step, { state: STEP_STATE_SUCCEEDED, item_count: 1, executed_count: 1, finished_at: now() });
@@ -1314,8 +1346,9 @@ export async function executeConfirmedPlan({
         finished_at: now(),
         error: {
           code: String(error?.code || 'HARNESS_FAILED').slice(0, 80),
-          operation: step.operation,
+          operation: bounded(error?.diagnostics?.operation || step.operation, 80),
           message: String(error?.message || '步骤执行失败。').slice(0, 240),
+          ...(error?.diagnostics?.field ? { field: bounded(error.diagnostics.field, 80) } : {}),
           retry_unsafe: error?.diagnostics?.retry_unsafe === true || error?.code === 'INTERNAL_PLAN_VALIDATION_ERROR',
         },
       });
@@ -1402,8 +1435,12 @@ function buildSummary({ plan, stepStates }) {
 
 /**
  * Bridge-side state reader: reads the current project through the exact tool
- * contract (workspace.project.read). `toolClient` is the same validated
- * bridge client the executor uses for every other call.
+ * contract (workspace.project.read). `toolClient` is the same bridge client
+ * the executor uses for every other call, and — like every executor call —
+ * receives the canonical external tool-call shape; the client performs the
+ * single bridge-boundary validation on it. Failures keep the exact bounded
+ * diagnostics (code, operation, field) supplied by the boundary or the
+ * validator so the executor can surface them in the final step failure.
  */
 export function createBridgeStateReader(toolClient) {
   return async (trustedContext, projectId, signal) => {
@@ -1413,10 +1450,17 @@ export function createBridgeStateReader(toolClient) {
       payload: { project_id: projectId },
       idempotency_key: 'state-read',
     };
+    // Construction guard: an invalid state read never touches the client.
     const checked = validateToolCall(call, trustedContext);
-    if (!checked.ok) return { ok: false, code: checked.code };
-    const result = await toolClient(checked.value, trustedContext, signal);
-    if (!result || result.ok !== true) return { ok: false, code: result?.code || 'PROJECT_STATE_READ_FAILED' };
+    if (!checked.ok) return { ok: false, code: checked.code, diagnostics: checked.diagnostics };
+    const result = await toolClient(call, trustedContext, signal);
+    if (!result || result.ok !== true) {
+      return {
+        ok: false,
+        code: result?.code || 'PROJECT_STATE_READ_FAILED',
+        ...(result?.diagnostics ? { diagnostics: result.diagnostics } : {}),
+      };
+    }
     const project = result.data?.project || result.project || null;
     if (!plainObject(project)) return { ok: false, code: 'PROJECT_STATE_INVALID' };
     return { ok: true, project, revision: Number.isSafeInteger(project.version) ? project.version : null };

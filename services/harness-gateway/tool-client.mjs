@@ -31,6 +31,15 @@ export function createToolClient({
   const fixedUrl = new URL(bridgeUrl);
   if (fixedUrl.username || fixedUrl.password || fixedUrl.hash || fixedUrl.search) throw new TypeError('bridgeUrl must not contain credentials, query, or fragment.');
 
+  // The single canonical contract: `call` is always the external
+  // ams_harness_tool_v1 tool call ({schema_version, operation, payload,
+  // idempotency_key, expected_revision?}) exactly as a caller proposed it.
+  // This client performs the one bridge-boundary validation on that shape;
+  // trusted identity (task_id/user_id/project_id) comes only from
+  // `trustedContext`, and any caller-supplied envelope extra — including the
+  // internally enriched executor value — fails closed with the exact
+  // offending field. The enriched validated value never crosses this
+  // boundary; it exists only inside the signed bridge envelope below.
   return async function invokeTool(rawCall, trustedContext, signal) {
     const checked = validateToolCall(rawCall, trustedContext);
     if (!checked.ok) return normalizeToolResult({ task_id: trustedContext?.task_id || 'invalid', operation: rawCall?.operation || 'invalid' }, checked);

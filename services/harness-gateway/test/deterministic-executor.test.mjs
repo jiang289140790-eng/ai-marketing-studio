@@ -1,4 +1,4 @@
-/* global structuredClone, URL */
+/* global Response, structuredClone, URL */
 // Deterministic executor tests: exact single-item expansion of batch intents
 // with unique deterministic idempotency keys, exact payload construction for
 // every TOOL_DEFINITIONS operation, reuse adversarial cases (missing,
@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { TOOL_DEFINITIONS, validateToolCall } from '../tool-contract.mjs';
 import { createPlanner } from '../planner.mjs';
+import { createToolClient } from '../tool-client.mjs';
 import { PAID_AMBIGUOUS_CODES, STEP_LABELS, createBridgeStateReader, executeConfirmedPlan, metricValue } from '../deterministic-executor.mjs';
 
 const TASK_ID = 'ht-11111111-1111-4111-8111-111111111111';
@@ -726,4 +727,227 @@ test('search_x_reddit: 1, max and over-bound combined saves are exact with no pl
   const overCreates = bridgeOver.calls.filter((call) => call.operation === 'workspace.evidence.create');
   assert.equal(overCreates.length, 4);
   assert.equal(new Set(overCreates.map((call) => call.idempotency_key)).size, 4);
+});
+
+// ---------------------------------------------------------------------------
+// Production-shaped client wiring: the real tool client validates the single
+// canonical external call shape at the bridge boundary. The previous bug fed
+// the internally enriched executor value into the client, which re-validated
+// it as an external call and rejected workspace.project.read with
+// UNKNOWN_FIELD on task_id. These tests pin the fixed contract end to end.
+// ---------------------------------------------------------------------------
+
+const bridgeSecret = 's'.repeat(32);
+const delegatedAuthorization = `Bearer ${'a'.repeat(40)}`;
+
+function compareEvidenceRecord(idSuffix, views, likes) {
+  const text = `evidence ${idSuffix}`;
+  return {
+    id: `ev-${idSuffix}`,
+    project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+    source_url: `https://x.com/i/web/status/${idSuffix.slice(-1)}`,
+    label: `source ${idSuffix}`,
+    platform: 'X · Apify',
+    content_text: text,
+    source_metadata: { engagement: { views, likes } },
+    fingerprint: createHash('sha256').update(text).digest('hex'),
+    version: 1,
+  };
+}
+
+// Real tool client whose fetch records every bridge envelope and answers the
+// bounded project read plus (optionally) the comparison analysis write.
+function realBridgeClient({ evidence = [], onCall = null } = {}) {
+  let revision = 3;
+  let analyses = [];
+  let failFirstWrite = false;
+  const bodies = [];
+  const client = createToolClient({
+    bridgeUrl: 'https://bridge.example.test/functions/v1/harness-tool-bridge',
+    bridgeSecret,
+    delegatedAuthorization,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      onCall?.(body);
+      const call = body.call;
+      if (call.operation === 'workspace.project.read') {
+        return new Response(JSON.stringify({ ok: true, code: 'OK', data: { project: { version: revision, evidence, analyses } } }), { status: 200 });
+      }
+      if (call.operation === 'workspace.analysis.create') {
+        if (failFirstWrite) {
+          failFirstWrite = false;
+          return new Response(JSON.stringify({
+            ok: false,
+            code: 'P19_ENTITY_REVISION_STALE',
+            diagnostics: { field: 'expected_revision', operation: 'analysis.create', issues: ['stale revision'] },
+          }), { status: 200 });
+        }
+        const record = { ...call.payload.analysis, fingerprint: 'af'.repeat(32) };
+        analyses = [record];
+        revision += 1;
+        return new Response(JSON.stringify({ ok: true, code: 'OK', entity: { type: 'analysis', id: record.id } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: false, code: 'UNEXPECTED_OPERATION' }), { status: 200 });
+    },
+  });
+  return {
+    client,
+    bodies,
+    failNextWrite() { failFirstWrite = true; },
+    get revision() { return revision; },
+    get analyses() { return analyses; },
+  };
+}
+
+// Spies on the executor→client boundary: every call argument the executor
+// hands to the tool client (project reads, tool steps, lineage audit, retries)
+// must be the canonical external shape — never the internally enriched value.
+function assertCanonicalCallShape(client) {
+  return async (call, trustedContext, signal) => {
+    const keys = Object.keys(call);
+    assert.equal(
+      keys.includes('task_id') || keys.includes('user_id') || keys.includes('project_id'),
+      false,
+      'no internal trusted fields may cross the tool client',
+    );
+    for (const key of keys) {
+      assert.ok(
+        ['schema_version', 'operation', 'payload', 'idempotency_key', 'expected_revision'].includes(key),
+        `the client sees only canonical external call fields (got ${key})`,
+      );
+    }
+    return client(call, trustedContext, signal);
+  };
+}
+
+test('a production-shaped zero-paid compare_project crosses the real tool client and the exact P19 boundary without UNKNOWN_FIELD', async () => {
+  const evidence = [compareEvidenceRecord('000000000000000000000001', 10, 2), compareEvidenceRecord('000000000000000000000002', 20, 1)];
+  const plan = await buildPlan('比较当前项目中表现最好的帖子');
+  assert.equal(plan.approvals.paid_external_calls, false);
+  assert.equal(plan.cost_indicators.paid_calls, 0);
+  const bridge = realBridgeClient({ evidence });
+  const spied = assertCanonicalCallShape(bridge.client);
+  const taskView = view(plan);
+  const stateReader = createBridgeStateReader(spied);
+  const output = await executeConfirmedPlan({ taskView, plan, signal: null, emit: () => {}, toolClient: spied, stateReader });
+  assert.equal(output.outcome, 'succeeded', `the read no longer fails with UNKNOWN_FIELD: ${JSON.stringify(taskView.step_states['st-0']?.error)}`);
+  assert.equal(bridge.bodies.length, 1, 'the read-only comparison makes exactly one bridge call (the bounded project read)');
+  assert.equal(output.result_data.compare.persisted, false);
+  assert.deepEqual(output.result_data.compare.ranking.map((row) => row.evidence_id), [
+    'ev-000000000000000000000002',
+    'ev-000000000000000000000001',
+  ], 'the deterministic ranking is produced after the successful read');
+  const body = bridge.bodies[0];
+  assert.deepEqual(
+    body.call.payload,
+    { project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa' },
+    'the signed envelope call payload never gains internal trusted fields',
+  );
+  assert.deepEqual(body.boundary, {
+    endpoint: 'p19-workspace-command',
+    body: {
+      schema_version: 'p19_command_contract_v1',
+      command: 'project.read',
+      idempotency_key: `h-${createHash('sha256').update(`${TASK_ID}\0state-read`, 'utf8').digest('hex')}`,
+      payload: { project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa' },
+    },
+  }, 'the downstream P19 body is exactly {schema_version, command, idempotency_key, payload:{project_id}}');
+});
+
+test('read-boundary failures retain exact bounded diagnostics through the state reader into the final step failure', async () => {
+  const plan = await buildPlan('比较当前项目中表现最好的帖子');
+  const bodies = [];
+  const client = createToolClient({
+    bridgeUrl: 'https://bridge.example.test/functions/v1/harness-tool-bridge',
+    bridgeSecret,
+    delegatedAuthorization,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      return new Response(JSON.stringify({
+        ok: false,
+        code: 'P19_PROJECT_NOT_FOUND',
+        diagnostics: { field: 'project_id', operation: 'project.read', issues: ['项目不存在'] },
+      }), { status: 200 });
+    },
+  });
+  const trustedContext = { task_id: TASK_ID, user_id: 'user-a', project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa', approval: {} };
+  const stateReader = createBridgeStateReader(client);
+  const state = await stateReader(trustedContext, 'prj-aaaaaaaaaaaaaaaaaaaaaaaa', null);
+  assert.equal(state.ok, false);
+  assert.equal(state.code, 'P19_PROJECT_NOT_FOUND');
+  assert.equal(state.diagnostics.operation, 'project.read', 'the state reader keeps the exact boundary operation');
+  assert.equal(state.diagnostics.field, 'project_id', 'the state reader keeps the exact offending field');
+
+  const taskView = view(plan);
+  const output = await executeConfirmedPlan({ taskView, plan, signal: null, emit: () => {}, toolClient: client, stateReader });
+  assert.equal(output.outcome, 'failed');
+  const readStep = plan.steps[0];
+  const snapshot = taskView.step_states[readStep.step];
+  assert.equal(snapshot.state, 'failed');
+  assert.equal(snapshot.error.code, 'P19_PROJECT_NOT_FOUND', 'the final step failure keeps the exact code');
+  assert.equal(snapshot.error.operation, 'project.read', 'the final step failure keeps the exact operation');
+  assert.equal(snapshot.error.field, 'project_id', 'the final step failure keeps the exact offending field');
+  assert.deepEqual(bodies[0].boundary.body.payload, { project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa' }, 'the failed read also crossed with the exact P19 payload');
+});
+
+test('a tool-step boundary failure retains exact operation and field in the final step failure without leaking values', async () => {
+  const plan = await buildPlan('搜索 X 上 AI 营销，选 1 条保存为证据');
+  const bridge = mockBoundary();
+  const original = bridge.client;
+  bridge.client = async (call, trusted, signal) => {
+    if (call.operation === 'workspace.evidence.create') {
+      return { ok: false, code: 'P19_PAYLOAD_FIELD_INVALID', diagnostics: { field: 'evidence', operation: 'evidence.create', issues: ['证据记录无效'] } };
+    }
+    return original(call, trusted, signal);
+  };
+  const { taskView, output } = await run(plan, bridge);
+  assert.equal(output.outcome, 'partial');
+  const saveStep = plan.steps.find((step) => step.operation === 'workspace.evidence.create');
+  const snapshot = taskView.step_states[saveStep.step];
+  assert.equal(snapshot.state, 'failed');
+  assert.equal(snapshot.error.code, 'P19_PAYLOAD_FIELD_INVALID');
+  assert.equal(snapshot.error.operation, 'evidence.create', 'the exact boundary operation reaches the final step failure');
+  assert.equal(snapshot.error.field, 'evidence', 'the exact offending field reaches the final step failure');
+  assert.doesNotMatch(JSON.stringify(taskView.step_states), /Bearer|token|secret|password/i, 'step failures never surface tokens or secrets');
+});
+
+test('a failed-write retry re-reads project state through the same canonical client contract', async () => {
+  const evidence = [compareEvidenceRecord('000000000000000000000001', 10, 2), compareEvidenceRecord('000000000000000000000002', 20, 1)];
+  const plan = await buildPlan('比较当前项目中表现最好的帖子并保存比较分析');
+  const bridge = realBridgeClient({ evidence });
+  bridge.failNextWrite();
+  const spied = assertCanonicalCallShape(bridge.client);
+  const taskView = view(plan);
+  const stateReader = createBridgeStateReader(spied);
+  const first = await executeConfirmedPlan({ taskView, plan, signal: null, emit: () => {}, toolClient: spied, stateReader });
+  assert.equal(first.outcome, 'partial');
+  const saveStep = plan.steps.find((step) => step.operation === 'workspace.analysis.create');
+  assert.equal(taskView.step_states[saveStep.step].error.code, 'P19_ENTITY_REVISION_STALE');
+  assert.equal(taskView.step_states[saveStep.step].error.operation, 'analysis.create');
+  assert.equal(taskView.step_states[saveStep.step].error.field, 'expected_revision');
+
+  taskView.retry_target = { step_id: saveStep.step, plan_fingerprint: plan.fingerprint };
+  const retried = await executeConfirmedPlan({ taskView, plan, signal: null, emit: () => {}, toolClient: spied, stateReader });
+  assert.equal(retried.outcome, 'succeeded');
+  assert.equal(retried.result_data.compare.persisted, true);
+  const writes = bridge.bodies.filter((body) => body.call.operation === 'workspace.analysis.create');
+  assert.equal(writes.length, 3, 'one failed write attempt plus the two unique item writes on retry');
+  for (const body of bridge.bodies) {
+    if (body.call.operation === 'workspace.analysis.create') {
+      assert.deepEqual(
+        Object.keys(body.boundary.body.payload).sort(),
+        ['analysis', 'expected_fingerprint', 'expected_revision', 'project_id'],
+        'the write boundary payload contains exactly the permitted fields',
+      );
+    } else {
+      assert.deepEqual(body.boundary.body, {
+        schema_version: 'p19_command_contract_v1',
+        command: 'project.read',
+        idempotency_key: `h-${createHash('sha256').update(`${TASK_ID}\0state-read`, 'utf8').digest('hex')}`,
+        payload: { project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa' },
+      }, 'every state re-read on retry crosses the exact P19 boundary');
+    }
+  }
 });

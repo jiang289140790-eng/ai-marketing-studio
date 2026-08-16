@@ -43,8 +43,10 @@ export const TOOL_DEFINITIONS = Object.freeze(Object.fromEntries(
   })]),
 ));
 
-function fail(code, field = null) {
-  return { ok: false, code, diagnostics: { field } };
+function fail(code, field = null, extra = {}) {
+  // Diagnostics carry only bounded identity labels — the exact operation and
+  // the offending field — never payload values, tokens, headers or secrets.
+  return { ok: false, code, diagnostics: { ...(field == null ? {} : { field }), ...extra } };
 }
 
 function plainObject(value) {
@@ -69,9 +71,9 @@ export function validateToolCall(input, trustedContext) {
   const optional = new Set(definition.optional);
   const allowedPayload = new Set(definition.fields);
   const unknownPayload = Object.keys(input.payload).find((key) => !allowedPayload.has(key));
-  if (unknownPayload) return fail('UNKNOWN_PAYLOAD_FIELD', unknownPayload);
+  if (unknownPayload) return fail('UNKNOWN_PAYLOAD_FIELD', unknownPayload, { operation: input.operation });
   const missing = definition.fields.find((key) => !optional.has(key) && !Object.hasOwn(input.payload, key));
-  if (missing) return fail('PAYLOAD_FIELD_REQUIRED', missing);
+  if (missing) return fail('PAYLOAD_FIELD_REQUIRED', missing, { operation: input.operation });
   if (Object.hasOwn(input.payload, 'project_id') && !PROJECT_ID.test(String(input.payload.project_id || ''))) {
     return fail('PROJECT_ID_INVALID', 'project_id');
   }

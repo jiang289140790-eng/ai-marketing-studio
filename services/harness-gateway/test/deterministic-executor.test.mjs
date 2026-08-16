@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { TOOL_DEFINITIONS, validateToolCall } from '../tool-contract.mjs';
 import { createPlanner } from '../planner.mjs';
-import { PAID_AMBIGUOUS_CODES, STEP_LABELS, createBridgeStateReader, executeConfirmedPlan } from '../deterministic-executor.mjs';
+import { PAID_AMBIGUOUS_CODES, STEP_LABELS, createBridgeStateReader, executeConfirmedPlan, metricValue } from '../deterministic-executor.mjs';
 
 const TASK_ID = 'ht-11111111-1111-4111-8111-111111111111';
 const planner = createPlanner();
@@ -238,13 +238,33 @@ test('analysis and comparison execution honor their requested count slots', asyn
   assert.equal(analysisBridge.calls.filter((call) => call.operation === 'research.analyze_persisted').length, 1);
   assert.equal(analysisBridge.calls.filter((call) => call.operation === 'workspace.analysis.create').length, 1);
 
+  // compare_project is read-only by default: zero paid calls, zero writes,
+  // and the bounded deterministic ranking is returned instead.
   const comparisonPlan = await buildPlan('比较 2 条当前项目中表现最好的帖子', projectId);
   assert.equal(comparisonPlan.cost_indicators.paid_calls, 0);
-  assert.equal(comparisonPlan.cost_indicators.online_writes, 2);
+  assert.equal(comparisonPlan.cost_indicators.online_writes, 0);
   const comparisonBridge = mockBoundary({ evidence });
   const compared = await run(comparisonPlan, comparisonBridge);
   assert.equal(compared.output.outcome, 'succeeded');
-  assert.equal(comparisonBridge.calls.filter((call) => call.operation === 'workspace.analysis.create').length, 2);
+  assert.equal(comparisonBridge.calls.filter((call) => call.operation === 'workspace.analysis.create').length, 0, 'read-only comparison writes nothing');
+  assert.equal(comparisonBridge.calls.some((call) => call.operation.startsWith('research.')), false, 'read-only comparison makes zero research/model calls');
+  assert.equal(compared.output.result_data.compare.metric, 'engagement');
+  assert.equal(compared.output.result_data.compare.persisted, false);
+  assert.equal(compared.output.result_data.compare.ranking.length, 2);
+
+  // Explicit save language opts into persistence, which requires the exact
+  // online_writes approval before any write can happen.
+  const persistedPlan = await buildPlan('比较 2 条当前项目中表现最好的帖子并保存比较分析', projectId);
+  assert.equal(persistedPlan.cost_indicators.paid_calls, 0);
+  assert.equal(persistedPlan.cost_indicators.online_writes, 2);
+  assert.equal(persistedPlan.approvals.online_writes, true);
+  const persistedBridge = mockBoundary({ evidence });
+  const persisted = await run(persistedPlan, persistedBridge);
+  assert.equal(persisted.output.outcome, 'succeeded');
+  assert.equal(persistedBridge.calls.filter((call) => call.operation === 'workspace.analysis.create').length, 2);
+  assert.equal(persistedBridge.calls.some((call) => call.operation.startsWith('research.')), false, 'persisted comparison still makes zero research/model calls');
+  assert.equal(persisted.output.result_data.compare.persisted, true);
+  assert.equal(persisted.output.result_data.compare.ranking.length, 2);
 });
 
 test('reuse adversarial: exact match skips cost/write; missing/duplicate/stale fails closed', async () => {
@@ -360,7 +380,7 @@ test('a planner/template bug surfaces as INTERNAL_PLAN_VALIDATION_ERROR with zer
 });
 
 test('empty fan-out inputs fail closed instead of reporting a reused success', async () => {
-  for (const intent of ['把项目里现有证据都分析一遍', '比较当前项目中表现最好的帖子']) {
+  for (const intent of ['把项目里现有证据都分析一遍']) {
     const plan = await buildPlan(intent);
     const bridge = mockBoundary();
     const { taskView, output } = await run(plan, bridge);
@@ -377,6 +397,24 @@ test('empty fan-out inputs fail closed instead of reporting a reused success', a
       'empty source executes no business tools',
     );
   }
+
+  // compare_project is not a fan-out workflow: with zero evidence the default
+  // read-only comparison still succeeds and returns the empty deterministic
+  // ranking instead of failing closed.
+  const comparePlan = await buildPlan('比较当前项目中表现最好的帖子');
+  const compareBridge = mockBoundary();
+  const compared = await run(comparePlan, compareBridge);
+  assert.equal(compared.output.outcome, 'succeeded');
+  assert.equal(compared.taskView.step_states['st-1'].state, 'succeeded', 'the local compare step succeeds on an empty project');
+  assert.equal(compared.taskView.step_states['st-1'].item_count, 0);
+  assert.equal(compared.output.result_data.compare.metric, 'engagement');
+  assert.equal(compared.output.result_data.compare.persisted, false);
+  assert.deepEqual(compared.output.result_data.compare.ranking, []);
+  assert.equal(
+    compareBridge.calls.filter((call) => call.operation !== 'workspace.project.read').length,
+    0,
+    'an empty read-only comparison executes no business tools',
+  );
 });
 
 test('PAID_AMBIGUOUS_CODES are bounded and exposed for retry gating', () => {
@@ -495,7 +533,7 @@ test('collection-only URL plan succeeds after its paid call without reading a nu
   assert.equal(output.result_data.collect.items.length, 1);
 });
 
-test('comparison reuse rejects an unrelated ordinary local analysis with the same evidence lineage', async () => {
+test('an unrelated ordinary local analysis is never misrepresented as the read-only comparison result', async () => {
   const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
   const evidence = {
     id: 'ev-111111111111111111111111',
@@ -519,14 +557,26 @@ test('comparison reuse rejects an unrelated ordinary local analysis with the sam
     version: 1,
     fingerprint: 'a'.repeat(64),
   };
+  // No explicit persist intent (比较/提炼 are read-only), so the comparison
+  // must not write or reuse anything: the ordinary analysis stays untouched
+  // and the result is the deterministic local ranking of the evidence.
   const plan = await buildPlan('比较当前项目中表现最好的帖子，提炼可复用的内容规律', projectId);
   const bridge = mockBoundary({ evidence: [evidence], analyses: [ordinary], cards: [], brief: null, handoffs: [] });
   const { taskView, output } = await run(plan, bridge);
   assert.equal(output.outcome, 'succeeded');
-  assert.equal(bridge.calls.filter((call) => call.operation === 'workspace.analysis.create').length, 1);
+  assert.equal(bridge.calls.filter((call) => call.operation === 'workspace.analysis.create').length, 0, 'no explicit persist intent => zero writes');
+  assert.equal(bridge.calls.some((call) => call.operation.startsWith('research.')), false, 'the comparison makes zero research/model calls');
   assert.equal(taskView.step_states['st-1'].state, 'succeeded');
+  assert.equal(taskView.step_states['st-1'].item_count, 1);
   assert.equal(taskView.step_states['st-1'].reused_count, 0);
-  assert.notEqual(bridge.state.analyses[0].id, ordinary.id);
+  const compare = output.result_data.compare;
+  assert.equal(compare.metric, 'engagement');
+  assert.equal(compare.persisted, false);
+  assert.deepEqual(compare.ranking.map((row) => row.evidence_id), [evidence.id], 'the ranking is derived from the evidence, not from any analysis');
+  assert.equal(compare.ranking[0].metric_value, metricValue(evidence, 'engagement'), 'the deterministic engagement formula produces the comparison value');
+  assert.equal(bridge.state.analyses.length, 1, 'no comparison analysis was written');
+  assert.equal(bridge.state.analyses[0].id, ordinary.id, 'the pre-existing ordinary analysis is untouched and never replaced');
+  assert.ok(!JSON.stringify(compare).includes(ordinary.id), 'the ordinary analysis id never appears in the comparison result');
 });
 
 test('handoff payload is derived only through the canonical P19 implementation', async () => {

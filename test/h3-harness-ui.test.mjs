@@ -105,6 +105,46 @@ test('AI workspace exposes structured terminal tool results', async () => {
   assert.match(page, /查看工具返回结果/);
 });
 
+test('browser code never submits legacy direct tasks: every submission is plan then confirm', async () => {
+  const client = await readFile(new URL('../src/services/harness-client.js', import.meta.url), 'utf8');
+  const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
+  // The browser client must not expose a direct submit action (legacy
+  // /v1/tasks); planning and confirming are the only submission paths.
+  assert.doesNotMatch(client, /\bsubmit\s*\(/, 'harness-client exposes no legacy submit method');
+  assert.doesNotMatch(page, /harnessClient\.submit|action:\s*'submit'|action:\s*"submit"/, 'the workspace never calls a direct submit action');
+  assert.match(page, /harnessClient\.plan\(/);
+  assert.match(page, /harnessClient\.confirm\(/);
+  assert.match(page, /确认计划后才会执行/);
+  // The exact requested comparison metric is surfaced on the authoritative plan.
+  assert.match(page, /data-testid="harness-metric-slot"/);
+  assert.match(page, /比较指标：\{compareMetricLabels\[authoritativePlan\.slots\.metric\]/);
+  assert.match(page, /views: '展现量（views，涵盖浏览量\/播放量\/曝光量）'/);
+  assert.match(page, /engagement: '互动（engagement）'/);
+});
+
+test('the metric compare preset maps to the exact views metric plan', async () => {
+  const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /分析下近期展现量最高的 X 帖子，比较后提炼可复用的内容规律/);
+  const { createPlanner } = await import('../services/harness-gateway/planner.mjs');
+  const planner = createPlanner();
+  const verdict = await planner.plan({
+    taskId: 'ht-11111111-1111-4111-8111-111111111111',
+    request: {
+      user_id: 'user-a',
+      project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+      intent: '分析下近期展现量最高的 X 帖子，比较后提炼可复用的内容规律',
+      request_fingerprint: 'a'.repeat(64),
+    },
+  });
+  assert.equal(verdict.ok, true, verdict.code);
+  assert.equal(verdict.value.workflow, 'compare_project');
+  assert.equal(verdict.value.slots.metric, 'views');
+  assert.equal(verdict.value.slots.persist, false);
+  assert.equal(verdict.value.cost_indicators.paid_calls, 0);
+  assert.equal(verdict.value.cost_indicators.online_writes, 0);
+  assert.equal(verdict.value.approvals.online_writes, false);
+});
+
 test('every visible AI workspace preset is a valid authoritative plan request exactly as displayed', async () => {
   const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   const match = /const suggestions = \[([\s\S]*?)\];/.exec(page);

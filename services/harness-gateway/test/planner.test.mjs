@@ -42,6 +42,72 @@ test('unknown or ambiguous intents fail closed', () => {
   assert.equal(classifyIntent('x'.repeat(12_001)).code, 'PLANNER_INTENT_INVALID');
 });
 
+test('Chinese highest-metric intents select compare_project with the exact metric', () => {
+  const cases = [
+    ['你能分析下近期展现量最高的X帖子吗', 'views'],
+    ['近期浏览量最高的帖子帮我挑出来', 'views'],
+    ['播放量最高的视频内容', 'views'],
+    ['曝光最高的内容比较一下', 'views'],
+    ['互动最高的帖子是哪些', 'engagement'],
+    ['比较一下互动量最高的来源', 'engagement'],
+  ];
+  for (const [intent, expectedMetric] of cases) {
+    const verdict = classifyIntent(intent);
+    assert.equal(verdict.ok, true, intent);
+    assert.equal(verdict.value.workflow, 'compare_project', intent);
+    assert.equal(verdict.value.slots.metric, expectedMetric, intent);
+    assert.equal(verdict.value.slots.persist, undefined, `${intent}: comparison defaults to read-only`);
+  }
+  // Generic compare/best-performing phrases keep the documented default
+  // engagement metric and never invent a metric.
+  const generic = classifyIntent('比较当前项目中表现最好的帖子，提炼可复用的内容规律');
+  assert.equal(generic.ok, true);
+  assert.equal(generic.value.workflow, 'compare_project');
+  assert.equal(generic.value.slots.metric, undefined, 'generic compare relies on the slot default');
+  const explicitPersist = classifyIntent('比较当前项目中互动最高的帖子并保存比较分析');
+  assert.equal(explicitPersist.ok, true);
+  assert.equal(explicitPersist.value.slots.metric, 'engagement');
+  assert.equal(explicitPersist.value.slots.persist, true, 'explicit save language opts into persistence approval');
+  const savedEvidence = classifyIntent('比较一下已经保存的证据里表现最好的');
+  assert.equal(savedEvidence.ok, true);
+  assert.equal(savedEvidence.value.slots.persist, undefined, 'already-saved evidence phrasing never opts into a write');
+});
+
+test('metric compare plans are read-only by default and write only under explicit approval', () => {
+  const readOnly = buildPlan({
+    taskId: TASK_ID,
+    request: request('分析下近期展现量最高的X帖子'),
+    workflowId: 'compare_project',
+    slots: { metric: 'views', count: 2 },
+  });
+  assert.equal(readOnly.ok, true, readOnly.code);
+  assert.deepEqual(readOnly.value.slots, { metric: 'views', count: 2, persist: false });
+  assert.deepEqual(readOnly.value.steps.map((step) => step.operation), ['workspace.project.read', null], 'read-only plan has no write step');
+  assert.equal(readOnly.value.steps[1].key, 'compare');
+  assert.equal(readOnly.value.steps[1].kind, 'local');
+  assert.equal(readOnly.value.approvals.online_writes, false);
+  assert.equal(readOnly.value.approvals.paid_external_calls, false);
+  assert.equal(readOnly.value.cost_indicators.paid_calls, 0);
+  assert.equal(readOnly.value.cost_indicators.online_writes, 0);
+
+  const persisted = buildPlan({
+    taskId: TASK_ID,
+    request: request('比较当前项目中互动最高的帖子并保存比较分析'),
+    workflowId: 'compare_project',
+    slots: { metric: 'engagement', count: 2, persist: true },
+  });
+  assert.equal(persisted.ok, true, persisted.code);
+  assert.deepEqual(persisted.value.steps.map((step) => step.operation), ['workspace.project.read', null, 'workspace.analysis.create']);
+  assert.deepEqual(persisted.value.steps[2].depends_on, ['st-1']);
+  assert.equal(persisted.value.steps[2].write, true);
+  assert.equal(persisted.value.approvals.online_writes, true, 'persist requires the online_writes approval');
+  assert.equal(persisted.value.cost_indicators.online_writes, 2);
+  // The requested metric is never invented: an unsupported metric word fails
+  // closed instead of silently falling back to engagement.
+  const invented = buildPlan({ taskId: TASK_ID, request: request('x'), workflowId: 'compare_project', slots: { metric: 'saves', count: 2 } });
+  assert.equal(invented.code, 'PLAN_SLOT_ENUM');
+});
+
 test('Brief intent wins over generic analysis words when no URL is present', () => {
   const verdict = classifyIntent('Generate a pending Brief from the existing analysis results');
   assert.equal(verdict.ok, true);
@@ -107,7 +173,11 @@ test('cost indicators use the requested fan-out bound instead of catalog maxima'
     ['search_x_reddit', { keyword: 'AI', count: 5, save_count: 1 }, 2, 1],
     ['analyze_evidence', { count: 1 }, 1, 1],
     ['analyze_evidence', { count: 3 }, 3, 3],
-    ['compare_project', { count: 2 }, 0, 2],
+    // compare_project is read-only by default (zero writes, zero paid calls);
+    // only an explicit persist approval adds the bounded write step.
+    ['compare_project', { count: 2 }, 0, 0],
+    ['compare_project', { count: 2, metric: 'views', persist: false }, 0, 0],
+    ['compare_project', { count: 2, metric: 'views', persist: true }, 0, 2],
   ];
   for (const [workflowId, slots, paidCalls, onlineWrites] of cases) {
     const result = buildPlan({ taskId: TASK_ID, request: request(workflowId), workflowId, slots });

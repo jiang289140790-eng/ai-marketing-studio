@@ -321,20 +321,37 @@ const WORKFLOW_DEFINITIONS = Object.freeze([
   Object.freeze({
     id: 'compare_project',
     title: '比较项目来源与规律',
-    description: '读取当前项目，按互动指标选取表现最好的来源，确定性提炼可复用规律并保存为分析记录（本地计算，无模型调用）。',
+    description: '读取当前项目，按选定指标（views 或 engagement）确定性排序既有证据并提炼可复用规律；默认只读返回，仅在明确批准在线写入时才保存本地比较分析（本地计算，零模型调用）。',
     slots: Object.freeze({
+      metric: enumSlot(['views', 'engagement'], { default: 'engagement', note: '比较指标：views（展现量/浏览量/播放量/曝光量，读取 canonical views 字段）或 engagement（单一确定性互动公式）。' }),
       count: integerSlot({ min: 1, max: 10, default: 5, note: '参与比较的来源条数上限 1–10。' }),
+      persist: booleanSlot({ note: '把本地确定性比较分析保存到 staging（需明确批准在线写入；默认只读）。' }),
     }),
-    terminal_artifacts: Object.freeze(['analysis']),
+    terminal_artifacts: Object.freeze(['comparison', 'analysis']),
     steps: Object.freeze([
       Object.freeze({ ...readStateStep(), gate: null }),
       Object.freeze({
+        step: 'compare',
+        label: '按指标比较来源',
+        kind: 'local',
+        operation: null,
+        depends_on: Object.freeze(['read_state']),
+        approval: Object.freeze([]),
+        cost: false,
+        write: false,
+        fan_out: null,
+        reuse: null,
+        terminal_artifact: 'comparison',
+        gate: null,
+        note: '本地确定性比较：仅使用项目既有 Evidence 的指标字段，不调用任何模型、不联网、不产生费用。',
+      }),
+      Object.freeze({
         ...toolStep('save_comparison', '保存比较分析', 'workspace.analysis.create', {
-          depends_on: Object.freeze(['read_state']),
+          depends_on: Object.freeze(['compare']),
           fan_out: Object.freeze({ source: 'compare_evidence', max: 10, limit_slot: 'count' }),
           reuse: Object.freeze({ kind: 'analysis', rule: 'evidence_binding_model', note: '同一证据绑定的本地比较分析已存在时标记 reused。' }),
           terminal_artifact: 'analysis',
-          gate: null,
+          gate: 'persist',
         }),
       }),
     ]),
@@ -423,6 +440,19 @@ export const WORKFLOW_BY_ID = Object.freeze(Object.fromEntries(
 
 export const WORKFLOW_IDS = Object.freeze(WORKFLOW_DEFINITIONS.map((workflow) => workflow.id));
 
+// The fixed metric slot contract for compare_project. The planner maps Chinese
+// highest-metric intents to exactly one of these values; the executor's
+// comparison reads only these canonical metrics (never invented numbers).
+export const COMPARE_METRICS = Object.freeze(['views', 'engagement']);
+export const COMPARE_METRIC_LABELS = Object.freeze({
+  views: '展现量/浏览量/播放量/曝光量（views）',
+  engagement: '互动（engagement）',
+});
+
+export function compareMetricLabel(metric) {
+  return COMPARE_METRICS.includes(metric) ? COMPARE_METRIC_LABELS[metric] : null;
+}
+
 /**
  * Integrity proof for the fixed catalog. Every entry must reference only
  * operations in TOOL_DEFINITIONS, only known approval scopes, valid slot
@@ -439,6 +469,14 @@ export function assertWorkflowIntegrity() {
     for (const step of workflow.steps) {
       if (step.kind === 'read_state') {
         if (step.operation !== 'workspace.project.read') issues.push(`${workflow.id}.${step.step}: read_state must use project.read`);
+      } else if (step.kind === 'local') {
+        // A local step is pure deterministic computation over the state the
+        // read_state step already loaded: no operation, no approval, no cost
+        // and no write can ever be attached to it.
+        if (step.operation != null) issues.push(`${workflow.id}.${step.step}: local step must not declare an operation`);
+        if (step.approval.length !== 0) issues.push(`${workflow.id}.${step.step}: local step must not declare approval`);
+        if (step.cost !== false || step.write !== false) issues.push(`${workflow.id}.${step.step}: local step must be free and read-only`);
+        if (step.fan_out != null || step.reuse != null) issues.push(`${workflow.id}.${step.step}: local step must not fan out or reuse`);
       } else if (step.kind === 'tool') {
         const definition = TOOL_DEFINITIONS[step.operation];
         if (!definition) issues.push(`${workflow.id}.${step.step}: unknown operation ${step.operation}`);

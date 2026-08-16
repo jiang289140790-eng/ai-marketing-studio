@@ -28,7 +28,7 @@ import {
 } from '../../src/services/p19-contracts.js';
 import { validateToolCall } from './tool-contract.mjs';
 import { validatePlanShape } from './planner.mjs';
-import { APPROVAL_SCOPES, MAX_FAN_OUT } from './workflow-catalog.mjs';
+import { APPROVAL_SCOPES, COMPARE_METRIC_LABELS, MAX_FAN_OUT } from './workflow-catalog.mjs';
 
 export const STEP_STATE_PLANNED = 'planned';
 export const STEP_STATE_RUNNING = 'running';
@@ -605,9 +605,27 @@ function preCollectEvidenceReuse(project, url, projectId) {
   return { reused: true, ref: matches[0].id };
 }
 
-function engagementScore(record) {
-  const meta = record?.source_metadata || {};
-  const engagement = meta.engagement || {};
+/**
+ * Canonical deterministic metric contract for compare_project. Only persisted
+ * evidence fields are ever read — the executor never invents a metric.
+ *
+ * - `views` reads exactly the canonical views field
+ *   (`source_metadata.engagement.views`). The planner maps 展现量/浏览量/
+ *   播放量/曝光量 intents to this same metric; an absent field is 0, and the
+ *   requested metric is never substituted by aggregate engagement.
+ * - `engagement` is the single documented deterministic formula, preserved
+ *   from the existing comparison engine:
+ *   views + likes + retweets + replies + reddit_score + reddit_comments.
+ *
+ * Missing and non-finite values are 0 (sorted last); values are never
+ * guessed, scaled or invented.
+ */
+export function metricValue(record, metric) {
+  const engagement = record?.source_metadata?.engagement || {};
+  if (metric === 'views') {
+    const views = Number(engagement.views);
+    return Number.isFinite(views) && views > 0 ? views : 0;
+  }
   const views = Number(engagement.views || 0);
   const likes = Number(engagement.likes || 0);
   const retweets = Number(engagement.retweets || 0);
@@ -616,6 +634,65 @@ function engagementScore(record) {
   const redditComments = Number(engagement.reddit_comments || engagement.comments || 0);
   const total = views + likes + retweets + replies + redditScore + redditComments;
   return Number.isFinite(total) ? total : 0;
+}
+
+function compareMetric(plan) {
+  return plan.slots?.metric === 'views' ? 'views' : 'engagement';
+}
+
+/**
+ * Deterministic comparison context for compare_project: sorts the project's
+ * persisted evidence by the requested metric (descending), breaks ties by
+ * evidence id ascending (stable and reproducible), bounds the result to the
+ * requested count and records the exact metric/zero/tie semantics in the
+ * comparison statement. Never calls a bridge, a model or a paid operation.
+ */
+function buildComparisonContext({ derived, plan, project }) {
+  const evidenceList = [...(project?.evidence || [])];
+  const metric = compareMetric(plan);
+  const count = Math.min(Number(plan.slots?.count) || 5, MAX_FAN_OUT);
+  const ranking = [...evidenceList]
+    .map((record) => ({ record, value: metricValue(record, metric) }))
+    .sort((left, right) => {
+      const byMetric = right.value - left.value;
+      if (byMetric !== 0) return byMetric;
+      const leftId = String(left.record?.id || '');
+      const rightId = String(right.record?.id || '');
+      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    });
+  const top = ranking.slice(0, count);
+  derived.compare_evidence = top.map((entry) => entry.record);
+  derived.compare_ranking = top.map((entry, index) => ({
+    rank: index + 1,
+    evidence_id: bounded(entry.record?.id, 200),
+    source_url: bounded(entry.record?.source_url, 500),
+    metric_value: entry.value,
+    views: metricValue(entry.record, 'views'),
+    engagement: metricValue(entry.record, 'engagement'),
+  }));
+  const persist = plan.slots?.persist === true;
+  const comparison = `按「${COMPARE_METRIC_LABELS[metric]}」指标对 ${evidenceList.length} 条既有证据做确定性比较：缺失或为零的指标记为 0 并排后，同分按证据 ID 升序稳定排序；选取前 ${count} 条${persist ? '，并在批准后保存本地比较分析。' : '，仅只读返回，不产生任何写入或费用。'}`;
+  return { metric, count, ranking, comparison };
+}
+
+/**
+ * Bounded terminal result for a read-only comparison: the exact requested
+ * metric, its documented source, the deterministic ranking and the persisted
+ * flag. Only bounded evidence identity fields are included — no payload
+ * values, tokens, headers or secrets can reach the page.
+ */
+function buildCompareResult({ plan, metric, ranking, evidenceList, comparison }) {
+  return {
+    workflow: 'compare_project',
+    metric,
+    metric_label: COMPARE_METRIC_LABELS[metric],
+    metric_source: 'evidence.source_metadata.engagement',
+    persisted: plan.slots?.persist === true,
+    compared_total: Array.isArray(evidenceList) ? evidenceList.length : 0,
+    count: ranking.length,
+    comparison,
+    ranking,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,11 +1107,8 @@ export async function executeConfirmedPlan({
       ctx.analysisId = analysisId;
     }
     if (step.key === 'save_comparison') {
-      const project = derived.project;
-      const evidenceList = [...(project?.evidence || [])].sort((left, right) => engagementScore(right) - engagementScore(left));
-      const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
-      derived.compare_evidence = evidenceList.slice(0, count);
-      ctx.comparison = `比较了 ${derived.compare_evidence.length} 条表现最佳来源（按互动指标确定性选取）。`;
+      const built = buildComparisonContext({ derived, plan, project: derived.project });
+      ctx.comparison = built.comparison;
     }
   };
 
@@ -1070,10 +1144,7 @@ export async function executeConfirmedPlan({
             derived.evidence_items = (state.project?.evidence || []).slice(0, count);
           }
           if (plan.workflow === 'compare_project') {
-            const evidenceList = [...(state.project?.evidence || [])].sort((left, right) => engagementScore(right) - engagementScore(left));
-            const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
-            derived.compare_evidence = evidenceList.slice(0, count);
-            ctx.comparison = `比较了 ${derived.compare_evidence.length} 条表现最佳来源（按互动指标确定性选取）。`;
+            ctx.comparison = buildComparisonContext({ derived, plan, project: state.project }).comparison;
           }
         }
         hydrateFromResumeOutput(step, prior);
@@ -1101,12 +1172,29 @@ export async function executeConfirmedPlan({
           derived.evidence_items = (state.project?.evidence || []).slice(0, count);
         }
         if (plan.workflow === 'compare_project') {
-          const evidenceList = [...(state.project?.evidence || [])].sort((left, right) => engagementScore(right) - engagementScore(left));
-          const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
-          derived.compare_evidence = evidenceList.slice(0, count);
-          ctx.comparison = `比较了 ${derived.compare_evidence.length} 条表现最佳来源（按互动指标确定性选取）。`;
+          ctx.comparison = buildComparisonContext({ derived, plan, project: state.project }).comparison;
         }
         recordStep(step, { state: STEP_STATE_SUCCEEDED, item_count: 1, executed_count: 1, finished_at: now() });
+        continue;
+      }
+
+      if (step.kind === 'local') {
+        // Deterministic local computation only: the comparison ranks the
+        // project state the read_state step already loaded and produces the
+        // bounded terminal result. Zero bridge calls, zero paid operations,
+        // zero writes — the save_comparison write step only exists in the
+        // plan when persist was explicitly approved.
+        if (step.key !== 'compare' || plan.workflow !== 'compare_project') {
+          throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `计划引用了未实现的本地步骤 ${step.key}：未发起任何业务调用。`);
+        }
+        const built = buildComparisonContext({ derived, plan, project: derived.project });
+        ctx.comparison = built.comparison;
+        recordStep(step, {
+          state: STEP_STATE_SUCCEEDED,
+          item_count: derived.compare_evidence.length,
+          executed_count: 1,
+          finished_at: now(),
+        });
         continue;
       }
 
@@ -1278,6 +1366,20 @@ export async function executeConfirmedPlan({
   if (plan.workflow === 'search_x_reddit' && Number(plan.slots.save_count) === 0) {
     const combined = boundedTerminalResult({ items: derived.combined_items || [] });
     if (combined) derived.terminal_results = { search_x_reddit: combined };
+  }
+  // A read-only comparison always returns its bounded ranking (and a
+  // persisted comparison returns the same deterministic ranking alongside
+  // its written analyses). Rebuilt at the end so a retried run restores the
+  // exact same terminal result without re-running the local step.
+  if (plan.workflow === 'compare_project' && Array.isArray(derived.compare_evidence)) {
+    const compare = boundedTerminalResult(buildCompareResult({
+      plan,
+      metric: compareMetric(plan),
+      ranking: derived.compare_ranking || [],
+      evidenceList: derived.project?.evidence || [],
+      comparison: ctx.comparison,
+    }));
+    if (compare) derived.terminal_results = { ...(derived.terminal_results || {}), compare };
   }
   if (plainObject(derived.terminal_results) && Object.keys(derived.terminal_results).length > 0) {
     response.result_data = boundedTerminalResult(derived.terminal_results);

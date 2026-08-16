@@ -188,7 +188,7 @@ test('real browser: natural language becomes an authoritative plan, exact approv
     // a client-side plan and never a post-submission PLANNER_SLOT_REQUIRED
     // error), and the two-phase plan flow stays intact for each preset.
     const presetCount = await cdp.evaluate(`document.querySelectorAll('.ai-suggestions button').length`);
-    assert.equal(presetCount, 4, 'exactly the bounded preset set is advertised');
+    assert.equal(presetCount, 5, 'exactly the bounded preset set is advertised');
     for (let index = 0; index < presetCount; index += 1) {
       await click(cdp, { selector: '.ai-suggestions button', index, label: `visible preset ${index}` });
       const displayed = await cdp.evaluate(`document.querySelector('.ai-suggestions button:nth-child(${index + 1})')?.textContent`);

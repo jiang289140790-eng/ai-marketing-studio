@@ -13,8 +13,17 @@ const suggestions = [
   '生成待审核 Brief（汇总当前项目知识卡）',
   '搜索 X 和 Reddit 上本周最热门的 "AI 营销" 话题，选 5 条保存为证据',
   '比较当前项目中表现最好的帖子，提炼可复用的内容规律',
+  '分析下近期展现量最高的 X 帖子，比较后提炼可复用的内容规律',
   '创建交接包（基于当前项目最新待审核 Brief）',
 ];
+
+// The exact metric slot values are fixed server-side (compare_project);
+// these labels mirror them so the page always shows the requested metric
+// exactly as the plan will rank by.
+const compareMetricLabels = {
+  views: '展现量（views，涵盖浏览量/播放量/曝光量）',
+  engagement: '互动（engagement）',
+};
 
 const stateLabels = {
   planned: '等待确认',
@@ -219,6 +228,11 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
                 <div><strong>{authoritativePlan.workflow_title}</strong><span>权威执行计划 · 不可编辑</span></div>
                 <code title={authoritativePlan.fingerprint}>{authoritativePlan.fingerprint.slice(0, 12)}…</code>
               </div>
+              {authoritativePlan.slots?.metric && (
+                <div className="ai-metric" data-testid="harness-metric-slot">
+                  比较指标：{compareMetricLabels[authoritativePlan.slots.metric] || authoritativePlan.slots.metric}
+                </div>
+              )}
               <ol className="ai-plan-steps">
                 {authoritativePlan.steps.map((step) => {
                   const snapshot = activeTask.step_states?.[step.step];

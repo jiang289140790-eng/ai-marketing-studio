@@ -46,6 +46,17 @@ const ANALYZE_TRIGGERS = /分析|多模态|analy[sz]e\b|analysis\b/i;
 const PERSIST_TRIGGERS = /保存|存档|持久化|persist\b|save\b|evidence\b|证据/i;
 const HANDOFF_TRIGGERS = /交接包|交接|handoff|hand[- ]?off/i;
 const COMPARE_TRIGGERS = /比较|对比|compare\b|best[- ]?performing|表现最好|表现最佳/i;
+// Chinese highest-metric requests select the fixed compare_project metric
+// slot. 展现量/浏览量/播放量/曝光量 all use the canonical views metric
+// (they never get an invented number); 互动 uses the single documented
+// engagement formula. The classifier never invents a metric — a phrase with
+// no metric word falls back to the documented default engagement slot.
+const METRIC_VIEWS_TRIGGERS = /展现量|浏览量|播放量|曝光(?:量|度)?|most\s+viewed|highest\s+views|impressions?\b/i;
+const METRIC_ENGAGEMENT_TRIGGERS = /互动(?:量|数|指标)?|engagement\b/i;
+// Persisting the comparison requires an explicit user approval; a compare
+// intent only opts in with explicit save language ("保存的比较" as in already
+// saved evidence never does).
+const COMPARE_PERSIST_TRIGGERS = /保存(?!的|过)|存档|persist\b|save\b/i;
 const SIMILAR_TRIGGERS = /类似|相似|相似内容|相似风格|generate\s+similar|similar\s+content|草案|draft\b/i;
 const LINEAGE_TRIGGERS = /溯源|血缘|审计|lineage|audit\b/i;
 const CAPABILITY_TRIGGERS = /能力|capabilit|当前项目|项目状态|项目信息|read\s+(?:the\s+)?project|what\s+can/i;
@@ -171,6 +182,18 @@ function firstMatch(text, patterns) {
 
 const KEYWORD_NOISE = /\b(?:x|twitter|reddit)\b|推特|红迪|帖子|主题|话题|热门|最|本周|今天|最近|搜索|搜一搜|search|find|trending|和|与|上|在|中|里|的|了|条|保存|证据|分析|选/gi;
 
+/**
+ * Deterministic metric extraction for compare intents. Views synonyms
+ * (展现量/浏览量/播放量/曝光量) all map to the canonical `views` metric;
+ * 互动 maps to `engagement`. Views is checked first so an ambiguous phrase
+ * is never silently re-ranked by aggregate engagement.
+ */
+function extractCompareMetric(text) {
+  if (METRIC_VIEWS_TRIGGERS.test(text)) return 'views';
+  if (METRIC_ENGAGEMENT_TRIGGERS.test(text)) return 'engagement';
+  return null;
+}
+
 function extractKeyword(intent) {
   let text = String(intent).replace(POST_URL_PATTERN, ' ').replace(/r\/[A-Za-z0-9_]{2,32}/gi, ' ').trim();
   const quoted = /["“]([^"”]{1,240})["”]/.exec(text);
@@ -237,8 +260,14 @@ export function classifyIntent(intent) {
     }
     return { ok: true, value: { workflow: 'search_x', slots: { keyword, count, save_count: saveCount } } };
   }
-  if (COMPARE_TRIGGERS.test(text)) {
-    return { ok: true, value: { workflow: 'compare_project', slots: { count: firstMatch(text, [INTEGER_PATTERN]) ?? 5 } } };
+  const metric = extractCompareMetric(text);
+  if (COMPARE_TRIGGERS.test(text) || metric) {
+    // A metric phrase always selects compare_project with the exact metric;
+    // generic compare/best-performing phrases keep the documented default.
+    const slots = { count: firstMatch(text, [INTEGER_PATTERN]) ?? 5 };
+    if (metric) slots.metric = metric;
+    if (COMPARE_PERSIST_TRIGGERS.test(text)) slots.persist = true;
+    return { ok: true, value: { workflow: 'compare_project', slots } };
   }
   if (SIMILAR_TRIGGERS.test(text)) {
     return { ok: true, value: { workflow: 'generate_similar', slots: { evidence_id: claims.evidence_id ?? null, analysis_id: claims.analysis_id ?? null } } };
@@ -316,7 +345,10 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots }
   // project before it becomes authoritative. Public research-only plans may
   // remain project-independent, but a later confirmation must never authorize
   // a plan that is already guaranteed to fail at its first workspace step.
-  const requiresProject = steps.some((step) => step.write === true || step.operation.startsWith('workspace.'));
+  // (Local deterministic steps carry no operation and are never project
+  // boundaries by themselves.)
+  const requiresProject = steps.some((step) => step.write === true
+    || (typeof step.operation === 'string' && step.operation.startsWith('workspace.')));
   if (requiresProject && !request.project_id?.trim()) {
     return fail('PROJECT_BINDING_REQUIRED', { field: 'project_id' });
   }
@@ -397,7 +429,13 @@ export function validatePlanShape(plan) {
   const expectedSlots = workflow.id === 'collect_analyze_evidence'
     ? normalizeFlags(normalizedSlots.value)
     : normalizedSlots.value;
-  if (canonicalJson(expectedSlots) !== canonicalJson(plan.slots)) return fail('PLAN_SLOTS_MISMATCH');
+  // Defaulted slots may be absent from plans persisted before the slot was
+  // added to the fixed catalog; every slot that IS present must still equal
+  // the fail-closed normalization exactly. Anything stale or tampered is
+  // caught here (types/enums/unknowns) and by the fingerprint binding below.
+  const storedSlots = {};
+  for (const key of Object.keys(plan.slots)) storedSlots[key] = expectedSlots[key];
+  if (canonicalJson(storedSlots) !== canonicalJson(plan.slots)) return fail('PLAN_SLOTS_MISMATCH');
   if (!Array.isArray(plan.steps) || plan.steps.length === 0 || plan.steps.length > MAX_WORKFLOW_STEPS) {
     return fail('PLAN_STEPS_INVALID');
   }

@@ -22,7 +22,7 @@ function boundedError(code, message) {
 export function createHarnessClient({ client = supabase } = {}) {
   async function invoke(body) {
     if (!client) throw boundedError('HARNESS_NOT_CONFIGURED', 'AI 工作台尚未连接 staging。');
-    const sessionResult = ['submit', 'plan', 'confirm', 'retry_failed_step'].includes(body.action)
+    const sessionResult = ['plan', 'confirm', 'retry_failed_step'].includes(body.action)
       ? await client.auth.refreshSession()
       : await client.auth.getSession();
     const { data: sessionData, error: sessionError } = sessionResult;
@@ -40,6 +40,9 @@ export function createHarnessClient({ client = supabase } = {}) {
     return data;
   }
 
+  // Every browser submission goes through plan then confirm; the legacy
+  // direct /v1/tasks submit action is deliberately not exposed here so no
+  // browser code path can bypass the authoritative plan.
   return Object.freeze({
     plan({ requestId, projectId = null, intent }) {
       return invoke({ action: 'plan', request_id: requestId, project_id: projectId, intent });
@@ -49,9 +52,6 @@ export function createHarnessClient({ client = supabase } = {}) {
     },
     retryFailedStep({ taskId, planFingerprint, stepId, approval }) {
       return invoke({ action: 'retry_failed_step', task_id: taskId, plan_fingerprint: planFingerprint, step_id: stepId, approval });
-    },
-    submit({ requestId, projectId = null, intent, approval }) {
-      return invoke({ action: 'submit', request_id: requestId, project_id: projectId, intent, approval });
     },
     read(taskId) { return invoke({ action: 'read', task_id: taskId }); },
     list(limit = 30) { return invoke({ action: 'list', limit }); },

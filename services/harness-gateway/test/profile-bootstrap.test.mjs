@@ -32,11 +32,16 @@ test('AMS operator prompt binds persisted analysis to one exact Evidence per cal
 
 test('Docker build makes the local plugin available before npm ci', async () => {
   const dockerfile = await text('Dockerfile');
-  const copyPlugin = dockerfile.indexOf('COPY plugins ./plugins');
+  const copyPlugin = dockerfile.indexOf('COPY services/harness-gateway/plugins ./plugins');
   const install = dockerfile.indexOf('RUN npm ci');
   assert.ok(copyPlugin >= 0);
   assert.ok(install > copyPlugin);
-  assert.equal(dockerfile.indexOf('COPY plugins ./plugins', copyPlugin + 1), -1);
+  assert.equal(dockerfile.indexOf('COPY services/harness-gateway/plugins ./plugins', copyPlugin + 1), -1);
+  assert.match(dockerfile, /COPY .*services\/harness-gateway\/planner\.mjs .*services\/harness-gateway\/deterministic-executor\.mjs .*services\/harness-gateway\/workflow-catalog\.mjs/);
+  assert.match(dockerfile, /COPY package\.json \/package\.json/);
+  assert.match(dockerfile, /COPY src \/src/);
+  assert.match(dockerfile, /COPY supabase\/functions\/p22-research-assist\/assist-core\.mjs \/supabase\/functions\/p22-research-assist\/assist-core\.mjs/);
+  assert.match(dockerfile, /ln -s \/app\/node_modules \/node_modules/);
 });
 
 test('both profile layers fail closed before importing subprocess/node-pty', async () => {
@@ -79,8 +84,8 @@ test('only the pinned dsh-genui 0.8.3 and dsh-visualize 0.1.2 are promoted into 
   assert.deepEqual(pluginRows.sort(), ["'@ams/harness-tools'", "'@dsh-external/dsh-visualize'", "'@omdsh-dev/dsh-genui'"]);
 
   const dockerfile = await text('Dockerfile');
-  assert.match(dockerfile, /COPY vendor \.\/vendor/);
-  assert.match(dockerfile, /COPY presentation \.\/presentation/);
+  assert.match(dockerfile, /COPY services\/harness-gateway\/vendor \.\/vendor/);
+  assert.match(dockerfile, /COPY services\/harness-gateway\/presentation \.\/presentation/);
 });
 
 test('production Harness launch exposes internals only to the DSH child', () => {

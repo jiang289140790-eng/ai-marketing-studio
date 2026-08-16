@@ -90,6 +90,34 @@ test('browser Edge contract derives identity, enforces operator writes and rejec
   assert.equal(validateEdgeRequest({ schema_version: EDGE_SCHEMA_VERSION, action: 'delete', task_id: `ht-${userId}` }, { userId, accessRole: 'operator' }).code, 'ACTION_DENIED');
 });
 
+test('browser Edge two-phase contract forwards exact plan, confirm and failed-step retry bindings', () => {
+  const plan = validateEdgeRequest({
+    schema_version: EDGE_SCHEMA_VERSION,
+    action: 'plan',
+    request_id: 'plan-request-1',
+    project_id: projectId,
+    intent: 'Analyze the current project.',
+  }, { userId, accessRole: 'operator' });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.path, '/v1/tasks/plan');
+  assert.equal(Object.hasOwn(plan.body, 'approval'), false);
+  assert.equal(validateEdgeRequest({ ...plan, approval: { paid_external_calls: false } }, { userId, accessRole: 'operator' }).code, 'UNKNOWN_FIELD');
+
+  const taskId = `ht-${userId}`;
+  const approval = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  const confirm = validateEdgeRequest({ schema_version: EDGE_SCHEMA_VERSION, action: 'confirm', task_id: taskId, plan_fingerprint: 'a'.repeat(64), approval }, { userId, accessRole: 'operator' });
+  assert.equal(confirm.ok, true);
+  assert.equal(confirm.path, `/v1/tasks/${taskId}/confirm`);
+  assert.deepEqual(confirm.body, { schema_version: 'ams_harness_gateway_v1', task_id: taskId, plan_fingerprint: 'a'.repeat(64), approval });
+
+  const retry = validateEdgeRequest({ schema_version: EDGE_SCHEMA_VERSION, action: 'retry_failed_step', task_id: taskId, plan_fingerprint: 'a'.repeat(64), step_id: 'st-3', approval }, { userId, accessRole: 'operator' });
+  assert.equal(retry.ok, true);
+  assert.equal(retry.path, `/v1/tasks/${taskId}/retry`);
+  assert.equal(retry.body.step_id, 'st-3');
+  assert.equal(validateEdgeRequest({ ...retry.body, action: 'retry_failed_step', schema_version: EDGE_SCHEMA_VERSION, step_id: 'wrong' }, { userId, accessRole: 'operator' }).code, 'STEP_ID_INVALID');
+  assert.equal(validateEdgeRequest({ schema_version: EDGE_SCHEMA_VERSION, action: 'confirm', task_id: taskId, plan_fingerprint: 'b'.repeat(64), approval: { paid_external_calls: true } }, { userId, accessRole: 'operator' }).code, 'APPROVAL_INVALID');
+});
+
 test('Edge HMAC binds the delegated authorization digest and matches the Alibaba gateway verifier', async () => {
   const secret = 'g'.repeat(32);
   const delegatedAuthorization = `Bearer ${'j'.repeat(48)}`;

@@ -22,7 +22,7 @@ function boundedError(code, message) {
 export function createHarnessClient({ client = supabase } = {}) {
   async function invoke(body) {
     if (!client) throw boundedError('HARNESS_NOT_CONFIGURED', 'AI 工作台尚未连接 staging。');
-    const sessionResult = body.action === 'submit'
+    const sessionResult = ['submit', 'plan', 'confirm', 'retry_failed_step'].includes(body.action)
       ? await client.auth.refreshSession()
       : await client.auth.getSession();
     const { data: sessionData, error: sessionError } = sessionResult;
@@ -41,6 +41,15 @@ export function createHarnessClient({ client = supabase } = {}) {
   }
 
   return Object.freeze({
+    plan({ requestId, projectId = null, intent }) {
+      return invoke({ action: 'plan', request_id: requestId, project_id: projectId, intent });
+    },
+    confirm({ taskId, planFingerprint, approval }) {
+      return invoke({ action: 'confirm', task_id: taskId, plan_fingerprint: planFingerprint, approval });
+    },
+    retryFailedStep({ taskId, planFingerprint, stepId, approval }) {
+      return invoke({ action: 'retry_failed_step', task_id: taskId, plan_fingerprint: planFingerprint, step_id: stepId, approval });
+    },
     submit({ requestId, projectId = null, intent, approval }) {
       return invoke({ action: 'submit', request_id: requestId, project_id: projectId, intent, approval });
     },

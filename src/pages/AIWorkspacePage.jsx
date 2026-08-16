@@ -4,18 +4,28 @@ import { resolvePresentationBlocks } from '../services/harness-presentation.js';
 import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
 import './AIWorkspacePage.css';
 
+// Every visible preset must be a valid authoritative plan request exactly as
+// displayed: the server planner must accept the preset text without a hidden
+// identifier or a missing bounded slot. Presets that need a specific post
+// link, an exact Evidence/Analysis identity or a bounded keyword either carry
+// that bounded input in the text or are not advertised.
 const suggestions = [
-  '分析这个 X 帖子，保存证据和分析，并生成待审核 Brief',
-  '搜索 X 和 Reddit 上本周最热门的话题，选 5 条保存为证据',
+  '生成待审核 Brief（汇总当前项目知识卡）',
+  '搜索 X 和 Reddit 上本周最热门的 "AI 营销" 话题，选 5 条保存为证据',
   '比较当前项目中表现最好的帖子，提炼可复用的内容规律',
-  '根据已审核知识卡生成一个新的内容策划草案',
+  '创建交接包（基于当前项目最新待审核 Brief）',
 ];
 
 const stateLabels = {
+  planned: '等待确认',
   queued: '等待执行',
   running: '正在执行',
+  reused: '已复用',
   succeeded: '已完成',
+  partial: '部分完成',
   failed: '执行失败',
+  blocked: '已阻断',
+  skipped: '已跳过',
   cancelled: '已取消',
 };
 
@@ -77,19 +87,23 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
   }, [activeTask, harnessClient, refreshHistory]);
 
   const presentationBlocks = useMemo(() => resolvePresentationBlocks(activeTask), [activeTask]);
+  const authoritativePlan = activeTask?.plan || null;
+  const requiredApprovals = authoritativePlan?.approvals || {};
+  const approvalsReady = (!requiredApprovals.paid_external_calls || allowPaid)
+    && (!requiredApprovals.online_writes || allowWrites)
+    && (!requiredApprovals.handoff_creation || allowHandoff);
 
-  const plan = useMemo(() => {
-    if (!intent.trim()) return [];
-    const steps = ['理解目标并读取当前项目状态'];
-    if (/搜索|采集|帖子|reddit|\bx\b/i.test(intent)) steps.push('通过已允许的研究工具获取公开来源');
-    if (/分析|比较|规律|知识|brief|草案/i.test(intent)) steps.push('分析来源并形成可追溯结果');
-    if (allowWrites) steps.push('把确认后的产物保存到当前 staging 工作区');
-    else steps.push('仅返回预览，不写入在线工作区');
-    return steps;
-  }, [allowWrites, intent]);
-  const needsHandoff = /交接包|handoff/i.test(intent);
+  function activateTask(task) {
+    // Approval is scoped to one exact authoritative plan. Switching history
+    // entries or creating another task must never inherit a prior plan's paid,
+    // write, or handoff consent.
+    setAllowPaid(false);
+    setAllowWrites(false);
+    setAllowHandoff(false);
+    setActiveTask(task);
+  }
 
-  async function submit(event) {
+  async function createPlan(event) {
     event.preventDefault();
     if (!intent.trim() || submitting) return;
     setSubmitting(true);
@@ -97,27 +111,67 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
     try {
       const normalizedIntent = intent.trim();
       const projectId = readHarnessActiveProject();
-      const approval = { paid_external_calls: allowPaid, online_writes: allowWrites, handoff_creation: needsHandoff && allowHandoff };
-      const submissionKey = JSON.stringify([projectId, normalizedIntent, approval]);
+      const submissionKey = JSON.stringify([projectId, normalizedIntent]);
       if (pendingSubmission.current?.key !== submissionKey) {
         pendingSubmission.current = { key: submissionKey, requestId: newHarnessRequestId() };
       }
-      const response = await harnessClient.submit({
+      const response = await harnessClient.plan({
         requestId: pendingSubmission.current.requestId,
         projectId,
         intent: normalizedIntent,
-        approval,
       });
       const task = taskFromResponse(response);
-      if (!task) throw new Error('任务入口没有返回任务记录。');
+      if (!task) throw new Error('计划入口没有返回任务记录。');
       pendingSubmission.current = null;
-      setActiveTask(task);
-      setIntent('');
-      setAllowPaid(false);
-      setAllowWrites(false);
-      setAllowHandoff(false);
+      activateTask(task);
+      refreshHistory();
     } catch (caught) {
-      setError(caught?.message || '任务提交失败。');
+      setError(caught?.message || '生成执行计划失败。');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function confirmPlan() {
+    if (!authoritativePlan || !approvalsReady || submitting) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const response = await harnessClient.confirm({
+        taskId: activeTask.id,
+        planFingerprint: authoritativePlan.fingerprint,
+        approval: {
+          paid_external_calls: requiredApprovals.paid_external_calls === true,
+          online_writes: requiredApprovals.online_writes === true,
+          handoff_creation: requiredApprovals.handoff_creation === true,
+        },
+      });
+      const task = taskFromResponse(response);
+      if (!task) throw new Error('确认入口没有返回任务记录。');
+      setActiveTask(task);
+    } catch (caught) {
+      setError(caught?.message || '确认执行计划失败。');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function retryFailedStep(stepId) {
+    if (!activeTask?.plan || submitting) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const response = await harnessClient.retryFailedStep({
+        taskId: activeTask.id,
+        planFingerprint: activeTask.plan.fingerprint,
+        stepId,
+        approval: activeTask.confirmation?.approval || activeTask.plan.approvals,
+      });
+      const task = taskFromResponse(response);
+      if (!task) throw new Error('重试入口没有返回任务记录。');
+      setActiveTask(task);
+    } catch (caught) {
+      setError(caught?.message || '重试失败步骤未被接受。');
     } finally {
       setSubmitting(false);
     }
@@ -129,44 +183,21 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
         <div>
           <span className="ai-kicker">AI 营销工作台</span>
           <h1>告诉我你想完成什么</h1>
-          <p>用一句话完成采集、分析、知识沉淀和内容策划。系统会先显示计划，涉及费用和保存时由你明确批准。</p>
+          <p>先生成一份不可编辑的权威执行计划。涉及费用、在线写入或交接包时，由你逐项确认后才会执行。</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => onNavigate?.('research')}>进入高级研究模式</button>
       </section>
 
       <section className="ai-command-card">
-        <form onSubmit={submit}>
+        <form onSubmit={createPlan}>
           <label htmlFor="ai-intent">任务目标</label>
-          <textarea
-            id="ai-intent"
-            data-testid="harness-intent"
-            value={intent}
-            onChange={(event) => setIntent(event.target.value)}
-            placeholder="例如：分析这条 X 帖子，保存证据和多模态分析，然后生成待审核 Brief"
-            maxLength={12000}
-            rows={5}
-          />
+          <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="例如：分析这个 X 帖子 https://x.com/user/status/1234567890123456789，保存证据和多模态分析，然后生成待审核 Brief" maxLength={12000} rows={5} />
           <div className="ai-suggestions" aria-label="常用任务">
             {suggestions.map((text) => <button key={text} type="button" onClick={() => setIntent(text)}>{text}</button>)}
           </div>
-
-          {plan.length > 0 && (
-            <div className="ai-plan" data-testid="harness-plan">
-              <strong>本次执行计划</strong>
-              <ol>{plan.map((step) => <li key={step}>{step}</li>)}</ol>
-            </div>
-          )}
-
-          <div className="ai-approvals">
-            <label><input type="checkbox" checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />允许本次付费采集或模型分析</label>
-            <label><input type="checkbox" checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />允许把本次结果保存到 staging</label>
-            {needsHandoff && <label><input data-testid="harness-handoff-approval" type="checkbox" checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />允许本次任务创建交接包</label>}
-          </div>
           <div className="ai-submit-row">
-            <span>不会删除数据、修改权限、自动发布或访问 production。</span>
-            <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || !allowPaid || (needsHandoff && (!allowWrites || !allowHandoff)) || submitting}>
-              {submitting ? '正在提交…' : '确认并开始'}
-            </button>
+            <span>生成计划不会调用业务工具、产生费用或写入 staging。</span>
+            <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '正在生成计划…' : '生成执行计划'}</button>
           </div>
         </form>
       </section>
@@ -177,54 +208,62 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
         <section className="ai-active-task" data-testid="harness-active-task">
           <div className="ai-section-heading">
             <div><span>当前任务</span><h2>{stateLabels[activeTask.state] || activeTask.state}</h2></div>
-            {['queued', 'running'].includes(activeTask.state) && <button type="button" className="secondary-button" onClick={() => harnessClient.cancel(activeTask.id).then((value) => setActiveTask(taskFromResponse(value) || activeTask)).catch((caught) => setError(caught.message))}>取消任务</button>}
+            {['planned', 'queued', 'running'].includes(activeTask.state) && <button type="button" className="secondary-button" onClick={() => harnessClient.cancel(activeTask.id).then((value) => setActiveTask(taskFromResponse(value) || activeTask)).catch((caught) => setError(caught.message))}>取消任务</button>}
           </div>
           <div className="ai-progress" aria-label="任务进度"><span className={activeTask.state} /></div>
           <p>{activeTask.request?.intent}</p>
+
+          {authoritativePlan && (
+            <div className="ai-plan" data-testid="harness-authoritative-plan">
+              <div className="ai-plan-title">
+                <div><strong>{authoritativePlan.workflow_title}</strong><span>权威执行计划 · 不可编辑</span></div>
+                <code title={authoritativePlan.fingerprint}>{authoritativePlan.fingerprint.slice(0, 12)}…</code>
+              </div>
+              <ol className="ai-plan-steps">
+                {authoritativePlan.steps.map((step) => {
+                  const snapshot = activeTask.step_states?.[step.step];
+                  const stepState = snapshot?.state || 'planned';
+                  const canRetry = snapshot?.state === 'failed' && snapshot?.error?.retry_unsafe !== true && ['partial', 'failed'].includes(activeTask.state);
+                  return (
+                    <li key={step.step} data-testid={`harness-step-${step.step}`} data-state={stepState}>
+                      <span className={`ai-step-state ${stepState}`}>{stateLabels[stepState] || stepState}</span>
+                      <div><strong>{step.label}</strong><small>{step.operation} · 前置：{step.depends_on.length ? step.depends_on.join('、') : '无'}</small></div>
+                      <div className="ai-step-badges">
+                        {step.reuse && <span>可精确复用</span>}
+                        {step.cost && <span className="cost">可能付费</span>}
+                        {step.write && <span className="write">写入 staging</span>}
+                      </div>
+                      {snapshot?.error && <p className="ai-step-error">{snapshot.error.code} · {snapshot.error.message}</p>}
+                      {canRetry && <button type="button" className="secondary-button" data-testid={`harness-retry-${step.step}`} disabled={submitting} onClick={() => retryFailedStep(step.step)}>仅重试此失败步骤</button>}
+                    </li>
+                  );
+                })}
+              </ol>
+              {activeTask.state === 'planned' && (
+                <div className="ai-confirm-panel" data-testid="harness-confirm-panel">
+                  <strong>确认计划后才会执行</strong>
+                  <div className="ai-approvals">
+                    {requiredApprovals.paid_external_calls && <label><input data-testid="harness-paid-approval" type="checkbox" checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />允许本计划中的付费采集或模型分析</label>}
+                    {requiredApprovals.online_writes && <label><input data-testid="harness-write-approval" type="checkbox" checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />允许把本计划产物保存到 staging</label>}
+                    {requiredApprovals.handoff_creation && <label><input data-testid="harness-handoff-approval" type="checkbox" checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />允许本计划创建交接包</label>}
+                  </div>
+                  <button type="button" className="primary-button" data-testid="harness-confirm" disabled={!approvalsReady || submitting} onClick={confirmPlan}>{submitting ? '正在确认…' : '确认并开始执行'}</button>
+                </div>
+              )}
+            </div>
+          )}
+
           {presentationBlocks.length > 0 && <PresentationPanel blocks={presentationBlocks} />}
-          {activeTask.result?.final_response && (
-            presentationBlocks.length > 0 ? (
-              <details className="ai-raw-response">
-                <summary>查看原始回复</summary>
-                <div className="ai-result-copy">{activeTask.result.final_response}</div>
-              </details>
-            ) : (
-              <div className="ai-result-copy">{activeTask.result.final_response}</div>
-            )
-          )}
-          {activeTask.error && (
-            <div className="notice error" data-testid="harness-task-error">
-              {activeTask.error.operation ? `${activeTask.error.operation} · ` : ''}
-              {activeTask.error.tool_code || activeTask.error.message || activeTask.error.summary || activeTask.error.code}
-            </div>
-          )}
-          {activeTask.result?.artifact_refs?.length > 0 && (
-            <div className="ai-artifacts">
-              <strong>本次产物</strong>
-              {activeTask.result.artifact_refs.map((ref) => <code key={ref}>{ref}</code>)}
-            </div>
-          )}
+          {activeTask.result?.final_response && (presentationBlocks.length > 0 ? <details className="ai-raw-response"><summary>查看原始回复</summary><div className="ai-result-copy">{activeTask.result.final_response}</div></details> : <div className="ai-result-copy">{activeTask.result.final_response}</div>)}
+          {activeTask.result?.result_data && <details className="ai-raw-response"><summary>查看工具返回结果</summary><pre className="ai-result-copy">{JSON.stringify(activeTask.result.result_data, null, 2)}</pre></details>}
+          {activeTask.error && <div className="notice error" data-testid="harness-task-error">{activeTask.error.operation ? `${activeTask.error.operation} · ` : ''}{activeTask.error.tool_code || activeTask.error.message || activeTask.error.summary || activeTask.error.code}</div>}
+          {activeTask.result?.artifact_refs?.length > 0 && <div className="ai-artifacts"><strong>本次产物</strong>{activeTask.result.artifact_refs.map((ref) => <code key={ref}>{ref}</code>)}</div>}
         </section>
       )}
 
       <section className="ai-history">
         <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
-        {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : (
-          <div className="ai-task-list">{history.map((task) => (
-            <button key={task.id} type="button" onClick={async () => {
-              try {
-                const response = await harnessClient.read(task.id);
-                setActiveTask(taskFromResponse(response) || task);
-              } catch (caught) {
-                setError(caught?.message || '无法读取完整任务记录。');
-              }
-            }}>
-              <span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span>
-              <strong>{task.request?.intent || '未命名任务'}</strong>
-              <time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time>
-            </button>
-          ))}</div>
-        )}
+        {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <div className="ai-task-list">{history.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>}
       </section>
     </main>
   );

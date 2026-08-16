@@ -46,11 +46,10 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
 
     await click(cdp, { selector: '.ai-suggestions button', index: 0, label: 'first suggested task' });
-    await waitForSelector(cdp, '[data-testid="harness-plan"]', { label: 'bounded local plan' });
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), true, 'Harness model execution requires explicit paid approval');
-    await cdp.evaluate(`(() => { const input = document.querySelector('.ai-approvals input'); input.click(); })()`);
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), false);
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('不会删除数据、修改权限、自动发布或访问 production')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-authoritative-plan"]') === null`), true, 'selecting a suggestion must not invent a client-side plan');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), false, 'a bounded intent can request the server plan without pre-approving execution');
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('生成计划不会调用业务工具、产生费用或写入 staging')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-approvals input').length`), 0, 'approval controls appear only after an authoritative plan exists');
 
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'H3 mobile layout settle' });

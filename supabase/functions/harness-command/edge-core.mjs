@@ -30,14 +30,14 @@ function plainObject(value) {
 
 export function validateEdgeRequest(input, { userId, accessRole } = {}) {
   if (!plainObject(input)) return fail('INVALID_REQUEST');
-  const allowed = new Set(['schema_version', 'action', 'request_id', 'project_id', 'intent', 'approval', 'task_id', 'limit']);
+  const allowed = new Set(['schema_version', 'action', 'request_id', 'project_id', 'intent', 'approval', 'task_id', 'plan_fingerprint', 'step_id', 'limit']);
   const unknown = Object.keys(input).find((key) => !allowed.has(key));
   if (unknown) return fail('UNKNOWN_FIELD', unknown);
   if (input.schema_version !== EDGE_SCHEMA_VERSION) return fail('SCHEMA_VERSION_MISMATCH', 'schema_version');
   if (typeof userId !== 'string' || !userId) return fail('AUTH_REQUIRED');
   if (!Object.hasOwn(ROLE_RANK, accessRole)) return fail('STAGING_ROLE_DENIED');
-  if (!['submit', 'read', 'list', 'cancel'].includes(input.action)) return fail('ACTION_DENIED', 'action');
-  if (input.action === 'submit') {
+  if (!['submit', 'plan', 'confirm', 'retry_failed_step', 'read', 'list', 'cancel'].includes(input.action)) return fail('ACTION_DENIED', 'action');
+  if (input.action === 'submit' || input.action === 'plan') {
     if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
     if (!REQUEST_ID.test(String(input.request_id || ''))) return fail('REQUEST_ID_INVALID', 'request_id');
     if (input.project_id != null && !PROJECT_ID.test(String(input.project_id))) return fail('PROJECT_ID_INVALID', 'project_id');
@@ -48,17 +48,18 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
     const unknownApproval = Object.keys(approval).find((key) => !approvalKeys.has(key));
     if (unknownApproval) return fail('APPROVAL_UNKNOWN_FIELD', unknownApproval);
     for (const key of approvalKeys) if (approval[key] != null && typeof approval[key] !== 'boolean') return fail('APPROVAL_INVALID', key);
+    if (input.action === 'plan' && Object.keys(approval).length > 0) return fail('PLAN_APPROVAL_FORBIDDEN', 'approval');
     return {
       ok: true,
       method: 'POST',
-      path: '/v1/tasks',
+      path: input.action === 'plan' ? '/v1/tasks/plan' : '/v1/tasks',
       body: {
         schema_version: 'ams_harness_gateway_v1',
         request_id: input.request_id,
         user_id: userId,
         project_id: input.project_id ?? null,
         intent: input.intent.trim(),
-        approval: Object.fromEntries([...approvalKeys].map((key) => [key, approval[key] === true])),
+        ...(input.action === 'submit' ? { approval: Object.fromEntries([...approvalKeys].map((key) => [key, approval[key] === true])) } : {}),
       },
     };
   }
@@ -68,6 +69,29 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
     return { ok: true, method: 'GET', path: `/v1/tasks?limit=${limit}`, body: null };
   }
   if (!TASK_ID.test(String(input.task_id || ''))) return fail('TASK_ID_INVALID', 'task_id');
+  if (input.action === 'confirm' || input.action === 'retry_failed_step') {
+    if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
+    if (typeof input.plan_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(input.plan_fingerprint)) return fail('PLAN_FINGERPRINT_INVALID', 'plan_fingerprint');
+    const approval = input.approval ?? {};
+    if (!plainObject(approval)) return fail('APPROVAL_INVALID', 'approval');
+    const approvalKeys = new Set(['paid_external_calls', 'online_writes', 'handoff_creation']);
+    const unknownApproval = Object.keys(approval).find((key) => !approvalKeys.has(key));
+    if (unknownApproval) return fail('APPROVAL_UNKNOWN_FIELD', unknownApproval);
+    for (const key of approvalKeys) if (typeof approval[key] !== 'boolean') return fail('APPROVAL_INVALID', key);
+    if (input.action === 'retry_failed_step' && !/^st-\d+$/.test(String(input.step_id || ''))) return fail('STEP_ID_INVALID', 'step_id');
+    return {
+      ok: true,
+      method: 'POST',
+      path: `/v1/tasks/${input.task_id}/${input.action === 'confirm' ? 'confirm' : 'retry'}`,
+      body: {
+        schema_version: 'ams_harness_gateway_v1',
+        task_id: input.task_id,
+        plan_fingerprint: input.plan_fingerprint,
+        ...(input.action === 'retry_failed_step' ? { step_id: input.step_id } : {}),
+        approval: Object.fromEntries([...approvalKeys].map((key) => [key, approval[key] === true])),
+      },
+    };
+  }
   if (input.action === 'cancel' && ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
   return {
     ok: true,

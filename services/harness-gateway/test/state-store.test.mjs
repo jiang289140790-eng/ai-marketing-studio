@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,109 @@ test('a durable prune tombstone removes the recovered task', async () => {
     appendTaskEvent(file, { task_id: task.id, task });
     appendTaskEvent(file, { event: 'pruned', task_id: task.id, task: null });
     assert.deepEqual(await loadTaskSnapshots(file), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('large bounded retry outputs are externalized below the audit line limit and restored exactly', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ams-harness-resume-'));
+  const file = join(directory, 'events.jsonl');
+  try {
+    const task = {
+      id: 'ht-00000000-0000-4000-8000-000000000005',
+      state: 'partial',
+      step_states: {
+        'st-search-x': {
+          state: 'succeeded',
+          resume_output: { search_x_items: [{ content_text: 'x'.repeat(90 * 1024) }] },
+        },
+        'st-search-reddit': {
+          state: 'succeeded',
+          resume_output: { search_reddit_items: [{ content_text: 'r'.repeat(90 * 1024) }] },
+        },
+        'st-save': { state: 'failed', error: { code: 'ENTITY_REVISION_STALE' } },
+      },
+    };
+    appendTaskEvent(file, { task_id: task.id, task });
+    const persistedLine = (await readFile(file, 'utf8')).trim();
+    assert.ok(Buffer.byteLength(persistedLine) < 512 * 1024, 'the audit event remains inside the exact 512 KiB line bound');
+    assert.equal(persistedLine.includes('x'.repeat(1024)), false, 'large retry bodies are not duplicated into the audit log');
+    const [recovered] = await loadTaskSnapshots(file);
+    assert.deepEqual(recovered.step_states['st-search-x'].resume_output, task.step_states['st-search-x'].resume_output);
+    assert.deepEqual(recovered.step_states['st-search-reddit'].resume_output, task.step_states['st-search-reddit'].resume_output);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a maximum bounded multilingual intent and structured result persist without poisoning the audit log', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ams-harness-valid-large-event-'));
+  const file = join(directory, 'events.jsonl');
+  try {
+    const intent = '汉'.repeat(12_000);
+    const task = {
+      id: 'ht-00000000-0000-4000-8000-000000000007',
+      state: 'succeeded',
+      request: { request_id: 'large-valid', user_id: 'user-a', project_id: null, intent },
+      plan: { intent, steps: [], slots: {}, fingerprint: 'a'.repeat(64) },
+      step_states: {},
+      result: {
+        final_response: '完成',
+        artifact_refs: [],
+        presentation: null,
+        result_data: { payload: 'x'.repeat(64 * 1024) },
+      },
+    };
+    appendTaskEvent(file, { event: 'succeeded', task_id: task.id, task });
+    const persistedLine = (await readFile(file, 'utf8')).trim();
+    assert.ok(Buffer.byteLength(persistedLine) > 128 * 1024, 'the regression fixture crosses the obsolete 128 KiB ceiling');
+    assert.ok(Buffer.byteLength(persistedLine) < 512 * 1024, 'the complete valid snapshot remains bounded');
+    const [recovered] = await loadTaskSnapshots(file);
+    assert.equal(recovered.id, task.id);
+    assert.equal(recovered.result.result_data.payload.length, 64 * 1024);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('audit events above the finite 512 KiB ceiling still fail closed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ams-harness-oversized-event-'));
+  const file = join(directory, 'events.jsonl');
+  try {
+    const task = {
+      id: 'ht-00000000-0000-4000-8000-000000000008',
+      state: 'succeeded',
+      result: { result_data: { payload: 'x'.repeat(513 * 1024) } },
+    };
+    assert.throws(
+      () => appendTaskEvent(file, { event: 'succeeded', task_id: task.id, task }),
+      (error) => error?.code === 'EVENT_TOO_LARGE',
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('missing retry sidecar fails closed and disables retry instead of losing a paid result silently', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ams-harness-resume-missing-'));
+  const file = join(directory, 'events.jsonl');
+  try {
+    const task = {
+      id: 'ht-00000000-0000-4000-8000-000000000006',
+      state: 'partial',
+      step_states: {
+        paid: { state: 'succeeded', resume_output: { items: [{ content_text: 'paid result' }] } },
+        write: { state: 'failed', error: { code: 'ENTITY_REVISION_STALE' } },
+      },
+    };
+    appendTaskEvent(file, { task_id: task.id, task });
+    await rm(`${file}.resume`, { recursive: true, force: true });
+    const [recovered] = await loadTaskSnapshots(file);
+    assert.equal(recovered.state, 'failed');
+    assert.equal(recovered.error.code, 'RETRY_CONTEXT_UNAVAILABLE');
+    assert.equal(recovered.error.retry_unsafe, true);
+    assert.equal(recovered.step_states.write.error.retry_unsafe, true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

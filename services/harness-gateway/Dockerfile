@@ -1,14 +1,21 @@
 FROM node:22-bookworm-slim
 
 WORKDIR /app
-COPY package.json package-lock.json ./
-COPY plugins ./plugins
-COPY vendor ./vendor
-COPY presentation ./presentation
+COPY services/harness-gateway/package.json services/harness-gateway/package-lock.json ./
+COPY services/harness-gateway/plugins ./plugins
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force
-COPY gateway-core.mjs harness-runner.mjs model-proxy.mjs state-store.mjs server.mjs tool-contract.mjs tool-client.mjs init-profile.mjs start.mjs home-lockdown.patch.yml ./
-COPY profile ./profile
+COPY services/harness-gateway/gateway-core.mjs services/harness-gateway/harness-runner.mjs services/harness-gateway/model-proxy.mjs services/harness-gateway/state-store.mjs services/harness-gateway/server.mjs services/harness-gateway/tool-contract.mjs services/harness-gateway/tool-client.mjs services/harness-gateway/init-profile.mjs services/harness-gateway/start.mjs services/harness-gateway/home-lockdown.patch.yml services/harness-gateway/planner.mjs services/harness-gateway/deterministic-executor.mjs services/harness-gateway/workflow-catalog.mjs ./
+COPY services/harness-gateway/profile ./profile
+COPY services/harness-gateway/vendor ./vendor
+COPY services/harness-gateway/presentation ./presentation
+
+# Repository-root inputs imported by the deterministic planner/executor:
+COPY package.json /package.json
+COPY src /src
+COPY supabase/functions/p22-research-assist/assist-core.mjs /supabase/functions/p22-research-assist/assist-core.mjs
+# Repository-relative imports resolve /node_modules onto the service tree:
+RUN ln -s /app/node_modules /node_modules
 
 RUN mkdir -p /data/gateway /data/harness /workspace \
   && chown -R node:node /data /workspace /app

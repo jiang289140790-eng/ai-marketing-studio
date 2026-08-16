@@ -2,14 +2,20 @@
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { HarnessTaskQueue, validateDelegatedAuthorization, verifySignedRequest } from './gateway-core.mjs';
+import { HarnessTaskQueue, runWithIsolatedTaskView, runWithTaskTimeout, validateDelegatedAuthorization, verifySignedRequest } from './gateway-core.mjs';
 import { createHarnessRunner, harnessReadiness } from './harness-runner.mjs';
 import { appendTaskEvent, loadTaskSnapshots } from './state-store.mjs';
+import { createPlanner } from './planner.mjs';
+import { createBridgeStateReader, executeConfirmedPlan } from './deterministic-executor.mjs';
+import { createToolClient } from './tool-client.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const HOST = process.env.HOST || '127.0.0.1';
 const SECRET = process.env.AMS_GATEWAY_HMAC_SECRET_FILE
   ? readFileSync(process.env.AMS_GATEWAY_HMAC_SECRET_FILE, 'utf8').trim()
+  : '';
+const BRIDGE_SECRET = process.env.AMS_TOOL_BRIDGE_SECRET_FILE
+  ? readFileSync(process.env.AMS_TOOL_BRIDGE_SECRET_FILE, 'utf8').trim()
   : '';
 const EVENT_FILE = process.env.HARNESS_EVENT_FILE || '/data/gateway/events.jsonl';
 const MAX_BODY = 64 * 1024;
@@ -17,9 +23,45 @@ const TASK_TIMEOUT_MS = Number(process.env.HARNESS_TASK_TIMEOUT_MS || 600_000);
 const TOOL_WINDOW_MS = 150_000;
 const QUEUE_CAPACITY = 2;
 
+// The deterministic executor is the only code that turns a confirmed plan
+// into tool calls. Planning uses the deterministic intent classifier (the
+// configured model is never asked to author workflows or payloads); a
+// model-based slot extractor may be injected later through the same
+// fail-closed planner contract.
+function createDeterministicRunner() {
+  return async (request, taskId, signal, runtimeContext, taskView, emit) => {
+    const toolClient = createToolClient({
+      bridgeUrl: process.env.AMS_TOOL_BRIDGE_URL || '',
+      bridgeSecret: BRIDGE_SECRET,
+      allowInternalHttp: true,
+      delegatedAuthorization: runtimeContext?.delegatedAuthorization || '',
+    });
+    const stateReader = createBridgeStateReader(toolClient);
+    return runWithTaskTimeout({
+      signal,
+      timeoutMs: TASK_TIMEOUT_MS,
+      run: (taskSignal) => runWithIsolatedTaskView({
+        taskView,
+        signal: taskSignal,
+        emit,
+        run: (isolatedTask, isolatedEmit) => executeConfirmedPlan({
+          taskView: isolatedTask,
+          plan: isolatedTask.plan,
+          signal: taskSignal,
+          emit: isolatedEmit,
+          toolClient,
+          stateReader,
+        }),
+      }),
+    });
+  };
+}
+
 const initialTasks = await loadTaskSnapshots(EVENT_FILE);
 const queue = new HarnessTaskQueue({
   runner: createHarnessRunner(),
+  deterministicRunner: createDeterministicRunner(),
+  planner: createPlanner(),
   capacity: QUEUE_CAPACITY,
   initialTasks,
   onEvent: (event) => appendTaskEvent(EVENT_FILE, event),
@@ -90,6 +132,41 @@ const server = createServer(async (request, response) => {
     let result;
     try { result = queue.submit(body, { delegatedAuthorization }); } catch { return send(response, 503, { ok: false, code: 'AUDIT_PERSISTENCE_UNAVAILABLE' }); }
     return send(response, result.ok ? (result.replayed ? 200 : 202) : result.code === 'QUEUE_FULL' ? 429 : result.code === 'AUDIT_PERSISTENCE_UNAVAILABLE' ? 503 : 400, result);
+  }
+  if (request.method === 'POST' && url.pathname === '/v1/tasks/plan') {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body.user_id !== userId) return send(response, 403, { ok: false, code: 'USER_BINDING_MISMATCH' });
+    let result;
+    try { result = await queue.plan(body, { delegatedAuthorization }); } catch { return send(response, 503, { ok: false, code: 'AUDIT_PERSISTENCE_UNAVAILABLE' }); }
+    return send(response, result.ok ? (result.replayed ? 200 : 202) : result.code === 'QUEUE_FULL' ? 429 : result.code === 'AUDIT_PERSISTENCE_UNAVAILABLE' ? 503 : 400, result);
+  }
+  const confirmMatch = url.pathname.match(/^\/v1\/tasks\/(ht-[0-9a-f-]{36})\/confirm$/);
+  if (request.method === 'POST' && confirmMatch) {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body.task_id !== confirmMatch[1]) return send(response, 409, { ok: false, code: 'TASK_BINDING_MISMATCH' });
+    let result;
+    try { result = queue.confirm(body, userId, { delegatedAuthorization }); } catch { return send(response, 503, { ok: false, code: 'AUDIT_PERSISTENCE_UNAVAILABLE' }); }
+    return send(response, result.ok ? (result.replayed ? 200 : 202) : result.code === 'TASK_NOT_FOUND' ? 404 : result.code === 'QUEUE_FULL' ? 429 : result.code === 'AUDIT_PERSISTENCE_UNAVAILABLE' ? 503 : 409, result);
+  }
+  const retryMatch = url.pathname.match(/^\/v1\/tasks\/(ht-[0-9a-f-]{36})\/retry$/);
+  if (request.method === 'POST' && retryMatch) {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body.task_id !== retryMatch[1]) return send(response, 409, { ok: false, code: 'TASK_BINDING_MISMATCH' });
+    let result;
+    try { result = queue.retry(body, userId, { delegatedAuthorization }); } catch { return send(response, 503, { ok: false, code: 'AUDIT_PERSISTENCE_UNAVAILABLE' }); }
+    return send(response, result.ok ? (result.replayed ? 200 : 202) : result.code === 'TASK_NOT_FOUND' ? 404 : result.code === 'QUEUE_FULL' ? 429 : result.code === 'AUDIT_PERSISTENCE_UNAVAILABLE' ? 503 : 409, result);
   }
   const taskMatch = url.pathname.match(/^\/v1\/tasks\/(ht-[0-9a-f-]{36})$/);
   if (request.method === 'GET' && taskMatch) {

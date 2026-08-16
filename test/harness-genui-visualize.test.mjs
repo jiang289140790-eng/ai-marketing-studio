@@ -450,7 +450,10 @@ test('business write and failure semantics stay outside the presentation surface
   assert.doesNotMatch(runner, /presentation/i);
   // The derivation call site sits inside the result assembly, never in the
   // transition/error path.
-  assert.ok(core.indexOf('presentation: derivePresentation(') < core.indexOf('#transition(task, \'succeeded\')'));
+  const presentationAssembly = core.indexOf('presentation: derivePresentation(');
+  const terminalTransition = core.indexOf("this.#transition(task, output?.outcome === 'partial'");
+  assert.ok(presentationAssembly >= 0, 'the bounded presentation is assembled with the task result');
+  assert.ok(terminalTransition > presentationAssembly, 'presentation assembly completes before the truthful terminal transition');
   // No business module (P19/P22/bridge/edge writes) imports presentation code.
   const businessFiles = [
     'supabase/functions/p19-workspace-command/command-core.mjs',

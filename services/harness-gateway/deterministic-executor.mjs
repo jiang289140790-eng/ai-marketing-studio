@@ -1,0 +1,1322 @@
+/* global structuredClone */
+// Deterministic workflow executor (v1). After the user confirms the exact
+// plan, this engine — never the language model — constructs and invokes every
+// tool call. Batch intent expands into one exact validated ams_harness_tool_v1
+// call per item; step ids and idempotency keys derive deterministically from
+// task/plan/step/item identity; existing durable artifacts are reused by
+// exact identity contracts; only a failed step can be explicitly retried; and
+// paid steps with ambiguous outcomes fail closed with RETRY_UNSAFE.
+//
+// Every expanded call passes validateToolCall (and therefore the existing
+// project/approval/revision/idempotency rules) before bridge contact. A
+// planner or template bug surfaces as a bounded INTERNAL_PLAN_VALIDATION_ERROR
+// with zero bridge calls.
+import { createHash } from 'node:crypto';
+import { Buffer } from 'node:buffer';
+import { p22ItemFromEvidence, toP19EvidenceInput } from '../../src/services/p22-research-assist.js';
+import { ANALYSIS_ENGINE_VERSION, deriveHandoffPackage, runDeterministicRules } from '../../src/services/p19-workspace-service.js';
+import {
+  ANALYSIS_KIND,
+  ANALYSIS_SCHEMA_VERSION,
+  BRIEF_REVIEW_SCHEMA_VERSION,
+  BRIEF_SCHEMA_VERSION,
+  HANDOFF_SCHEMA_VERSION,
+  KNOWLEDGE_CARD_SCHEMA_VERSION,
+  MODEL_ANALYSIS_SCHEMA_VERSION,
+  MULTIMODAL_METHOD,
+  MULTIMODAL_PROVIDER,
+} from '../../src/services/p19-contracts.js';
+import { validateToolCall } from './tool-contract.mjs';
+import { validatePlanShape } from './planner.mjs';
+import { APPROVAL_SCOPES, MAX_FAN_OUT } from './workflow-catalog.mjs';
+
+export const STEP_STATE_PLANNED = 'planned';
+export const STEP_STATE_RUNNING = 'running';
+export const STEP_STATE_REUSED = 'reused';
+export const STEP_STATE_SUCCEEDED = 'succeeded';
+export const STEP_STATE_FAILED = 'failed';
+export const STEP_STATE_BLOCKED = 'blocked';
+export const STEP_STATE_SKIPPED = 'skipped';
+export const TERMINAL_STEP_STATES = new Set([STEP_STATE_REUSED, STEP_STATE_SUCCEEDED, STEP_STATE_FAILED, STEP_STATE_BLOCKED, STEP_STATE_SKIPPED]);
+export const SUCCESS_STEP_STATES = new Set([STEP_STATE_REUSED, STEP_STATE_SUCCEEDED]);
+const MAX_RESUME_OUTPUT_BYTES = 256 * 1024;
+const MAX_TERMINAL_RESULT_BYTES = 64 * 1024;
+
+// Transport-level failures on a paid step mean the boundary may have executed
+// the paid reservation without a verifiable outcome. Retrying would risk
+// duplicate cost, so these fail closed with RETRY_UNSAFE.
+export const PAID_AMBIGUOUS_CODES = Object.freeze([
+  'TOOL_TIMEOUT',
+  'TOOL_BRIDGE_UNAVAILABLE',
+  'TOOL_BRIDGE_HTTP_ERROR',
+  'TOOL_RESPONSE_INVALID',
+  'TOOL_RESPONSE_TOO_LARGE',
+]);
+
+export const STEP_LABELS = Object.freeze({
+  planned: '尚未执行',
+  running: '执行中',
+  reused: '已复用',
+  succeeded: '成功',
+  failed: '失败',
+  blocked: '被阻断',
+  skipped: '已跳过',
+});
+
+function bounded(value, limit) {
+  return String(value ?? '').slice(0, limit);
+}
+
+function sha256Hex(text) {
+  return createHash('sha256').update(String(text), 'utf8').digest('hex');
+}
+
+function boundedError(code, message, diagnostics = {}) {
+  return Object.assign(new Error(String(message).slice(0, 240)), { code: String(code).slice(0, 80), diagnostics });
+}
+
+function plainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function evidenceFromItem(value) {
+  if (plainObject(value?.evidence)) return value.evidence;
+  if (plainObject(value) && typeof value.id === 'string' && typeof value.source_url === 'string') return value;
+  return null;
+}
+
+function itemsFromResult(result, key) {
+  const data = result?.data && plainObject(result.data) ? result.data : result;
+  const candidates = [data?.[key], result?.[key]];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate.slice(0, MAX_FAN_OUT);
+  }
+  return null;
+}
+
+function boundedResumeOutput(value) {
+  if (!plainObject(value)) return null;
+  const copy = structuredClone(value);
+  if (Buffer.byteLength(JSON.stringify(copy), 'utf8') > MAX_RESUME_OUTPUT_BYTES) {
+    throw boundedError('RETRY_CONTEXT_TOO_LARGE', '步骤结果超过可恢复上下文上限；为避免重复付费，任务已失败关闭。', { retry_unsafe: true });
+  }
+  return copy;
+}
+
+function boundedTerminalResult(value) {
+  if (!plainObject(value)) return null;
+  const copy = structuredClone(value);
+  if (Buffer.byteLength(JSON.stringify(copy), 'utf8') > MAX_TERMINAL_RESULT_BYTES) {
+    throw boundedError('TERMINAL_RESULT_TOO_LARGE', '工具结果超过页面可安全返回的上限，已失败关闭。');
+  }
+  return copy;
+}
+
+function normalizedModelResult(result) {
+  const data = plainObject(result?.data) ? result.data : result;
+  const row = Array.isArray(data?.analyses) ? data.analyses[0] : null;
+  if (!plainObject(row)) return null;
+  const { model, executed_at: executedAt, usage: rowUsage, cost: rowCost, result: nestedResult, ...analysisFields } = row;
+  return {
+    model,
+    result: plainObject(nestedResult) ? nestedResult : analysisFields,
+    executed_at: executedAt,
+    usage: plainObject(rowUsage) ? rowUsage : data?.usage,
+    cost: plainObject(rowCost) ? rowCost : data?.cost,
+  };
+}
+
+function stepIdempotencyKey(taskId, plan, step, itemIndex) {
+  return `d-${sha256Hex(`${taskId}\0${plan.fingerprint}\0${step.step}\0${itemIndex}`).slice(0, 32)}`;
+}
+
+function exactToolCall(taskId, plan, trustedContext, step, itemIndex, payload) {
+  // expected_revision is an envelope field in the exact tool contract (never
+  // a payload field); the payload must contain exactly the definition's
+  // fields when it reaches validateToolCall.
+  const revision = payload.expected_revision;
+  if (revision !== undefined) delete payload.expected_revision;
+  const call = {
+    schema_version: 'ams_harness_tool_v1',
+    operation: step.operation,
+    payload,
+    idempotency_key: stepIdempotencyKey(taskId, plan, step, itemIndex),
+  };
+  if (revision != null) call.expected_revision = revision;
+  const checked = validateToolCall(call, trustedContext);
+  if (!checked.ok) {
+    throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `内部调用校验失败（${checked.code}）：未发起任何业务调用。`);
+  }
+  return checked.value;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic payload builders. Each returns the exact payload field set
+// for the operation (per TOOL_DEFINITIONS); the executor then validates the
+// complete call with validateToolCall before any bridge contact.
+// ---------------------------------------------------------------------------
+
+function searchPayload(plan, operation) {
+  const payload = { keyword: plan.slots.keyword, count: plan.slots.count };
+  if (plan.slots.sort != null) payload.sort = plan.slots.sort;
+  if (operation === 'research.search_reddit') {
+    if (plan.slots.subreddit != null) payload.subreddit = plan.slots.subreddit;
+    if (plan.slots.time_filter != null) payload.time_filter = plan.slots.time_filter;
+  }
+  if (plan.project_id) payload.project_id = plan.project_id;
+  return payload;
+}
+
+function p19WritePayload(plan, ctx, record, { withFingerprint = false, expectedFingerprint = null } = {}) {
+  if (!ctx.revision || !Number.isSafeInteger(ctx.revision)) {
+    throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '写入步骤缺少可信的项目修订号：未发起任何业务调用。');
+  }
+  // expected_fingerprint is a required payload field for analysis/card/brief/
+  // handoff writes (null = no same-entity baseline; the boundary enforces the
+  // project revision guard from expected_revision) and must NOT appear for
+  // evidence.create, whose exact contract has only project_id + evidence.
+  return {
+    project_id: plan.project_id,
+    ...(withFingerprint ? { expected_fingerprint: expectedFingerprint } : {}),
+    ...record,
+    expected_revision: ctx.revision,
+  };
+}
+
+function deriveEvidenceRecord(item) {
+  // toP19EvidenceInput throws bounded errors (P22_EVIDENCE_HASH_MISMATCH,
+  // P22_EVIDENCE_INVALID) when the collected item is not exact; a failed
+  // derivation is a bounded step failure, never a guessed record.
+  return toP19EvidenceInput(item);
+}
+
+function deriveAnalysisRecord({ plan, evidence, modelResult, existing }) {
+  if (!plainObject(modelResult) || !plainObject(modelResult.result)) {
+    throw boundedError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析结果缺失，已拒绝保存分析记录。');
+  }
+  const model = bounded(modelResult.model, 80);
+  if (!model) throw boundedError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析缺少模型身份，已拒绝保存分析记录。');
+  const totalTokens = Number(modelResult.usage && modelResult.usage.total_tokens);
+  if (!Number.isSafeInteger(totalTokens) || totalTokens <= 0) {
+    throw boundedError('ANALYSIS_MODEL_RESULT_INVALID', '模型分析用量无效，已拒绝保存分析记录。');
+  }
+  const executedAt = bounded(modelResult.executed_at, 80) || new Date().toISOString();
+  const ruleOutputs = runDeterministicRules(evidence);
+  const mediaIds = (Array.isArray(evidence.media_assets) ? evidence.media_assets : []).map((asset) => bounded(asset?.id, 200)).filter(Boolean);
+  const extension = {
+    schema_version: MODEL_ANALYSIS_SCHEMA_VERSION,
+    provider: MULTIMODAL_PROVIDER,
+    model,
+    method: MULTIMODAL_METHOD,
+    executed_at: executedAt,
+    media_ids: mediaIds,
+    result: structuredClone(modelResult.result),
+    usage: {
+      total_tokens: totalTokens,
+      ...(plainObject(modelResult.cost) ? {
+        ...(Number.isFinite(Number(modelResult.cost.actual_usd)) ? { actual_usd: Math.round(Number(modelResult.cost.actual_usd) * 1e6) / 1e6 } : {}),
+        ...(Number.isFinite(Number(modelResult.cost.recorded_cny)) ? { recorded_cny: Math.round(Number(modelResult.cost.recorded_cny) * 1e6) / 1e6 } : {}),
+        ...(modelResult.cost.reservation_id ? { reservation_id: bounded(modelResult.cost.reservation_id, 80) } : {}),
+      } : {}),
+    },
+  };
+  const id = existing?.id || `an-${sha256Hex(`${plan.project_id}\0${evidence.id}\0${evidence.fingerprint}`).slice(0, 24)}`;
+  const version = existing ? Number(existing.version || 1) + 1 : 1;
+  return {
+    schema_version: ANALYSIS_SCHEMA_VERSION,
+    id,
+    project_id: plan.project_id,
+    evidence_id: evidence.id,
+    kind: ANALYSIS_KIND,
+    rule_ids: ruleOutputs.map((rule) => rule.rule_id),
+    provenance: {
+      method: ANALYSIS_KIND,
+      generated_by: ANALYSIS_ENGINE_VERSION,
+      model,
+      executed_at: new Date().toISOString(),
+      statement: '本分析包含 P29 服务端多模态 Qwen 分析（model_analysis 扩展）与确定性规则补充；由 Harness 确定性执行器登记。',
+    },
+    model_analysis: extension,
+    result: {
+      summary: {
+        label: '多模态 Qwen 分析（模型结果 + 确定性补充）',
+        keyword_count: 0,
+        top_keywords: [],
+        exclamations: 0,
+        questions: 0,
+      },
+      rules: ruleOutputs.map((rule) => ({ rule_id: rule.rule_id, label: rule.label, output: structuredClone(rule.output) })),
+    },
+    evidence_fingerprint: evidence.fingerprint,
+    evidence_version: evidence.version,
+    version,
+    fingerprint: '',
+  };
+}
+
+function deriveLocalAnalysisRecord({ plan, evidence, existing, comparison }) {
+  const ruleOutputs = runDeterministicRules(evidence);
+  const id = existing?.id || `an-${sha256Hex(`${plan.project_id}\0${evidence.id}\0local-comparison`).slice(0, 24)}`;
+  const version = existing ? Number(existing.version || 1) + 1 : 1;
+  return {
+    schema_version: ANALYSIS_SCHEMA_VERSION,
+    id,
+    project_id: plan.project_id,
+    evidence_id: evidence.id,
+    kind: ANALYSIS_KIND,
+    rule_ids: ruleOutputs.map((rule) => rule.rule_id),
+    provenance: {
+      method: ANALYSIS_KIND,
+      generated_by: ANALYSIS_ENGINE_VERSION,
+      model: null,
+      executed_at: new Date().toISOString(),
+      statement: '本分析由 Harness 确定性执行器在本地计算（比较工作流），不调用任何模型、不联网、不产生费用。',
+    },
+    result: {
+      summary: {
+        label: '确定性比较分析（本地计算，无模型）',
+        keyword_count: 0,
+        top_keywords: [],
+        exclamations: 0,
+        questions: 0,
+        ...(comparison ? { comparison: bounded(comparison, 800) } : {}),
+      },
+      rules: ruleOutputs.map((rule) => ({ rule_id: rule.rule_id, label: rule.label, output: structuredClone(rule.output) })),
+    },
+    evidence_fingerprint: evidence.fingerprint,
+    evidence_version: evidence.version,
+    version,
+    fingerprint: '',
+  };
+}
+
+function boundedStringArray(value, maxItems, maxLength, fallback) {
+  if (!Array.isArray(value)) return [...fallback];
+  const output = value
+    .map((entry) => (typeof entry === 'string' ? entry : plainObject(entry) ? String(entry.label || entry.text || entry.title || '').trim() : ''))
+    .map((entry) => bounded(entry, maxLength).trim())
+    .filter(Boolean);
+  return output.length > 0 ? output.slice(0, maxItems) : [...fallback];
+}
+
+function deriveCardRecord({ evidence, analysis }) {
+  const extension = analysis?.model_analysis;
+  const result = plainObject(extension?.result) ? extension.result : {};
+  const signals = boundedStringArray(result.signals, 6, 200, ['需人工复核']);
+  const methods = boundedStringArray(result.reusable_methods, 8, 200, ['保持来源结构']);
+  const risks = boundedStringArray(result.risks, 8, 240, ['平台审核风险需复核']);
+  const textExpression = bounded(result.text_expression, 5000) || bounded(evidence?.content_text, 5000) || '来源正文';
+  const mediaAnalysis = Array.isArray(result.media_analysis) ? result.media_analysis : [];
+  return {
+    schema_version: KNOWLEDGE_CARD_SCHEMA_VERSION,
+    id: `card-${sha256Hex(`${analysis.id}\0${analysis.fingerprint}`).slice(0, 24)}`,
+    project_id: evidence.project_id,
+    evidence_id: evidence.id,
+    analysis_id: analysis.id,
+    analysis_fingerprint: analysis.fingerprint,
+    source_observations: {
+      post_text: bounded(evidence?.content_text, 5000),
+      uncertainties: risks,
+      media: {
+        duration_seconds: 0,
+        resolution: 'text',
+        audio_track_present: false,
+        timeline: ['start', 'middle', 'end'],
+        transcript_segments: mediaAnalysis.length > 0 ? ['模型分析片段'] : [],
+      },
+    },
+    creative_analysis: {
+      hook: bounded(signals[0], 200),
+      copy_device: bounded(methods[0], 200),
+      visual_impact: mediaAnalysis.length > 0 ? '包含媒体内容' : '以文本为主',
+      seductive_tone: bounded(signals[1] || methods[1] || '以价值表达驱动', 200),
+      narrative_arc: bounded(signals[2] || '开头-展开-收束', 200),
+      audio_role: mediaAnalysis.length > 0 ? '媒体补充表达' : '无音频',
+      semantic_layers: boundedStringArray([textExpression], 5, 200, ['来源语义层']),
+      audience_response_mechanisms: boundedStringArray(result.virality_drivers, 6, 200, ['互动驱动']),
+      replicable_features: methods,
+      risk_labels: {
+        sexual_suggestiveness: 'none',
+        platform_moderation: 'low',
+        brand_suitability: 'broad',
+        notes: risks,
+      },
+    },
+    evidence_links: [
+      { claim: bounded(textExpression.slice(0, 200), 200), evidence_type: 'post_text', source_ref: bounded(evidence?.source_url, 200), time_range: null, confidence: 0.8 },
+      { claim: bounded(textExpression.slice(200, 400), 200) || '内容结构特征', evidence_type: 'post_text', source_ref: bounded(evidence?.source_url, 200), time_range: null, confidence: 0.6 },
+      { claim: bounded(methods[0] || '内容策略', 200), evidence_type: 'post_text', source_ref: bounded(evidence?.source_url, 200), time_range: null, confidence: 0.6 },
+    ],
+    generation_guidance: {
+      reusable_pattern: bounded(methods[0] || '保留来源结构', 200),
+      must_preserve: boundedStringArray([bounded(evidence?.source_url, 200)], 4, 200, ['来源身份']),
+      must_not_invent: ['不得虚构事实'],
+      prompt_ingredients: boundedStringArray(signals, 5, 200, ['来源信号']),
+      variation_space: ['措辞变化', '结构微调'],
+    },
+    generation_readiness: {
+      usable: true,
+      score: 70,
+      reasons: ['分析已完成', '来源绑定精确'],
+      blockers: [],
+    },
+    analysis_provenance: {
+      method: MULTIMODAL_METHOD,
+      provider: MULTIMODAL_PROVIDER,
+      model: bounded(extension?.model, 80) || 'qwen-plus',
+      executed_at: bounded(extension?.executed_at, 80) || new Date().toISOString(),
+      source_analysis_id: analysis.id,
+      media_ids: Array.isArray(extension?.media_ids) ? extension.media_ids.map((id) => bounded(id, 200)).filter(Boolean) : [],
+      statement: '知识卡由 Harness 确定性执行器从精确绑定的分析记录派生。',
+    },
+    version: 1,
+    fingerprint: '',
+  };
+}
+
+function deriveBriefRecord({ plan, project, cards, analyses, existing }) {
+  const citationIds = [...new Set(cards.map((card) => card.id))];
+  const analysisIds = [...new Set(analyses.map((analysis) => analysis.id))];
+  const version = existing ? Number(existing.version || 1) + 1 : 1;
+  const id = existing?.id || `brief-${sha256Hex(plan.project_id).slice(0, 24)}`;
+  const topic = bounded(project?.topic, 5000) || 'AI 营销内容策划';
+  const objective = bounded(project?.objective, 5000) || '基于已保存公开来源生成可复用内容规律。';
+  const constraints = Array.isArray(project?.constraints) ? project.constraints.map((entry) => bounded(entry, 5000)) : ['不虚构事实', '不抄袭原文'];
+  return {
+    schema_version: BRIEF_SCHEMA_VERSION,
+    id,
+    project_id: plan.project_id,
+    version,
+    status: 'pending_review',
+    topic,
+    objective,
+    knowledge_citation_ids: citationIds,
+    structural_guidance: ['开头吸引注意', '正文结构化', '结尾明确行动'],
+    constraints,
+    evidence_provenance: {
+      evidence_ids: [...new Set(cards.map((card) => card.evidence_id).filter(Boolean))],
+      evidence_fingerprints: Object.fromEntries(cards.map((card) => [card.evidence_id, card.analysis_fingerprint || '']).filter(([key]) => key)),
+      statement: 'Brief 由 Harness 确定性执行器从精确引用的知识卡集合派生。',
+    },
+    review: {
+      schema_version: BRIEF_REVIEW_SCHEMA_VERSION,
+      brief_id: id,
+      comments: [],
+      decision: null,
+    },
+    analysis_provenance: {
+      method: MULTIMODAL_METHOD,
+      provider: MULTIMODAL_PROVIDER,
+      model: 'qwen-plus',
+      executed_at: new Date().toISOString(),
+      analysis_ids: analysisIds,
+      media_count: analyses.reduce((sum, analysis) => sum + (Array.isArray(analysis.model_analysis?.media_ids) ? analysis.model_analysis.media_ids.length : 0), 0),
+      statement: 'Brief 引用的分析来自精确绑定证据的多模态分析记录。',
+    },
+    fingerprint: '',
+  };
+}
+
+async function deriveHandoffRecord({ plan, project, brief }) {
+  if (!brief) throw boundedError('HANDOFF_BRIEF_REQUIRED', '交接包需要当前项目存在 Brief。');
+  const decision = brief.review?.decision;
+  if (brief.status !== 'approved' || !decision || decision.value !== 'approved') {
+    throw boundedError('HANDOFF_BRIEF_NOT_APPROVED', '交接包创建被拒绝：当前 Brief 修订未被人工批准。');
+  }
+  const sourceProject = {
+    ...structuredClone(project || {}),
+    id: plan.project_id,
+    brief: structuredClone(brief),
+    handoff: null,
+    handoffs: [],
+  };
+  try {
+    return (await deriveHandoffPackage(sourceProject)).handoff;
+  } catch (error) {
+    throw boundedError(error?.code || 'HANDOFF_SOURCE_BINDING_INVALID', error?.message || '交接包无法从当前持久化来源链精确派生。');
+  }
+/*
+  const citations = (Array.isArray(brief.knowledge_citation_ids) ? brief.knowledge_citation_ids : []).map((id) => ({
+    knowledge_id: bounded(id, 200),
+    type: 'knowledge_card',
+    title: `知识卡 ${bounded(id, 32)}`,
+    excerpt: '',
+    evidence_refs: Array.isArray(brief.evidence_provenance?.evidence_ids) ? brief.evidence_provenance.evidence_ids.map((ref) => bounded(ref, 200)) : [],
+    evidence_completeness: null,
+    trust_status: 'verified_local',
+    validation_status: 'bound_exact',
+  }));
+  return {
+    schema_version: HANDOFF_SCHEMA_VERSION,
+    id: `handoff-pkg-${sha256Hex(`${plan.project_id}\0${brief.id}\0${brief.version}`).slice(0, 24)}`,
+    version: 1,
+    kind: HANDOFF_KIND,
+    status: HANDOFF_STATUS,
+    payload_label: HANDOFF_PAYLOAD_LABEL,
+    is_external_task: false,
+    submission_pending: true,
+    local_only: true,
+    repo_external: true,
+    brief_provenance: {
+      brief_id: brief.id,
+      brief_version: brief.version,
+      brief_schema_version: brief.schema_version,
+      brief_status: brief.status,
+    },
+    human_decision: {
+      value: 'approved',
+      source: 'local_manual',
+      rationale: '用户通过 Harness 确认创建交接包（handoff_creation 批准）。',
+      decided_by: bounded(plan.user_id, 200),
+      decided_at: new Date().toISOString(),
+    },
+    topic: bounded(project?.topic, 5000) || 'AI 营销内容',
+    objective: bounded(project?.objective, 5000) || '外部生成任务交接',
+    knowledge_citations: citations,
+    evidence_provenance: {
+      local_only: true,
+      store: 'p19_staging',
+      created_from: 'harness_deterministic_executor',
+      knowledge_count: citations.length,
+      statement: '交接包由 Harness 确定性执行器从人工批准的 Brief 派生。',
+    },
+    structural_guidance: {
+      reusable_patterns: Array.isArray(brief.structural_guidance) ? brief.structural_guidance.map((entry) => bounded(entry, 500)) : [],
+      must_preserve: ['来源身份与引用'],
+      variation_space: ['措辞变化'],
+    },
+    constraints: {
+      must_not_invent: ['不得虚构事实'],
+      evidence_boundary: '仅使用 Brief 精确引用的知识卡与证据。',
+    },
+    external_project_boundary: {
+      destination: 'external_generation_system',
+      statement: '仅用于已批准的外部生成交接。',
+    },
+    fingerprint: '',
+  };
+}
+
+*/
+}
+
+// ---------------------------------------------------------------------------
+// Reuse evaluation (exact identity contracts; never substring/first/fallback).
+// ---------------------------------------------------------------------------
+
+function exactEvidenceReuse(project, candidate, projectId) {
+  const matches = (project?.evidence || []).filter((record) => {
+    if (record.project_id !== projectId) return false;
+    if (String(record.source_url || '').trim() !== String(candidate.source_url || '').trim()) return false;
+    const candidateHash = String(candidate.content_sha256 || '').trim();
+    if (candidateHash) {
+      return String(record.media_metadata?.sha256 || record.provenance?.content_sha256 || '').trim() === candidateHash;
+    }
+    const candidateId = String(candidate.external_id || '').trim();
+    if (candidateId) return String(record.provenance?.external_id || '').trim() === candidateId;
+    return true;
+  });
+  if (matches.length === 0) return { reused: false };
+  if (matches.length !== 1) return { reused: false, code: 'REUSE_AMBIGUOUS' };
+  return { reused: true, ref: matches[0].id };
+}
+
+function exactAnalysisReuse(analyses, projectId, evidenceId, evidenceFingerprint, evidenceVersion, withModel = true, expectedId = null) {
+  const matches = (analyses || []).filter((record) => record.project_id === projectId
+    && (expectedId == null || record.id === expectedId)
+    && record.evidence_id === evidenceId
+    && record.evidence_fingerprint === evidenceFingerprint
+    && record.evidence_version === evidenceVersion
+    && record.schema_version === ANALYSIS_SCHEMA_VERSION
+    && (withModel
+      ? plainObject(record.model_analysis)
+        && record.model_analysis.schema_version === MODEL_ANALYSIS_SCHEMA_VERSION
+        && record.model_analysis.provider === MULTIMODAL_PROVIDER
+        && record.model_analysis.method === MULTIMODAL_METHOD
+      : !record.model_analysis));
+  if (matches.length === 0) return { reused: false };
+  if (matches.length !== 1) return { reused: false, code: 'REUSE_AMBIGUOUS' };
+  return { reused: true, ref: matches[0].id };
+}
+
+function exactModelAnalysisRecord(analyses, projectId, evidence) {
+  if (!evidence?.id || !evidence?.fingerprint || !Number.isSafeInteger(evidence?.version)) return null;
+  const matches = (analyses || []).filter((record) => record.project_id === projectId
+    && record.evidence_id === evidence.id
+    && record.evidence_fingerprint === evidence.fingerprint
+    && record.evidence_version === evidence.version
+    && record.schema_version === ANALYSIS_SCHEMA_VERSION
+    && plainObject(record.model_analysis)
+    && record.model_analysis.schema_version === MODEL_ANALYSIS_SCHEMA_VERSION
+    && record.model_analysis.provider === MULTIMODAL_PROVIDER
+    && record.model_analysis.method === MULTIMODAL_METHOD);
+  if (matches.length > 1) {
+    throw boundedError('REUSE_AMBIGUOUS', '当前证据匹配到多份模型分析，已失败关闭。');
+  }
+  return matches[0] || null;
+}
+
+function exactCardReuse(cards, projectId, analysisId, analysisFingerprint) {
+  const matches = (cards || []).filter((record) => record.project_id === projectId
+    && record.schema_version === KNOWLEDGE_CARD_SCHEMA_VERSION
+    && record.analysis_id === analysisId
+    && record.analysis_fingerprint === analysisFingerprint);
+  if (matches.length === 0) return { reused: false };
+  if (matches.length !== 1) return { reused: false, code: 'REUSE_AMBIGUOUS' };
+  return { reused: true, ref: matches[0].id };
+}
+
+function exactBriefReuse(briefs, projectId, citationIds) {
+  const candidates = (briefs || []).filter((record) => record.project_id === projectId
+    && record.schema_version === BRIEF_SCHEMA_VERSION);
+  const sorted = [...candidates].sort((left, right) => Number(right.version || 0) - Number(left.version || 0));
+  const latest = sorted[0];
+  if (!latest) return { reused: false };
+  const cited = new Set(Array.isArray(latest.knowledge_citation_ids) ? latest.knowledge_citation_ids : []);
+  const sameSet = cited.size === citationIds.length && citationIds.every((id) => cited.has(id));
+  if (sameSet) {
+    const duplicates = sorted.filter((record) => record.version === latest.version && record.id === latest.id);
+    if (duplicates.length !== 1) return { reused: false, code: 'REUSE_AMBIGUOUS' };
+    return { reused: true, ref: latest.id };
+  }
+  return { reused: false, existing: latest };
+}
+
+function exactHandoffReuse(handoffs, projectId, brief) {
+  if (!brief) return { reused: false };
+  const matches = (handoffs || []).filter((record) => record.project_id === projectId
+    && record.schema_version === HANDOFF_SCHEMA_VERSION
+    && record.brief_provenance?.brief_id === brief.id
+    && record.brief_provenance?.brief_version === brief.version);
+  if (matches.length === 0) return { reused: false };
+  if (matches.length !== 1) return { reused: false, code: 'REUSE_AMBIGUOUS' };
+  return { reused: true, ref: matches[0].id };
+}
+
+function preCollectEvidenceReuse(project, url, projectId) {
+  const statusId = (/\/status\/(\d+)(?:\/|$)/i.exec(String(url || '')) || [])[1] || null;
+  const matches = (project?.evidence || []).filter((record) => {
+    if (record.project_id !== projectId) return false;
+    if (String(record.source_url || '').trim() === String(url).trim()) return true;
+    return Boolean(statusId) && String(record.provenance?.external_id || '').trim() === statusId;
+  });
+  if (matches.length === 0) return { reused: false };
+  if (matches.length !== 1) return { reused: false, code: 'REUSE_AMBIGUOUS' };
+  return { reused: true, ref: matches[0].id };
+}
+
+function engagementScore(record) {
+  const meta = record?.source_metadata || {};
+  const engagement = meta.engagement || {};
+  const views = Number(engagement.views || 0);
+  const likes = Number(engagement.likes || 0);
+  const retweets = Number(engagement.retweets || 0);
+  const replies = Number(engagement.replies || 0);
+  const redditScore = Number(engagement.reddit_score || engagement.score || 0);
+  const redditComments = Number(engagement.reddit_comments || engagement.comments || 0);
+  const total = views + likes + retweets + replies + redditScore + redditComments;
+  return Number.isFinite(total) ? total : 0;
+}
+
+// ---------------------------------------------------------------------------
+// Execution
+// ---------------------------------------------------------------------------
+
+function stepSnapshot(step, update = {}) {
+  return {
+    key: step.step,
+    label: step.label,
+    operation: step.operation,
+    state: STEP_STATE_PLANNED,
+    item_count: 0,
+    reused_count: 0,
+    executed_count: 0,
+    failed_count: 0,
+    ...update,
+  };
+}
+
+/**
+ * Execute one confirmed plan deterministically. `taskView` is the live task
+ * (step states mutate through it), `emit` persists step-level events, and
+ * `toolClient`/`stateReader` are the only bridge-facing surfaces.
+ */
+export async function executeConfirmedPlan({
+  taskView,
+  plan,
+  signal,
+  emit,
+  toolClient,
+  stateReader,
+  now = () => new Date().toISOString(),
+}) {
+  const planCheck = validatePlanShape(plan);
+  if (!planCheck.ok) {
+    const firstStep = Array.isArray(plan?.steps) && plan.steps.length > 0
+      ? plan.steps[0]
+      : { step: 'st-0', label: '校验执行计划', operation: null };
+    const failed = stepSnapshot(firstStep, {
+      state: STEP_STATE_FAILED,
+      failed_count: 1,
+      finished_at: now(),
+      error: {
+        code: 'INTERNAL_PLAN_VALIDATION_ERROR',
+        operation: firstStep.operation || null,
+        message: `计划形状校验失败（${planCheck.code}）：未发起任何业务调用。`,
+        retry_unsafe: true,
+      },
+      updated_at: now(),
+    });
+    const states = taskView.step_states || (taskView.step_states = {});
+    states[firstStep.step || 'st-0'] = failed;
+    emit?.({ event: 'step_state', task_id: taskView.id, step: firstStep.step || 'st-0', state: STEP_STATE_FAILED });
+    return {
+      outcome: 'failed',
+      final_response: `执行计划校验失败（${planCheck.code}），未发起任何业务调用。`,
+      artifact_refs: [],
+      partial_completion: false,
+      retry_unsafe_step: firstStep.step || 'st-0',
+    };
+  }
+  const confirmation = taskView.confirmation;
+  if (!plainObject(confirmation)) throw boundedError('CONFIRMATION_REQUIRED', '任务缺少确认，无法执行。');
+  for (const scope of APPROVAL_SCOPES) {
+    if (plan.approvals[scope] === true && confirmation.approval?.[scope] !== true) {
+      throw boundedError('APPROVAL_REQUIRED', `确认缺少计划声明的批准范围：${scope}。`);
+    }
+  }
+  const trustedContext = {
+    task_id: taskView.id,
+    user_id: plan.user_id,
+    project_id: plan.project_id || null,
+    approval: confirmation.approval,
+  };
+  const stepStates = taskView.step_states || (taskView.step_states = {});
+  const retryTarget = taskView.retry_target?.step_id || null;
+  const retrying = retryTarget !== null;
+  const derived = {};
+  const results = {};
+  const ctx = { plan, derived, revision: null, evidenceId: null, analysisId: null };
+  let retryUnsafeStep = null;
+
+  // On a retry the deterministic context is rebuilt from the fresh project
+  // state by exact canonical identity (never from guesses or refs), so no
+  // completed paid call or write is ever repeated.
+  const hydrateFromState = (step) => {
+    if (step.operation === 'research.collect_url') {
+      const verdict = preCollectEvidenceReuse(derived.project, plan.slots.url, plan.project_id);
+      if (verdict.reused) {
+        const existing = (derived.project?.evidence || []).find((record) => record.id === verdict.ref);
+        if (existing) {
+          derived.collected_evidence = existing;
+          derived.created_evidence_id = existing.id;
+          derived.collected_item = p22ItemFromEvidence(existing) || existing;
+        }
+      }
+    }
+    if (step.operation === 'research.analyze_persisted') {
+      const evidenceId = derived.created_evidence_id;
+      const evidence = evidenceId ? (derived.project?.evidence || []).find((record) => record.id === evidenceId) : null;
+      const analysis = exactModelAnalysisRecord(derived.project?.analyses, plan.project_id, evidence);
+      // A paid result restored from the retry sidecar is authoritative. Durable
+      // state may only fill a missing result when its full Evidence/model
+      // lineage matches the current source exactly.
+      if (analysis && !plainObject(derived.analysis_results?.[evidenceId])) {
+        const extension = analysis.model_analysis;
+        derived.analysis_results = {
+          ...(derived.analysis_results || {}),
+          [evidenceId]: {
+            model: extension.model,
+            result: extension.result,
+            executed_at: extension.executed_at,
+            usage: extension.usage,
+            cost: extension.cost || {},
+          },
+        };
+      }
+    }
+  };
+
+  const resumeOutputFor = (step) => {
+    switch (step.operation) {
+      case 'research.collect_url':
+        return derived.collected_item ? boundedResumeOutput({ collected_item: derived.collected_item }) : null;
+      case 'research.search_x':
+        return boundedResumeOutput({
+          search_items: derived.search_items || [],
+          search_x_items: derived.search_x_items || [],
+        });
+      case 'research.search_reddit':
+        return boundedResumeOutput({
+          search_items: derived.search_items || [],
+          search_reddit_items: derived.search_reddit_items || [],
+          combined_items: derived.combined_items || [],
+        });
+      case 'research.analyze_persisted':
+        return derived.analysis_results ? boundedResumeOutput({ analysis_results: derived.analysis_results }) : null;
+      default:
+        return null;
+    }
+  };
+
+  const hydrateFromResumeOutput = (step, prior) => {
+    const resume = prior?.resume_output;
+    if (!plainObject(resume)) return;
+    const allowed = {
+      'research.collect_url': ['collected_item'],
+      'research.search_x': ['search_items', 'search_x_items'],
+      'research.search_reddit': ['search_items', 'search_reddit_items', 'combined_items'],
+      'research.analyze_persisted': ['analysis_results'],
+    }[step.operation] || [];
+    for (const key of allowed) {
+      if (resume[key] !== undefined) derived[key] = structuredClone(resume[key]);
+    }
+  };
+
+  const recordStep = (step, update) => {
+    const snapshot = { ...(results[step.step] || stepSnapshot(step)), ...update, updated_at: now() };
+    results[step.step] = snapshot;
+    stepStates[step.step] = snapshot;
+    emit?.({ event: 'step_state', task_id: taskView.id, step: snapshot.key, state: snapshot.state });
+  };
+
+  const refreshState = async () => {
+    const state = await stateReader(trustedContext, plan.project_id, signal);
+    if (!state || state.ok !== true) {
+      throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', '刷新当前项目状态失败。');
+    }
+    ctx.revision = state.revision;
+    return state.project;
+  };
+
+  const captureDerived = (step, result, item) => {
+    switch (step.operation) {
+      case 'research.collect_url': {
+        const collected = itemsFromResult(result, 'items')?.[0] || result?.entity || null;
+        if (collected && plainObject(collected)) derived.collected_item = collected;
+        break;
+      }
+      case 'research.search_x': {
+        const items = itemsFromResult(result, 'items') || [];
+        derived.search_items = items;
+        // Preserve the X result set in its own slot before Reddit is
+        // processed: the combined workflow reads combined_items (never the
+        // shared search_items slot), so the X set can neither be overwritten
+        // by Reddit items nor duplicated through aliasing.
+        derived.search_x_items = items.slice();
+        break;
+      }
+      case 'research.search_reddit': {
+        const items = itemsFromResult(result, 'items') || [];
+        // Single-platform workflow reads search_items; the combined workflow
+        // reads combined_items (search_x items first, then reddit items).
+        derived.search_items = items;
+        derived.search_reddit_items = items;
+        // Combined workflow: X results first, then Reddit results. Each
+        // platform contributes at most `count` items — the exact per-platform
+        // contract bound. An overall cap would silently drop one platform
+        // (platform loss) at the maximum search count.
+        const perPlatform = Math.min(Math.max(Number(plan.slots.count) || 5, 1), MAX_FAN_OUT);
+        derived.combined_items = [
+          ...(derived.search_x_items || []).slice(0, perPlatform),
+          ...items.slice(0, perPlatform),
+        ];
+        break;
+      }
+      case 'research.analyze_persisted': {
+        const evidenceId = evidenceFromItem(item)?.id || derived.created_evidence_id;
+        if (evidenceId) {
+          const row = normalizedModelResult(result);
+          if (row && plainObject(row)) derived.analysis_results = { ...(derived.analysis_results || {}), [evidenceId]: row };
+        }
+        break;
+      }
+      case 'workspace.evidence.create': {
+        const entity = result?.entity;
+        if (entity && entity.type === 'evidence' && entity.id) derived.created_evidence_id = entity.id;
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  const resolveItems = (step) => {
+    if (!step.fan_out) return { items: [{ itemIndex: 0, item: singleItemFor(step) }], sourceCount: 0 };
+    const source = derived[step.fan_out.source];
+    if (!Array.isArray(source)) {
+      throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `扇出来源 ${step.fan_out.source} 缺失：未发起任何业务调用。`);
+    }
+    const requestedBound = plan.slots[step.fan_out.limit_slot];
+    if (!Number.isSafeInteger(requestedBound)) {
+      throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `扇出上限 ${step.fan_out.limit_slot || 'unknown'} 无效：未发起任何业务调用。`);
+    }
+    const bound = Math.min(step.fan_out.max, MAX_FAN_OUT, requestedBound);
+    return {
+      // The fan-out source size is recorded (bounded) so step snapshots prove
+      // the exact contract bound of the source set — e.g. the combined
+      // X + Reddit set is never silently truncated by an overall cap.
+      sourceCount: source.length,
+      items: source.slice(0, bound).map((entry, itemIndex) => ({ itemIndex, item: entry })),
+    };
+  };
+
+  const singleItemFor = (step) => {
+    switch (step.key) {
+      case 'collect':
+        return derived.collected_item;
+      case 'save_evidence':
+        return derived.collected_item;
+      case 'analyze':
+        return { evidence: derived.collected_evidence };
+      case 'save_analysis':
+        return { evidence: derived.collected_evidence, modelResult: derived.analysis_results?.[derived.created_evidence_id] };
+      case 'make_card':
+        return { evidence: derived.collected_evidence, modelResult: derived.analysis_results?.[derived.created_evidence_id] };
+      default:
+        return { item: null };
+    }
+  };
+
+  const payloadBuilderFor = (step, item) => {
+    switch (step.operation) {
+      case 'workspace.project.read':
+        return () => ({ project_id: plan.project_id });
+      case 'research.status':
+        return () => ({ project_id: plan.project_id });
+      case 'research.collect_url':
+        return () => ({ ...(plan.project_id ? { project_id: plan.project_id } : {}), url: plan.slots.url });
+      case 'research.search_x':
+      case 'research.search_reddit':
+        return () => searchPayload(plan, step.operation);
+      case 'research.analyze_persisted': {
+        const evidenceId = evidenceFromItem(item)?.id || derived.created_evidence_id;
+        if (!evidenceId) throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '分析步骤缺少精确的证据身份：未发起任何业务调用。');
+        return () => ({ project_id: plan.project_id, evidence_id: evidenceId });
+      }
+      case 'research.generate_similar':
+        return () => {
+          const payload = { project_id: plan.project_id, evidence_id: ctx.evidenceId };
+          if (ctx.analysisId) payload.analysis_id = ctx.analysisId;
+          return payload;
+        };
+      case 'workspace.evidence.create':
+        return async () => p19WritePayload(plan, ctx, { evidence: await deriveEvidenceRecord(item) });
+      case 'workspace.analysis.create': {
+        if (step.key === 'save_comparison') {
+          const evidence = evidenceFromItem(item);
+          const existing = (derived.project?.analyses || []).find((entry) => entry.id === `an-${sha256Hex(`${plan.project_id}\0${evidence.id}\0local-comparison`).slice(0, 24)}`) || null;
+          return () => p19WritePayload(plan, ctx, { analysis: deriveLocalAnalysisRecord({ plan, evidence, existing, comparison: ctx.comparison }) }, { withFingerprint: true, expectedFingerprint: existing?.fingerprint || null });
+        }
+        return () => {
+          const evidence = evidenceFromItem(item) || derived.collected_evidence;
+          const modelResult = item?.modelResult || derived.analysis_results?.[evidence?.id];
+          if (!evidence?.id || !plainObject(modelResult)) {
+            throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '分析记录缺少精确的证据绑定或模型结果：未发起任何业务调用。');
+          }
+          const existing = (derived.project?.analyses || []).find((entry) => entry.id === `an-${sha256Hex(`${plan.project_id}\0${evidence.id}\0${evidence.fingerprint}`).slice(0, 24)}`) || null;
+          const record = deriveAnalysisRecord({ plan, evidence, modelResult, existing });
+          return p19WritePayload(plan, ctx, { analysis: record }, { withFingerprint: true, expectedFingerprint: existing?.fingerprint || null });
+        };
+      }
+      case 'workspace.card.create':
+        return () => {
+          const evidence = evidenceFromItem(item) || derived.collected_evidence;
+          const analysis = exactModelAnalysisRecord(derived.project?.analyses, plan.project_id, evidence);
+          if (!evidence?.id || !analysis) {
+            throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '知识卡缺少精确的分析血缘：未发起任何业务调用。');
+          }
+          const record = deriveCardRecord({ evidence, analysis });
+          const existing = (derived.project?.knowledge_cards || []).find((entry) => entry.id === record.id && entry.version === record.version) || null;
+          return p19WritePayload(plan, ctx, { card: record }, { withFingerprint: true, expectedFingerprint: existing?.fingerprint || null });
+        };
+      case 'workspace.brief.assemble':
+        return () => {
+          const existing = derived.project?.brief || null;
+          const record = deriveBriefRecord({
+            plan,
+            project: derived.project,
+            cards: derived.project?.knowledge_cards || [],
+            analyses: derived.project?.analyses || [],
+            existing,
+          });
+          return p19WritePayload(plan, ctx, { brief: record }, { withFingerprint: true, expectedFingerprint: existing?.fingerprint || null });
+        };
+      case 'workspace.handoff.create':
+        return async () => {
+          const record = await deriveHandoffRecord({ plan, project: derived.project, brief: derived.project?.brief || null });
+          const existing = (derived.project?.handoffs || []).find((entry) => entry.id === record.id && entry.version === record.version) || null;
+          return p19WritePayload(plan, ctx, { handoff: record }, { withFingerprint: true, expectedFingerprint: existing?.fingerprint || null });
+        };
+      default:
+        throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `计划引用了未实现的确定性调用 ${step.operation}：未发起任何业务调用。`);
+    }
+  };
+
+  const reuseCheckFor = (step, item) => {
+    if (!step.reuse) return null;
+    const project = derived.project;
+    switch (step.reuse.kind) {
+      case 'evidence': {
+        if (step.operation === 'research.collect_url') {
+          return preCollectEvidenceReuse(project, plan.slots.url, plan.project_id);
+        }
+        return exactEvidenceReuse(project, item, plan.project_id);
+      }
+      case 'analysis': {
+        if (step.key === 'save_comparison') {
+          const evidence = evidenceFromItem(item);
+          if (!evidence?.id) return null;
+          const comparisonId = `an-${sha256Hex(`${plan.project_id}\0${evidence.id}\0local-comparison`).slice(0, 24)}`;
+          return exactAnalysisReuse(project?.analyses, plan.project_id, evidence.id, evidence.fingerprint, evidence.version, false, comparisonId);
+        }
+        const evidence = evidenceFromItem(item) || derived.collected_evidence;
+        if (!evidence?.id) return null;
+        return exactAnalysisReuse(project?.analyses, plan.project_id, evidence.id, evidence.fingerprint, evidence.version, true);
+      }
+      case 'card': {
+        const evidence = evidenceFromItem(item) || derived.collected_evidence;
+        const analysis = exactModelAnalysisRecord(project?.analyses, plan.project_id, evidence);
+        if (!analysis) return null;
+        return exactCardReuse(project?.knowledge_cards, plan.project_id, analysis.id, analysis.fingerprint);
+      }
+      case 'brief': {
+        const citationIds = [...new Set((project?.knowledge_cards || []).map((card) => card.id))];
+        const verdict = exactBriefReuse(project?.brief ? [project.brief] : [], plan.project_id, citationIds);
+        if (!verdict.reused && verdict.existing) derived.existing_brief = verdict.existing;
+        return verdict;
+      }
+      case 'handoff':
+        return exactHandoffReuse(project?.handoffs || [], plan.project_id, project?.brief || null);
+      default:
+        return null;
+    }
+  };
+
+  const runOneCall = async (step, itemIndex, payloadBuilder) => {
+    if (signal?.aborted) throw Object.assign(new Error('Task cancelled.'), { code: 'CANCELLED' });
+    const validated = exactToolCall(taskView.id, plan, trustedContext, step, itemIndex, await payloadBuilder());
+    recordStep(step, { state: STEP_STATE_RUNNING });
+    const result = await toolClient(validated, trustedContext, signal);
+    if (!result || result.ok !== true) {
+      const code = String(result?.code || 'BOUNDARY_FAILED');
+      const ambiguous = step.cost === true && PAID_AMBIGUOUS_CODES.includes(code);
+      if (ambiguous) retryUnsafeStep = step.step;
+      throw boundedError(code, result?.diagnostics?.issues?.[0] || `边界拒绝了操作：${code}。`, {
+        step: step.step,
+        operation: step.operation,
+        retry_unsafe: ambiguous === true,
+      });
+    }
+    return result;
+  };
+
+  const prepareStep = (step) => {
+    if (step.operation === 'research.generate_similar') {
+      const project = derived.project;
+      const evidenceList = project?.evidence || [];
+      const evidenceId = plan.slots.evidence_id || (evidenceList.length === 1 ? evidenceList[0].id : null);
+      if (!evidenceId) {
+        throw boundedError(plan.slots.evidence_id ? 'EVIDENCE_NOT_FOUND' : 'EXACT_SOURCE_AMBIGUOUS', plan.slots.evidence_id ? '计划引用的证据身份不存在。' : '项目证据不唯一：请在意图中给出精确的 Evidence 身份。');
+      }
+      if (!evidenceList.some((record) => record.id === evidenceId)) {
+        throw boundedError('EVIDENCE_NOT_FOUND', '计划引用的证据身份不存在。');
+      }
+      ctx.evidenceId = evidenceId;
+      const analysisId = plan.slots.analysis_id;
+      if (analysisId && !(project?.analyses || []).some((record) => record.id === analysisId && record.evidence_id === evidenceId)) {
+        throw boundedError('ANALYSIS_NOT_FOUND', '计划引用的分析身份不存在或未绑定该证据。');
+      }
+      ctx.analysisId = analysisId;
+    }
+    if (step.key === 'save_comparison') {
+      const project = derived.project;
+      const evidenceList = [...(project?.evidence || [])].sort((left, right) => engagementScore(right) - engagementScore(left));
+      const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
+      derived.compare_evidence = evidenceList.slice(0, count);
+      ctx.comparison = `比较了 ${derived.compare_evidence.length} 条表现最佳来源（按互动指标确定性选取）。`;
+    }
+  };
+
+  for (const [stepIndex, step] of plan.steps.entries()) {
+    const previous = stepStates[step.step]?.state;
+    const isRetryTarget = retryTarget === step.step;
+    const dependencies = step.depends_on.map((id) => results[id] || stepStates[id]);
+    const dependencyFailure = dependencies.find((entry) => entry && entry.state === STEP_STATE_FAILED);
+    const dependencyBlocked = dependencies.find((entry) => entry && (entry.state === STEP_STATE_BLOCKED || entry.state === STEP_STATE_SKIPPED));
+
+    if (!isRetryTarget && dependencyFailure) {
+      recordStep(step, { state: STEP_STATE_BLOCKED, error: { code: 'DEPENDENCY_BLOCKED', message: '前置步骤失败，本步骤被阻断。' } });
+      continue;
+    }
+    if (!isRetryTarget && dependencyBlocked) {
+      recordStep(step, { state: STEP_STATE_SKIPPED, item_count: 0 });
+      continue;
+    }
+    if (!isRetryTarget && SUCCESS_STEP_STATES.has(previous)) {
+      const prior = stepStates[step.step];
+      recordStep(step, { ...prior, updated_at: prior.updated_at });
+      if (retrying) {
+        // A retry never re-runs completed steps, but the deterministic
+        // context they produced is rebuilt from their exact recorded refs so
+        // downstream steps keep the same precise bindings.
+        if (step.kind === 'read_state') {
+          const state = await stateReader(trustedContext, plan.project_id, signal);
+          if (!state || state.ok !== true) throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', '刷新当前项目状态失败。');
+          derived.project = state.project;
+          ctx.revision = state.revision;
+          if (plan.workflow === 'analyze_evidence') {
+            const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
+            derived.evidence_items = (state.project?.evidence || []).slice(0, count);
+          }
+          if (plan.workflow === 'compare_project') {
+            const evidenceList = [...(state.project?.evidence || [])].sort((left, right) => engagementScore(right) - engagementScore(left));
+            const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
+            derived.compare_evidence = evidenceList.slice(0, count);
+            ctx.comparison = `比较了 ${derived.compare_evidence.length} 条表现最佳来源（按互动指标确定性选取）。`;
+          }
+        }
+        hydrateFromResumeOutput(step, prior);
+        if (step.operation === 'research.collect_url' || step.operation === 'research.analyze_persisted') hydrateFromState(step);
+      }
+      continue;
+    }
+    if (!isRetryTarget && previous === STEP_STATE_FAILED) {
+      recordStep(step, { state: STEP_STATE_FAILED, error: stepStates[step.step].error });
+      continue;
+    }
+
+    let stepProgress = null;
+    const retrySnapshot = isRetryTarget ? structuredClone(stepStates[step.step] || {}) : null;
+    recordStep(step, { state: STEP_STATE_RUNNING, started_at: now(), error: null });
+    try {
+      if (step.kind === 'read_state') {
+        if (!plan.project_id) throw boundedError('PROJECT_BINDING_REQUIRED', '当前任务未绑定项目，无法读取项目状态。');
+        const state = await stateReader(trustedContext, plan.project_id, signal);
+        if (!state || state.ok !== true) throw boundedError(state?.code || 'PROJECT_STATE_READ_FAILED', '读取当前项目状态失败。');
+        derived.project = state.project;
+        ctx.revision = state.revision;
+        if (plan.workflow === 'analyze_evidence') {
+          const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
+          derived.evidence_items = (state.project?.evidence || []).slice(0, count);
+        }
+        if (plan.workflow === 'compare_project') {
+          const evidenceList = [...(state.project?.evidence || [])].sort((left, right) => engagementScore(right) - engagementScore(left));
+          const count = Math.min(Number(plan.slots.count) || 5, MAX_FAN_OUT);
+          derived.compare_evidence = evidenceList.slice(0, count);
+          ctx.comparison = `比较了 ${derived.compare_evidence.length} 条表现最佳来源（按互动指标确定性选取）。`;
+        }
+        recordStep(step, { state: STEP_STATE_SUCCEEDED, item_count: 1, executed_count: 1, finished_at: now() });
+        continue;
+      }
+
+      if (step.operation === 'workspace.lineage.audit') {
+        const validated = exactToolCall(taskView.id, plan, trustedContext, step, 0, { project_id: plan.project_id });
+        recordStep(step, { state: STEP_STATE_RUNNING });
+        const result = await toolClient(validated, trustedContext, signal);
+        if (!result || result.ok !== true) {
+          throw boundedError(String(result?.code || 'BOUNDARY_FAILED'), result?.diagnostics?.issues?.[0] || '血缘审计失败。');
+        }
+        derived.terminal_results = { ...(derived.terminal_results || {}), [step.key]: boundedTerminalResult(result.data || result) };
+        recordStep(step, { state: STEP_STATE_SUCCEEDED, item_count: 1, executed_count: 1, finished_at: now() });
+        continue;
+      }
+
+      prepareStep(step);
+      const { items, sourceCount } = resolveItems(step);
+      const priorCompleted = isRetryTarget && Array.isArray(retrySnapshot?.completed_items)
+        ? retrySnapshot.completed_items
+        : [];
+      if (isRetryTarget) hydrateFromResumeOutput(step, retrySnapshot);
+      const outcomes = priorCompleted.map((entry) => ({ reused: entry.reused === true, resumed: true, ref: entry.ref || null }));
+      const refs = Array.isArray(retrySnapshot?.refs) ? [...retrySnapshot.refs] : [];
+      const completedIndexes = new Set(priorCompleted.map((entry) => entry.item_index));
+      stepProgress = { outcomes, refs, sourceCount, completed_items: [...priorCompleted] };
+      for (const { itemIndex, item } of items) {
+        if (completedIndexes.has(itemIndex)) continue;
+        const reuse = reuseCheckFor(step, item);
+        if (reuse && reuse.code) {
+          throw boundedError(reuse.code, `复用判定失败（${reuse.code}）：未选择任何记录。`);
+        }
+        if (reuse && reuse.reused) {
+          outcomes.push({ reused: true, ref: reuse.ref });
+          stepProgress.completed_items.push({ item_index: itemIndex, reused: true, ref: reuse.ref || null });
+          if (reuse.ref) refs.push(reuse.ref);
+          if (step.operation === 'research.collect_url' && reuse.ref) {
+            // A reused collection hydrates the downstream steps from the exact
+            // existing record — no re-collection, no re-write, no new cost.
+            const existing = (derived.project?.evidence || []).find((record) => record.id === reuse.ref);
+            if (existing) {
+              derived.collected_evidence = existing;
+              derived.created_evidence_id = existing.id;
+              derived.collected_item = p22ItemFromEvidence(existing) || existing;
+            }
+          }
+          continue;
+        }
+        const result = await runOneCall(step, itemIndex, payloadBuilderFor(step, item));
+        outcomes.push({ reused: false, result });
+        captureDerived(step, result, item);
+        const isTerminal = !plan.steps.some((candidate) => candidate.depends_on.includes(step.step));
+        if (isTerminal && step.write !== true) {
+          const value = boundedTerminalResult(result.data || result);
+          if (value) derived.terminal_results = { ...(derived.terminal_results || {}), [step.key]: value };
+        }
+        if (Array.isArray(result.artifact_refs)) refs.push(...result.artifact_refs);
+        stepProgress.completed_items.push({ item_index: itemIndex, reused: false, ref: result?.artifact_refs?.[0] || result?.entity?.id || null });
+        if (step.write === true) {
+          // Every P19 mutation advances the project revision. Refresh after
+          // each single-item write so the next fan-out item carries the exact
+          // authoritative revision rather than a stale batch-start revision.
+          derived.project = await refreshState();
+          if (step.operation === 'workspace.evidence.create' && derived.created_evidence_id) {
+            const saved = (derived.project?.evidence || []).find((record) => record.id === derived.created_evidence_id);
+            if (!saved) throw boundedError('EVIDENCE_NOT_FOUND', '保存的证据未出现在项目状态中。');
+            derived.collected_evidence = saved;
+          }
+        }
+      }
+      if (step.fan_out && outcomes.length === 0) {
+        throw boundedError(
+          'FAN_OUT_SOURCE_EMPTY',
+          `步骤 ${step.label} 没有可处理的来源记录：未发起任何业务调用。`,
+        );
+      }
+      const reusedCount = outcomes.filter((entry) => entry.reused).length;
+      const executedCount = outcomes.length - reusedCount;
+      const state = executedCount === 0 ? STEP_STATE_REUSED : STEP_STATE_SUCCEEDED;
+      const resumeOutput = resumeOutputFor(step);
+      recordStep(step, {
+        state,
+        item_count: outcomes.length,
+        ...(step.fan_out ? { source_count: sourceCount } : {}),
+        reused_count: reusedCount,
+        executed_count: executedCount,
+        refs: [...new Set(refs)].slice(0, 50),
+        completed_items: stepProgress.completed_items.slice(0, MAX_FAN_OUT),
+        ...(resumeOutput ? { resume_output: resumeOutput } : {}),
+        finished_at: now(),
+      });
+      if (plan.project_id && step.write !== true && (step.key === 'collect' || step.key === 'analyze' || step.key === 'make_card' || step.key === 'assemble_brief')) {
+        // Refresh authoritative project state after writes so downstream reuse
+        // checks and revision guards see the exact persisted records.
+        derived.project = await refreshState();
+        if (step.operation === 'workspace.evidence.create' && derived.created_evidence_id) {
+          const saved = (derived.project?.evidence || []).find((record) => record.id === derived.created_evidence_id);
+          if (!saved) throw boundedError('EVIDENCE_NOT_FOUND', '保存的证据未出现在项目状态中。');
+          derived.collected_evidence = saved;
+        }
+      }
+    } catch (error) {
+      if (error?.code === 'CANCELLED') throw error;
+      const previousSnapshot = stepStates[step.step] || {};
+      const completedOutcomes = stepProgress?.outcomes || [];
+      const completedRefs = [...new Set(stepProgress?.refs || [])].slice(0, 50);
+      const resumeOutput = resumeOutputFor(step);
+      const failedSnapshot = stepSnapshot(step, {
+        state: STEP_STATE_FAILED,
+        item_count: completedOutcomes.length,
+        ...(stepProgress ? { source_count: stepProgress.sourceCount } : {}),
+        reused_count: completedOutcomes.filter((entry) => entry.reused).length,
+        executed_count: completedOutcomes.filter((entry) => !entry.reused).length,
+        failed_count: Math.max(1, Number(previousSnapshot.failed_count) || 1),
+        refs: completedRefs,
+        ...(stepProgress ? { completed_items: stepProgress.completed_items.slice(0, MAX_FAN_OUT) } : {}),
+        ...(resumeOutput ? { resume_output: resumeOutput } : {}),
+        finished_at: now(),
+        error: {
+          code: String(error?.code || 'HARNESS_FAILED').slice(0, 80),
+          operation: step.operation,
+          message: String(error?.message || '步骤执行失败。').slice(0, 240),
+          retry_unsafe: error?.diagnostics?.retry_unsafe === true || error?.code === 'INTERNAL_PLAN_VALIDATION_ERROR',
+        },
+      });
+      if (retryUnsafeStep === step.step) failedSnapshot.error.retry_unsafe = true;
+      recordStep(step, failedSnapshot);
+      // The first necessary step failure blocks every remaining step that
+      // transitively depends on it; only registry-independent branches may
+      // continue (marked skipped here so the UI never shows them as pending).
+      const blockedIds = new Set([step.step]);
+      for (const remaining of plan.steps.slice(stepIndex + 1)) {
+        const blocked = remaining.depends_on.some((dep) => blockedIds.has(dep))
+          || remaining.depends_on.some((dep) => dependsOnFailed(dep, plan.steps, blockedIds));
+        if (blocked) {
+          blockedIds.add(remaining.step);
+          recordStep(remaining, { state: STEP_STATE_BLOCKED, error: { code: 'DEPENDENCY_BLOCKED', message: '前置步骤失败，本步骤被阻断。' } });
+        } else {
+          recordStep(remaining, { state: STEP_STATE_SKIPPED, item_count: 0 });
+        }
+      }
+      break;
+    }
+  }
+
+  function dependsOnFailed(stepId, allSteps, failedSet) {
+    const entry = allSteps.find((candidate) => candidate.step === stepId);
+    if (!entry) return false;
+    if (failedSet.has(entry.step)) return true;
+    return entry.depends_on.some((dep) => dependsOnFailed(dep, allSteps, failedSet));
+  }
+
+  const steps = plan.steps.map((step) => ({ step: step.step, state: stepStates[step.step]?.state || STEP_STATE_PLANNED }));
+  const succeeded = steps.filter((entry) => SUCCESS_STEP_STATES.has(entry.state));
+  const failed = steps.filter((entry) => entry.state === STEP_STATE_FAILED);
+  const validationFailure = failed.some((entry) => {
+    const code = stepStates[entry.step]?.error?.code;
+    return code === 'INTERNAL_PLAN_VALIDATION_ERROR' || code === 'REUSE_AMBIGUOUS';
+  });
+  const outcome = failed.length > 0
+    ? (succeeded.length > 0 && !validationFailure ? 'partial' : 'failed')
+    : 'succeeded';
+  const refs = [...new Set(plan.steps.flatMap((step) => stepStates[step.step]?.refs || []))].slice(0, 50);
+  const response = {
+    outcome,
+    final_response: buildSummary({ plan, stepStates }),
+    artifact_refs: refs,
+    partial_completion: outcome === 'partial',
+  };
+  if (plan.workflow === 'search_x_reddit' && Number(plan.slots.save_count) === 0) {
+    const combined = boundedTerminalResult({ items: derived.combined_items || [] });
+    if (combined) derived.terminal_results = { search_x_reddit: combined };
+  }
+  if (plainObject(derived.terminal_results) && Object.keys(derived.terminal_results).length > 0) {
+    response.result_data = boundedTerminalResult(derived.terminal_results);
+  }
+  if (retryUnsafeStep) response.retry_unsafe_step = retryUnsafeStep;
+  return response;
+}
+
+function buildSummary({ plan, stepStates }) {
+  const lines = [`工作流「${plan.workflow_title}」执行完成。`];
+  for (const step of plan.steps) {
+    const snapshot = stepStates[step.step] || {};
+    const label = STEP_LABELS[snapshot.state] || snapshot.state || 'planned';
+    lines.push(`${step.label}：${label}${snapshot.reused_count > 0 ? `（复用 ${snapshot.reused_count}）` : ''}${snapshot.executed_count > 0 ? `（执行 ${snapshot.executed_count}）` : ''}`);
+  }
+  const reused = plan.steps.filter((step) => stepStates[step.step]?.state === STEP_STATE_REUSED).length;
+  if (reused > 0) lines.push(`其中 ${reused} 个步骤直接复用了既有产物，未产生新的费用或写入。`);
+  return lines.join('\n');
+}
+
+/**
+ * Bridge-side state reader: reads the current project through the exact tool
+ * contract (workspace.project.read). `toolClient` is the same validated
+ * bridge client the executor uses for every other call.
+ */
+export function createBridgeStateReader(toolClient) {
+  return async (trustedContext, projectId, signal) => {
+    const call = {
+      schema_version: 'ams_harness_tool_v1',
+      operation: 'workspace.project.read',
+      payload: { project_id: projectId },
+      idempotency_key: 'state-read',
+    };
+    const checked = validateToolCall(call, trustedContext);
+    if (!checked.ok) return { ok: false, code: checked.code };
+    const result = await toolClient(checked.value, trustedContext, signal);
+    if (!result || result.ok !== true) return { ok: false, code: result?.code || 'PROJECT_STATE_READ_FAILED' };
+    const project = result.data?.project || result.project || null;
+    if (!plainObject(project)) return { ok: false, code: 'PROJECT_STATE_INVALID' };
+    return { ok: true, project, revision: Number.isSafeInteger(project.version) ? project.version : null };
+  };
+}

@@ -4,51 +4,48 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHarnessClient, HARNESS_ACTIVE_PROJECT_KEY, HARNESS_EDGE_SCHEMA_VERSION, readHarnessActiveProject } from '../src/services/harness-client.js';
 
-test('browser Harness client forwards only the authenticated Edge contract and never a service credential', async () => {
+const taskId = 'ht-11111111-1111-4111-8111-111111111111';
+const fingerprint = 'a'.repeat(64);
+const approval = { paid_external_calls: true, online_writes: false, handoff_creation: false };
+
+test('browser Harness client plans, confirms and retries only through the authenticated Edge contract', async () => {
   const calls = [];
   const client = {
     auth: {
       getSession: async () => ({ data: { session: { access_token: 'stale-user-jwt' } }, error: null }),
       refreshSession: async () => ({ data: { session: { access_token: 'user-jwt-value' } }, error: null }),
     },
-    functions: {
-      invoke: async (name, options) => {
-        calls.push({ name, options });
-        return { data: { ok: true, task: { id: 'ht-11111111-1111-4111-8111-111111111111', state: 'queued' } }, error: null };
-      },
-    },
+    functions: { invoke: async (name, options) => { calls.push({ name, options }); return { data: { ok: true, task: { id: taskId, state: 'planned' } }, error: null }; } },
   };
   const harness = createHarnessClient({ client });
-  await harness.submit({
-    requestId: 'web-request-1',
-    intent: 'Analyze the current research project.',
-    approval: { paid_external_calls: true, online_writes: false, handoff_creation: false },
-  });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].name, 'harness-command');
+  await harness.plan({ requestId: 'web-request-1', intent: 'Analyze the current research project.' });
+  await harness.confirm({ taskId, planFingerprint: fingerprint, approval });
+  await harness.retryFailedStep({ taskId, planFingerprint: fingerprint, stepId: 'st-2', approval });
+  assert.equal(calls.length, 3);
   assert.deepEqual(calls[0].options.body, {
     schema_version: HARNESS_EDGE_SCHEMA_VERSION,
-    action: 'submit',
+    action: 'plan',
     request_id: 'web-request-1',
     project_id: null,
     intent: 'Analyze the current research project.',
-    approval: { paid_external_calls: true, online_writes: false, handoff_creation: false },
   });
-  assert.equal(calls[0].options.headers.Authorization, 'Bearer user-jwt-value');
-  assert.doesNotMatch(JSON.stringify(calls[0]), /service[_-]?role|hmac.secret|database_url/i);
+  assert.equal(calls[1].options.body.action, 'confirm');
+  assert.equal(calls[1].options.body.plan_fingerprint, fingerprint);
+  assert.equal(calls[2].options.body.action, 'retry_failed_step');
+  assert.equal(calls[2].options.body.step_id, 'st-2');
+  for (const call of calls) {
+    assert.equal(call.name, 'harness-command');
+    assert.equal(call.options.headers.Authorization, 'Bearer user-jwt-value');
+    assert.doesNotMatch(JSON.stringify(call), /service[_-]?role|hmac.secret|database_url/i);
+  }
 });
 
 test('browser Harness client fails closed without a signed-in session', async () => {
-  const harness = createHarnessClient({
-    client: {
-      auth: { getSession: async () => ({ data: { session: null }, error: null }) },
-      functions: { invoke: async () => assert.fail('Edge must not be called without auth') },
-    },
-  });
+  const harness = createHarnessClient({ client: { auth: { getSession: async () => ({ data: { session: null }, error: null }) }, functions: { invoke: async () => assert.fail('Edge must not be called without auth') } } });
   await assert.rejects(() => harness.list(), (error) => error.code === 'AUTH_REQUIRED');
 });
 
-test('Harness submit proactively refreshes the delegated session but read-only polling does not', async () => {
+test('Harness plan/confirm/retry refresh delegated sessions but read-only polling does not', async () => {
   let refreshes = 0;
   let reads = 0;
   const client = {
@@ -59,52 +56,87 @@ test('Harness submit proactively refreshes the delegated session but read-only p
     functions: { invoke: async () => ({ data: { ok: true, tasks: [] }, error: null }) },
   };
   const harness = createHarnessClient({ client });
-  await harness.submit({ requestId: 'refresh-1', intent: 'read project', approval: {} });
+  await harness.plan({ requestId: 'refresh-1', intent: 'read project' });
+  await harness.confirm({ taskId, planFingerprint: fingerprint, approval: { paid_external_calls: false, online_writes: false, handoff_creation: false } });
+  await harness.retryFailedStep({ taskId, planFingerprint: fingerprint, stepId: 'st-1', approval: { paid_external_calls: false, online_writes: false, handoff_creation: false } });
   await harness.list();
-  assert.equal(refreshes, 1);
+  assert.equal(refreshes, 3);
   assert.equal(reads, 1);
 });
 
-test('AI workspace binds submissions to the exact selected P19 project and rejects malformed local state', async () => {
+test('AI workspace binds plans to the exact selected P19 project and preserves request identity until accepted', async () => {
   const exact = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
   assert.equal(readHarnessActiveProject({ getItem: (key) => key === HARNESS_ACTIVE_PROJECT_KEY ? exact : null }), exact);
   assert.equal(readHarnessActiveProject({ getItem: () => 'prj-not-valid' }), null);
   assert.equal(readHarnessActiveProject({ getItem: () => { throw new Error('storage denied'); } }), null);
   const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.match(page, /const projectId = readHarnessActiveProject\(\)/);
-  assert.match(page, /const submissionKey = JSON\.stringify\(\[projectId, normalizedIntent, approval\]\)/);
-  assert.match(page, /requestId: pendingSubmission\.current\.requestId,[\s\S]*projectId,[\s\S]*intent: normalizedIntent/);
+  assert.match(page, /const submissionKey = JSON\.stringify\(\[projectId, normalizedIntent\]\)/);
+  assert.match(page, /harnessClient\.plan\(\{[\s\S]*requestId: pendingSubmission\.current\.requestId,[\s\S]*projectId,[\s\S]*intent: normalizedIntent/);
   assert.match(page, /generation !== pollGeneration\.current/);
-  assert.match(page, /catch \(caught\) \{\s*if \(generation !== pollGeneration\.current\) return;\s*setError/);
-  assert.match(page, /pollGeneration\.current \+= 1/);
   assert.match(page, /if \(pollInFlight\.current\) return/);
-  assert.match(page, /pollInFlight\.current = true/);
-  assert.match(page, /finally \{[\s\S]*pollInFlight\.current = false/);
   assert.match(page, /const pendingSubmission = useRef\(null\)/);
-  assert.match(page, /pendingSubmission\.current\?\.key !== submissionKey/);
-  assert.match(page, /requestId: pendingSubmission\.current\.requestId/);
-  assert.ok(
-    page.indexOf('pendingSubmission.current = null') > page.indexOf('if (!task) throw new Error'),
-    'request identity must rotate only after the server confirms a task record',
-  );
+  assert.ok(page.indexOf('pendingSubmission.current = null') > page.indexOf("if (!task) throw new Error('计划入口没有返回任务记录。')"));
 });
 
-test('default AI workspace is concise and keeps existing research as advanced mode', async () => {
+test('AI workspace renders the immutable server plan, exact approvals, truthful step states and failed-step retry', async () => {
   const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   const app = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
   assert.match(page, /告诉我你想完成什么/);
   assert.match(page, /进入高级研究模式/);
-  assert.match(page, /不会删除数据、修改权限、自动发布或访问 production/);
-  assert.match(page, /paid_external_calls: allowPaid/);
-  assert.match(page, /disabled=\{!intent\.trim\(\) \|\| !allowPaid/);
-  assert.match(page, /online_writes: allowWrites/);
-  assert.match(page, /handoff_creation: needsHandoff && allowHandoff/);
-  assert.match(page, /data-testid="harness-handoff-approval"/);
-  assert.match(page, /needsHandoff && \(!allowWrites \|\| !allowHandoff\)/);
-  assert.match(page, /setAllowPaid\(false\)/);
-  assert.match(page, /setAllowWrites\(false\)/);
-  assert.match(page, /setAllowHandoff\(false\)/);
+  assert.match(page, /生成计划不会调用业务工具、产生费用或写入 staging/);
+  assert.match(page, /data-testid="harness-authoritative-plan"/);
+  assert.match(page, /authoritativePlan\.fingerprint/);
+  assert.match(page, /requiredApprovals\.paid_external_calls/);
+  assert.match(page, /requiredApprovals\.online_writes/);
+  assert.match(page, /requiredApprovals\.handoff_creation/);
+  assert.match(page, /data-testid="harness-confirm"/);
+  assert.match(page, /harnessClient\.retryFailedStep/);
+  assert.match(page, /snapshot\?\.error\?\.retry_unsafe !== true/);
+  assert.match(page, /partial: '部分完成'/);
   assert.match(app, /default:\s*return <AIWorkspacePage/);
   assert.match(sidebar, /new Set\(\['ai', 'research', 'knowledge', 'connections'\]\)/);
+});
+
+test('AI workspace exposes structured terminal tool results', async () => {
+  const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /activeTask\.result\?\.result_data/);
+  assert.match(page, /查看工具返回结果/);
+});
+
+test('every visible AI workspace preset is a valid authoritative plan request exactly as displayed', async () => {
+  const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
+  const match = /const suggestions = \[([\s\S]*?)\];/.exec(page);
+  assert.ok(match, 'the suggestions array is present and readable');
+  const presets = [...match[1].matchAll(/'([^']*)'/g)].map((entry) => entry[1]);
+  assert.ok(presets.length >= 3, `at least three visible presets exist (${presets.length})`);
+  // Each preset must contain its own bounded keyword when it searches, and
+  // must never rely on a hidden Evidence/Analysis identity.
+  for (const preset of presets) {
+    assert.doesNotMatch(preset, /\bev-[0-9a-f]{24}\b|\ban-[0-9a-f]{24}\b/, 'no preset may hide an exact identity inside its text');
+  }
+  // The real server planner must accept every visible preset verbatim: no
+  // preset may fail only after submission with PLAN_SLOT_REQUIRED /
+  // PLANNER_SLOT_REQUIRED.
+  const { createPlanner } = await import('../services/harness-gateway/planner.mjs');
+  const planner = createPlanner();
+  const taskId = 'ht-11111111-1111-4111-8111-111111111111';
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  for (const preset of presets) {
+    const verdict = await planner.plan({
+      taskId,
+      request: { user_id: 'user-a', project_id: projectId, intent: preset, request_fingerprint: 'a'.repeat(64) },
+    });
+    assert.equal(verdict.ok, true, `visible preset "${preset}" must create an authoritative plan (${verdict.code})`);
+    assert.equal(verdict.value.user_id, 'user-a');
+    assert.equal(verdict.value.project_id, projectId);
+    assert.ok(verdict.value.steps.length > 0, `preset "${preset}" produces ordered steps`);
+  }
+});
+
+test('planned tasks expose cancellation so unconfirmed plans can release capacity', async () => {
+  const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /\['planned', 'queued', 'running'\]\.includes\(activeTask\.state\)/);
+  assert.match(page, />取消任务<\/button>/);
 });

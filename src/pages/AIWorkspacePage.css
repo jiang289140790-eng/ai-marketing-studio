@@ -12,6 +12,23 @@
 .ai-suggestions button:hover { border-color: #8057ff; color: white; }
 .ai-plan { padding: 16px 18px; border-radius: 14px; background: rgba(91, 70, 210, .13); border: 1px solid rgba(128, 87, 255, .3); }
 .ai-plan ol { margin: 10px 0 0 20px; color: #bdc8da; line-height: 1.8; }
+.ai-plan-title { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.ai-plan-title > div { display: grid; gap: 4px; }
+.ai-plan-title span { color: #91a2bb; font-size: 12px; }
+.ai-plan-title code { max-width: 180px; color: #71e4d4; overflow-wrap: anywhere; }
+.ai-plan-steps { display: grid; gap: 10px; padding: 0; margin: 16px 0 0 !important; list-style: none; }
+.ai-plan-steps > li { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid #31415c; border-radius: 12px; background: #101b2c; }
+.ai-plan-steps small { display: block; margin-top: 4px; color: #7f90aa; overflow-wrap: anywhere; }
+.ai-step-state, .ai-step-badges span { display: inline-flex; width: max-content; padding: 4px 7px; border-radius: 999px; background: #26364f; color: #cbd5e5; font-size: 11px; }
+.ai-step-state.succeeded, .ai-step-state.reused { background: rgba(40, 202, 139, .15); color: #4ee5aa; }
+.ai-step-state.failed, .ai-step-state.blocked { background: rgba(239, 100, 114, .15); color: #ff8b96; }
+.ai-step-state.running { background: rgba(128, 87, 255, .2); color: #b9a6ff; }
+.ai-step-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ai-step-badges .cost { color: #ffd27a; }
+.ai-step-badges .write { color: #82e8db; }
+.ai-step-error { grid-column: 2 / -1; margin: 0; color: #ff9aa4; font-size: 13px; }
+.ai-confirm-panel { display: grid; gap: 12px; margin-top: 16px; padding: 16px; border-top: 1px solid rgba(128, 87, 255, .3); }
+.ai-confirm-panel .primary-button { justify-self: end; }
 .ai-approvals { display: grid; gap: 10px; padding: 14px 0; }
 .ai-approvals label { display: flex; gap: 10px; align-items: center; color: #d5ddec; }
 .ai-approvals input { width: 18px; height: 18px; accent-color: #8057ff; }
@@ -23,6 +40,7 @@
 .ai-progress span.running { width: 58%; background: linear-gradient(90deg, #6d45ff, #26d6be); animation: ai-pulse 1.5s ease-in-out infinite alternate; }
 .ai-progress span.succeeded { background: #28ca8b; }
 .ai-progress span.failed, .ai-progress span.cancelled { background: #ef6472; }
+.ai-progress span.partial { background: #e5a93d; }
 .ai-result-copy { padding: 16px; white-space: pre-wrap; line-height: 1.7; border-radius: 14px; background: #121e31; }
 .ai-raw-response { margin-top: 14px; }
 .ai-raw-response summary { cursor: pointer; color: #9fb0cc; font-size: 13px; padding: 6px 0; }
@@ -41,4 +59,8 @@
   .ai-workspace { padding: 14px; }
   .ai-hero, .ai-submit-row, .ai-section-heading { flex-direction: column; align-items: stretch; }
   .ai-task-list > button { grid-template-columns: 1fr; }
+  .ai-plan-title { flex-direction: column; }
+  .ai-plan-steps > li { grid-template-columns: 1fr; }
+  .ai-step-error { grid-column: auto; }
+  .ai-step-badges { justify-content: flex-start; }
 }

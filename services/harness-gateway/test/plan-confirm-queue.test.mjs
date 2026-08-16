@@ -1,0 +1,847 @@
+// Queue-level two-phase contract: plan-only submission, stale/tampered
+// confirmation fails closed with zero runner calls, exact approvals, retry of
+// the exact failed step only, RETRY_UNSAFE for ambiguous paid outcomes, and
+// restart recovery of planned/partial tasks.
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import test from 'node:test';
+import { setTimeout } from 'node:timers';
+import { HarnessTaskQueue, GATEWAY_SCHEMA_VERSION, runWithIsolatedTaskView, runWithTaskTimeout, validateConfirmRequest, validatePlanRequest, validateRetryRequest } from '../gateway-core.mjs';
+import { createPlanner, planFingerprint } from '../planner.mjs';
+import { createBridgeStateReader, executeConfirmedPlan } from '../deterministic-executor.mjs';
+
+const planner = createPlanner();
+
+function planRequest(overrides = {}) {
+  return {
+    schema_version: GATEWAY_SCHEMA_VERSION,
+    request_id: 'plan-1',
+    user_id: 'user-a',
+    project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+    intent: '分析这个 X 帖子 https://x.com/a/status/1234567890123456789，保存证据和分析，并生成待审核 Brief',
+    ...overrides,
+  };
+}
+
+function confirmRequest(taskId, fingerprint, approval) {
+  return { schema_version: GATEWAY_SCHEMA_VERSION, task_id: taskId, plan_fingerprint: fingerprint, approval };
+}
+
+function retryRequest(taskId, fingerprint, stepId, approval) {
+  return { schema_version: GATEWAY_SCHEMA_VERSION, task_id: taskId, plan_fingerprint: fingerprint, step_id: stepId, approval };
+}
+
+// Stateful mock boundary; the exact tool contract is enforced on every call
+// (validateToolCall runs inside the executor before bridge contact).
+function mockBridge({ failCollect = false, ambiguousCollect = false, failAnalysis = false } = {}) {
+  const state = { revision: 3, evidence: [], analyses: [], cards: [], brief: null, handoffs: [] };
+  const calls = [];
+  const flags = { failCollect, ambiguousCollect, failAnalysis };
+  const assertCurrentRevision = (call) => {
+    assert.equal(call.expected_revision, state.revision, `${call.operation} must bind the latest project revision before bridge contact`);
+  };
+  const client = async (call, trusted) => {
+    calls.push(call.operation);
+    switch (call.operation) {
+      case 'workspace.project.read':
+        return { ok: true, data: { project: { version: state.revision, topic: 't', objective: 'o', constraints: [], evidence: state.evidence, analyses: state.analyses, knowledge_cards: state.cards, brief: state.brief, handoffs: state.handoffs } } };
+      case 'research.collect_url': {
+        if (flags.ambiguousCollect) return { ok: false, code: 'TOOL_TIMEOUT', diagnostics: { issues: ['bridge timed out'] } };
+        if (flags.failCollect) return { ok: false, code: 'UNSUPPORTED_PLATFORM', diagnostics: { issues: ['platform rejected'] } };
+        const text = '测试正文内容';
+        const item = {
+          id: 'x-post-1', source_url: call.payload.url, label: '帖子', platform: 'x', content_text: text,
+          external_id: '1234567890123456789', content_sha256: createHash('sha256').update(text).digest('hex'),
+          provenance: { schema_version: 'p22_collected_source_v1', provider: 'apify:xquik/x-tweet-scraper', run_id: 'run-1', collected_at: '2026-08-15T08:00:00.000Z', usage_total_usd: 0.01, budget_reservation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
+          collection_proof: '1999999999.' + 'c'.repeat(64), source_metadata: { author: { name: 'A' }, engagement: { likes: 1 } }, media_assets: [],
+        };
+        return { ok: true, entity: { type: 'evidence', id: 'ev-dummy' }, data: { items: [item] }, artifact_refs: [] };
+      }
+      case 'workspace.evidence.create': {
+        assertCurrentRevision(call);
+        const id = 'ev-' + '1'.repeat(24);
+        state.evidence = [{ ...call.payload.evidence, id, project_id: trusted.project_id, fingerprint: 'e'.repeat(64), version: 1 }];
+        state.revision += 1;
+        return { ok: true, entity: { type: 'evidence', id }, artifact_refs: [id] };
+      }
+      case 'research.analyze_persisted': {
+        if (flags.failAnalysis) return { ok: false, code: 'QWEN_REQUEST_FAILED', diagnostics: { issues: ['model rejected'] } };
+        return { ok: true, data: { analyses: [{ source_id: 'x-post-1', model: 'qwen3.5-omni-flash', result: { text_expression: 'x', media_analysis: [], virality_drivers: [], reusable_methods: [], signals: [], risks: [] }, executed_at: '2026-08-15T08:01:00.000Z', usage: { total_tokens: 200 }, cost: {} }] }, artifact_refs: [] };
+      }
+      case 'workspace.analysis.create': {
+        assertCurrentRevision(call);
+        const record = { ...call.payload.analysis, fingerprint: 'a'.repeat(64) };
+        state.analyses = [record];
+        state.revision += 1;
+        return { ok: true, entity: { type: 'analysis', id: record.id }, artifact_refs: [record.id] };
+      }
+      case 'workspace.card.create': {
+        assertCurrentRevision(call);
+        const record = { ...call.payload.card, fingerprint: 'k'.repeat(64) };
+        state.cards = [record];
+        state.revision += 1;
+        return { ok: true, entity: { type: 'card', id: record.id }, artifact_refs: [record.id] };
+      }
+      case 'workspace.brief.assemble': {
+        assertCurrentRevision(call);
+        const record = { ...call.payload.brief, fingerprint: 'b'.repeat(64) };
+        state.brief = record;
+        state.revision += 1;
+        return { ok: true, entity: { type: 'brief', id: record.id }, artifact_refs: [record.id] };
+      }
+      default:
+        return { ok: false, code: 'UNEXPECTED_OPERATION' };
+    }
+  };
+  return { state, calls, client, flags };
+}
+
+function createQueue(bridge, { initialTasks = [], plannerOverride = planner, queueOptions = {} } = {}) {
+  const deterministicRunner = (request, taskId, signal, runtimeContext, taskView, emit) => {
+    const stateReader = createBridgeStateReader(bridge.client);
+    return executeConfirmedPlan({ taskView, plan: taskView.plan, signal, emit, toolClient: bridge.client, stateReader });
+  };
+  return new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    deterministicRunner,
+    planner: plannerOverride,
+    initialTasks,
+    validateRuntimeContext: (context) => (context?.delegatedAuthorization ? { ok: true } : { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' }),
+    ...queueOptions,
+  });
+}
+
+test('plan-only submission never executes and replays idempotently', async () => {
+  const bridge = mockBridge();
+  const queue = createQueue(bridge);
+  const first = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(first.ok, true);
+  assert.equal(first.task.state, 'planned');
+  assert.equal(first.task.plan.schema_version, 'ams_harness_plan_v1');
+  assert.equal(first.task.plan_fingerprint, first.task.plan.fingerprint);
+  assert.equal(bridge.calls.length, 0, 'planning must not contact the bridge');
+  await queue.whenIdle();
+  assert.equal(bridge.calls.length, 0, 'a plan alone must never execute');
+  const replay = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.task.id, first.task.id);
+});
+
+test('stale or tampered confirmation fails closed with zero execution', async () => {
+  const bridge = mockBridge();
+  const queue = createQueue(bridge);
+  const planned = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = planned.task;
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  const wrongFingerprint = confirmRequest(task.id, 'f'.repeat(64), approvals);
+  const rejected = queue.confirm(wrongFingerprint, task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.code, 'PLAN_FINGERPRINT_MISMATCH');
+  const wrongTask = confirmRequest('ht-22222222-2222-4222-8222-222222222222', task.plan.fingerprint, approvals);
+  assert.equal(queue.confirm(wrongTask, task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) }).code, 'TASK_NOT_FOUND');
+  const missingApproval = confirmRequest(task.id, task.plan.fingerprint, { paid_external_calls: true, online_writes: false, handoff_creation: false });
+  assert.equal(queue.confirm(missingApproval, task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) }).code, 'CONFIRM_APPROVAL_MISMATCH');
+  const extraApproval = confirmRequest(task.id, task.plan.fingerprint, { paid_external_calls: true, online_writes: true, handoff_creation: true });
+  assert.equal(queue.confirm(extraApproval, task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) }).code, 'CONFIRM_APPROVAL_MISMATCH');
+  await queue.whenIdle();
+  assert.equal(bridge.calls.length, 0, 'rejected confirmations must execute zero tools');
+});
+
+test('confirmed plans fail closed when the deterministic runner is unavailable', async () => {
+  const bridge = mockBridge();
+  let legacyCalls = 0;
+  const queue = new HarnessTaskQueue({
+    runner: async () => { legacyCalls += 1; return {}; },
+    planner,
+    validateRuntimeContext: () => ({ ok: true }),
+  });
+  const planned = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  const confirmed = queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), 'user-a', { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.deepEqual(confirmed, { ok: false, code: 'DETERMINISTIC_RUNNER_UNAVAILABLE' });
+  await queue.whenIdle();
+  assert.equal(legacyCalls, 0);
+  assert.equal(bridge.calls.length, 0);
+  assert.equal(queue.read(planned.task.id, 'user-a').task.state, 'planned');
+});
+
+test('deterministic execution has one bounded overall timeout and aborts its task signal', async () => {
+  let boundedSignal;
+  const startedAt = Date.now();
+  await assert.rejects(
+    runWithTaskTimeout({
+      signal: null,
+      timeoutMs: 5,
+      run: (signal) => {
+        boundedSignal = signal;
+        return new Promise(() => {});
+      },
+    }),
+    (error) => error?.code === 'TASK_TIMEOUT',
+  );
+  assert.equal(boundedSignal.aborted, true);
+  assert.equal(boundedSignal.reason?.code, 'TASK_TIMEOUT');
+  assert.ok(Date.now() - startedAt < 250, 'an uncooperative runner cannot hold the bounded timeout open');
+});
+
+test('parent cancellation immediately releases an abort-ignoring task and already-aborted work never starts', async () => {
+  const parent = new globalThis.AbortController();
+  let boundedSignal;
+  let calls = 0;
+  const startedAt = Date.now();
+  const pending = runWithTaskTimeout({
+    signal: parent.signal,
+    timeoutMs: 10_000,
+    run: (signal) => {
+      calls += 1;
+      boundedSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+  await Promise.resolve();
+  parent.abort();
+  await assert.rejects(pending, (error) => error?.code === 'CANCELLED');
+  assert.equal(calls, 1);
+  assert.equal(boundedSignal.aborted, true);
+  assert.equal(boundedSignal.reason?.code, 'CANCELLED');
+  assert.ok(Date.now() - startedAt < 250, 'parent cancellation cannot leave an uncooperative runner holding the queue');
+
+  const alreadyAborted = new globalThis.AbortController();
+  alreadyAborted.abort();
+  let preAbortedCalls = 0;
+  await assert.rejects(
+    runWithTaskTimeout({
+      signal: alreadyAborted.signal,
+      timeoutMs: 10_000,
+      run: () => {
+        preAbortedCalls += 1;
+        return Promise.resolve();
+      },
+    }),
+    (error) => error?.code === 'CANCELLED',
+  );
+  assert.equal(preAbortedCalls, 0, 'already-cancelled work must not start');
+});
+
+test('an abort-ignoring runner cannot mutate or emit after terminal timeout', async () => {
+  const taskView = { step_states: { initial: { state: 'running' } } };
+  const emitted = [];
+  await assert.rejects(
+    runWithTaskTimeout({
+      signal: null,
+      timeoutMs: 5,
+      run: (signal) => runWithIsolatedTaskView({
+        taskView,
+        signal,
+        emit: (detail) => emitted.push(detail),
+        run: async (isolated, isolatedEmit) => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          isolated.step_states.late = { state: 'succeeded' };
+          isolatedEmit({ event: 'late' });
+          return {};
+        },
+      }),
+    }),
+    (error) => error?.code === 'TASK_TIMEOUT',
+  );
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(taskView.step_states.initial.state, 'failed');
+  assert.equal(taskView.step_states.initial.error.code, 'TASK_TIMEOUT');
+  assert.equal(taskView.step_states.initial.error.retry_unsafe, false);
+  assert.ok(taskView.step_states.initial.finished_at);
+  assert.equal(taskView.step_states.late, undefined);
+  assert.deepEqual(emitted, []);
+});
+
+test('confirmed plan executes deterministically and terminal replay is free', async () => {
+  const bridge = mockBridge();
+  const queue = createQueue(bridge);
+  const planned = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = planned.task;
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  const confirmed = queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(confirmed.ok, true);
+  assert.equal(confirmed.task.state, 'queued');
+  await queue.whenIdle();
+  const done = queue.read(task.id, task.request.user_id).task;
+  assert.equal(done.state, 'succeeded');
+  assert.equal(done.result.partial_completion, undefined);
+  const executed = bridge.calls.filter((operation) => operation !== 'workspace.project.read');
+  assert.deepEqual(executed, ['research.collect_url', 'workspace.evidence.create', 'research.analyze_persisted', 'workspace.analysis.create', 'workspace.card.create', 'workspace.brief.assemble']);
+  assert.equal(done.result.artifact_refs.length, 4, 'evidence + analysis + card + brief refs');
+  const callsBeforeReplay = bridge.calls.length;
+  const replay = queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(replay.replayed, true);
+  assert.equal(bridge.calls.length, callsBeforeReplay, 'terminal replay must not execute');
+});
+
+test('retry reruns only the exact failed step; completed steps stay untouched', async () => {
+  const bridge = mockBridge({ failAnalysis: true });
+  const queue = createQueue(bridge);
+  const planned = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = planned.task;
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  await queue.whenIdle();
+  const partial = queue.read(task.id, task.request.user_id).task;
+  assert.equal(partial.state, 'partial', 'some steps succeeded before the analysis failure');
+  assert.equal(partial.step_states['st-1'].state, 'succeeded');
+  assert.equal(partial.step_states['st-3'].state, 'failed');
+  assert.equal(partial.step_states['st-4'].state, 'blocked');
+  assert.equal(partial.step_states['st-6'].state, 'blocked');
+  const cancelledPartial = queue.cancel(task.id, task.request.user_id);
+  assert.equal(cancelledPartial.ok, true);
+  assert.equal(cancelledPartial.unchanged, true);
+  assert.equal(cancelledPartial.task.state, 'partial');
+  const callsBefore = bridge.calls.length;
+
+  // Retry an eligible failed step with the same fingerprint and approvals.
+  bridge.flags.failAnalysis = false;
+  const retried = queue.retry(retryRequest(task.id, task.plan.fingerprint, 'st-3', approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(retried.ok, true);
+  await queue.whenIdle();
+  const done = queue.read(task.id, task.request.user_id).task;
+  assert.equal(done.state, 'succeeded');
+  assert.equal(done.step_states['st-1'].state, 'succeeded', 'completed step untouched');
+  assert.equal(done.step_states['st-3'].state, 'succeeded', 'retried step reran');
+  assert.equal(done.step_states['st-4'].state, 'succeeded', 'dependent step resumed');
+  const newCalls = bridge.calls.slice(callsBefore);
+  assert.ok(newCalls.includes('research.analyze_persisted'), 'only the failed step reruns its paid call');
+  assert.ok(!newCalls.includes('research.collect_url'), 'completed paid collection must not rerun');
+  assert.ok(!newCalls.includes('workspace.evidence.create'), 'completed write must not rerun');
+  const collectionCalls = bridge.calls.filter((operation) => operation === 'research.collect_url');
+  assert.equal(collectionCalls.length, 1, 'exactly one paid collection across the whole task');
+});
+
+test('an accepted failed-step retry replays idempotently while queued, running, and after every final outcome', async () => {
+  const sourceBridge = mockBridge({ failAnalysis: true });
+  const sourceQueue = createQueue(sourceBridge);
+  const planned = await sourceQueue.plan(planRequest({ request_id: 'retry-replay-source' }));
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  sourceQueue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), planned.task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  await sourceQueue.whenIdle();
+  const partial = sourceQueue.read(planned.task.id, planned.task.request.user_id).task;
+  assert.equal(partial.state, 'partial');
+
+  for (const outcome of ['partial', 'succeeded', 'failed']) {
+    let release;
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    let executions = 0;
+    const queue = new HarnessTaskQueue({
+      runner: async () => { throw new Error('legacy runner must not run'); },
+      planner,
+      initialTasks: [partial],
+      deterministicRunner: async () => {
+        executions += 1;
+        markStarted();
+        await gate;
+        return { outcome, final_response: outcome, artifact_refs: [] };
+      },
+      validateRuntimeContext: (context) => (context?.delegatedAuthorization ? { ok: true } : { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' }),
+    });
+    const request = retryRequest(partial.id, partial.plan.fingerprint, 'st-3', approvals);
+    const accepted = queue.retry(request, partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.replayed, false);
+    const queuedReplay = queue.retry(request, partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+    assert.equal(queuedReplay.replayed, true, `${outcome}: queued replay`);
+    await started;
+    const runningReplay = queue.retry(request, partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+    assert.equal(runningReplay.replayed, true, `${outcome}: running replay`);
+    release();
+    await queue.whenIdle();
+    const finalReplay = queue.retry(request, partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+    assert.equal(finalReplay.replayed, true, `${outcome}: final replay`);
+    assert.equal(finalReplay.task.state, outcome);
+    assert.equal(executions, 1, `${outcome}: exact replay never enqueues or executes twice`);
+    const otherStep = queue.retry(retryRequest(partial.id, partial.plan.fingerprint, 'st-1', approvals), partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+    assert.notEqual(otherStep.replayed, true, `${outcome}: a different step is never treated as the accepted retry`);
+  }
+});
+
+test('ambiguous paid outcome rejects retry with RETRY_UNSAFE', async () => {
+  const bridge = mockBridge({ ambiguousCollect: true });
+  const queue = createQueue(bridge);
+  const planned = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = planned.task;
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  await queue.whenIdle();
+  const failed = queue.read(task.id, task.request.user_id).task;
+  assert.equal(failed.state, 'partial', 'read_state succeeded before the ambiguous paid step failed');
+  const verdict = queue.retry(retryRequest(task.id, task.plan.fingerprint, 'st-1', approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.code, 'RETRY_UNSAFE');
+});
+
+test('retry requires the exact failed step and the same plan fingerprint', async () => {
+  const bridge = mockBridge({ failAnalysis: true });
+  const queue = createQueue(bridge);
+  const planned = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = planned.task;
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  await queue.whenIdle();
+  const wrongStep = queue.retry(retryRequest(task.id, task.plan.fingerprint, 'st-1', approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(wrongStep.code, 'STEP_NOT_FAILED');
+  const wrongFingerprint = queue.retry(retryRequest(task.id, 'f'.repeat(64), 'st-3', approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(wrongFingerprint.code, 'PLAN_FINGERPRINT_MISMATCH');
+  const wrongApproval = queue.retry(retryRequest(task.id, task.plan.fingerprint, 'st-3', { paid_external_calls: false, online_writes: true, handoff_creation: false }), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(wrongApproval.code, 'CONFIRM_APPROVAL_MISMATCH');
+});
+
+test('restart recovery keeps planned tasks planned and partial tasks retryable', async () => {
+  const bridge = mockBridge({ failAnalysis: true });
+  const firstQueue = createQueue(bridge);
+  const planned = await firstQueue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = planned.task;
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  firstQueue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  await firstQueue.whenIdle();
+  const partial = firstQueue.read(task.id, task.request.user_id).task;
+  assert.equal(partial.state, 'partial');
+
+  // A second queue loads the persisted snapshot of the same partial task.
+  const secondQueue = createQueue(bridge, { initialTasks: [partial] });
+  const recovered = secondQueue.read(task.id, task.request.user_id).task;
+  assert.equal(recovered.state, 'partial');
+  assert.equal(recovered.plan.fingerprint, task.plan.fingerprint);
+  assert.equal(recovered.step_states['st-1'].state, 'succeeded');
+  assert.equal(recovered.step_states['st-3'].state, 'failed');
+
+  // A queued/running snapshot recovers as failed; a planned snapshot stays planned.
+  const plannedSnapshot = { ...planned.task, plan_fingerprint: planned.task.plan.fingerprint };
+  const thirdQueue = createQueue(bridge, { initialTasks: [plannedSnapshot] });
+  assert.equal(thirdQueue.read(planned.task.id, planned.task.request.user_id).task.state, 'planned');
+  const runningSnapshot = { ...partial, state: 'running' };
+  const fourthQueue = createQueue(bridge, { initialTasks: [runningSnapshot] });
+  const recoveredRunning = fourthQueue.read(task.id, task.request.user_id).task;
+  assert.equal(recoveredRunning.state, 'failed');
+  assert.equal(recoveredRunning.error.code, 'GATEWAY_RESTARTED');
+});
+
+test('plan request validation is exact and fail-closed', () => {
+  assert.equal(validatePlanRequest({ ...planRequest(), approval: { paid_external_calls: true } }).code, 'UNKNOWN_FIELD');
+  assert.equal(validatePlanRequest({ ...planRequest(), sql: 'select 1' }).code, 'UNKNOWN_FIELD');
+  assert.equal(validatePlanRequest({ ...planRequest(), user_id: '' }).code, 'USER_ID_INVALID');
+  assert.equal(validatePlanRequest({ ...planRequest(), intent: '' }).code, 'INTENT_INVALID');
+  assert.equal(validatePlanRequest({ schema_version: 'other' }).code, 'SCHEMA_VERSION_MISMATCH');
+  assert.equal(validateConfirmRequest({ schema_version: GATEWAY_SCHEMA_VERSION, task_id: 'bad', plan_fingerprint: 'a'.repeat(64), approval: {} }).code, 'TASK_ID_INVALID');
+  assert.equal(validateConfirmRequest({ schema_version: GATEWAY_SCHEMA_VERSION, task_id: 'ht-11111111-1111-4111-8111-111111111111', plan_fingerprint: 'zz', approval: {} }).code, 'PLAN_FINGERPRINT_INVALID');
+  assert.equal(validateConfirmRequest({ schema_version: GATEWAY_SCHEMA_VERSION, task_id: 'ht-11111111-1111-4111-8111-111111111111', plan_fingerprint: 'a'.repeat(64), approval: { admin: true } }).code, 'APPROVAL_UNKNOWN_FIELD');
+  assert.equal(validateRetryRequest({ schema_version: GATEWAY_SCHEMA_VERSION, task_id: 'ht-11111111-1111-4111-8111-111111111111', plan_fingerprint: 'a'.repeat(64), step_id: 'st-0', approval: {} }).code, undefined);
+  assert.equal(validateRetryRequest({ schema_version: GATEWAY_SCHEMA_VERSION, task_id: 'ht-11111111-1111-4111-8111-111111111111', plan_fingerprint: 'a'.repeat(64), step_id: 'other', approval: {} }).code, 'STEP_ID_INVALID');
+});
+
+test('concurrent identical plan requests serialize into one planner invocation and one authoritative plan', async () => {
+  const bridge = mockBridge();
+  let plannerInvocations = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const delayedPlanner = {
+    async plan(args) {
+      plannerInvocations += 1;
+      await gate;
+      return createPlanner().plan(args);
+    },
+  };
+  const queue = createQueue(bridge, { plannerOverride: delayedPlanner });
+  const request = planRequest({ request_id: 'concurrent-1' });
+  const first = queue.plan(request, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const second = queue.plan(request, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(plannerInvocations, 1, 'two simultaneous identical requests invoke the planner exactly once');
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.equal(b.replayed, true, 'the waiting caller replays the leader outcome');
+  assert.equal(a.task.id, b.task.id, 'one task id for the identity');
+  assert.equal(a.task.plan.fingerprint, b.task.plan.fingerprint, 'one plan fingerprint for the identity');
+  const tasks = queue.list('user-a', 100).filter((task) => task.request.request_id === 'concurrent-1');
+  assert.equal(tasks.length, 1, 'exactly one authoritative task/plan exists for the identity');
+  // Zero duplicate confirm/execution paths: confirming the single plan runs
+  // its paid steps exactly once.
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  const confirmed = queue.confirm(confirmRequest(a.task.id, a.task.plan.fingerprint, approvals), 'user-a', { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(confirmed.ok, true);
+  await queue.whenIdle();
+  const done = queue.read(a.task.id, 'user-a').task;
+  assert.equal(done.state, 'succeeded');
+  const collectionCalls = bridge.calls.filter((operation) => operation === 'research.collect_url');
+  assert.equal(collectionCalls.length, 1, 'the single plan executes its paid steps exactly once');
+});
+
+test('concurrent different normalized requests under one identity fail closed with IDEMPOTENCY_CONFLICT', async () => {
+  let plannerInvocations = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const delayedPlanner = {
+    async plan(args) {
+      plannerInvocations += 1;
+      await gate;
+      return createPlanner().plan(args);
+    },
+  };
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner: delayedPlanner,
+    validateRuntimeContext: () => ({ ok: true }),
+  });
+  const leader = queue.plan(planRequest({ request_id: 'concurrent-2' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const conflict = await queue.plan(planRequest({ request_id: 'concurrent-2', intent: '不同的意图' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.code, 'IDEMPOTENCY_CONFLICT', 'a different normalized request under the same in-flight identity fails closed immediately');
+  release();
+  const outcome = await leader;
+  assert.equal(outcome.ok, true);
+  assert.equal(plannerInvocations, 1, 'the conflicting caller never invoked the planner');
+});
+
+test('planner failure releases the reservation without leaving a second executable plan', async () => {
+  let attempts = 0;
+  const flakyPlanner = {
+    async plan(args) {
+      attempts += 1;
+      if (attempts === 1) return { ok: false, code: 'PLANNER_UNRECOGNIZED' };
+      return createPlanner().plan(args);
+    },
+  };
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner: flakyPlanner,
+    validateRuntimeContext: () => ({ ok: true }),
+  });
+  const request = planRequest({ request_id: 'concurrent-3' });
+  const [a, b] = await Promise.all([queue.plan(request, null), queue.plan(request, null)]);
+  assert.equal(a.ok, false);
+  assert.equal(a.code, 'PLANNER_UNRECOGNIZED');
+  assert.equal(b.ok, false, 'the waiting caller shares the leader failure instead of becoming a second leader');
+  assert.equal(b.code, 'PLANNER_UNRECOGNIZED');
+  assert.equal(attempts, 1, 'concurrent callers produce exactly one planning attempt');
+  assert.equal(queue.list('user-a', 100).filter((task) => task.request.request_id === 'concurrent-3').length, 0, 'the shared planning failure leaves no executable task');
+  const retried = await queue.plan(request, null);
+  assert.equal(retried.ok, true, 'a later explicit request may plan fresh after the failed reservation is released');
+  assert.equal(retried.replayed, false);
+  assert.equal(attempts, 2, 'only the later explicit request starts a fresh planning attempt');
+  assert.equal(queue.list('user-a', 100).filter((task) => task.request.request_id === 'concurrent-3').length, 1, 'the later request creates exactly one authoritative task');
+  await queue.whenIdle();
+});
+
+test('all concurrent waiters share one failed planning outcome and never elect duplicate leaders', async () => {
+  const bridge = mockBridge();
+  let invocations = 0;
+  const failingPlanner = {
+    async plan() {
+      invocations += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { ok: false, code: 'PLANNER_UNAVAILABLE' };
+    },
+  };
+  const queue = createQueue(bridge, { plannerOverride: failingPlanner });
+  const request = planRequest({ request_id: 'concurrent-failure' });
+  const outcomes = await Promise.all([queue.plan(request), queue.plan(request), queue.plan(request), queue.plan(request)]);
+  assert.equal(invocations, 1);
+  assert.ok(outcomes.every((outcome) => outcome.ok === false && outcome.code === 'PLANNER_UNAVAILABLE'));
+  assert.equal(queue.list('user-a', 10).length, 0);
+  assert.equal(bridge.calls.length, 0);
+});
+
+test('a synchronous planner throw releases the reservation so a later request can recover', async () => {
+  let attempts = 0;
+  const planner = {
+    plan(args) {
+      attempts += 1;
+      if (attempts === 1) throw new Error('synchronous planner failure');
+      return createPlanner().plan(args);
+    },
+  };
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner,
+    validateRuntimeContext: () => ({ ok: true }),
+  });
+  const request = planRequest({ request_id: 'sync-planner-recovery' });
+  const failed = await queue.plan(request, null);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.code, 'PLANNER_UNAVAILABLE');
+  const recovered = await queue.plan(request, null);
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.replayed, false);
+  assert.equal(attempts, 2);
+});
+
+test('executed plan replays never disclose internal paid retry state', async () => {
+  const bridge = mockBridge();
+  const queue = createQueue(bridge);
+  const request = planRequest({ request_id: 'filtered-plan-replay' });
+  const planned = await queue.plan(request);
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  queue.confirm(
+    confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals),
+    planned.task.request.user_id,
+    { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) },
+  );
+  await queue.whenIdle();
+  const replay = await queue.plan(request);
+  assert.equal(replay.ok, true);
+  assert.equal(replay.replayed, true);
+  assert.ok(Object.values(replay.task.step_states).some((state) => state.state === 'succeeded'));
+  for (const state of Object.values(replay.task.step_states)) {
+    assert.equal(state.resume_output, undefined);
+    assert.equal(state.resume_ref, undefined);
+  }
+});
+
+test('audit persistence failure durably fails the reservation without a second executable plan', async () => {
+  let plannerInvocations = 0;
+  const countingPlanner = {
+    async plan(args) { plannerInvocations += 1; return createPlanner().plan(args); },
+  };
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner: countingPlanner,
+    onEvent: () => { throw new Error('audit disk full'); },
+    validateRuntimeContext: () => ({ ok: true }),
+  });
+  const request = planRequest({ request_id: 'concurrent-4' });
+  const first = await queue.plan(request, null);
+  assert.equal(first.ok, false);
+  assert.equal(first.code, 'AUDIT_PERSISTENCE_UNAVAILABLE');
+  assert.equal(queue.list('user-a', 100).filter((task) => task.request.request_id === 'concurrent-4').length, 0, 'the failed plan left no task behind');
+  const second = await queue.plan(request, null);
+  assert.equal(second.ok, false);
+  assert.equal(second.code, 'AUDIT_PERSISTENCE_UNAVAILABLE', 'the audit failure durably fails the reservation');
+  assert.equal(plannerInvocations, 1, 'no second planner invocation after the durable audit failure');
+  assert.equal(queue.list('user-a', 100).filter((task) => task.request.request_id === 'concurrent-4').length, 0, 'no second executable plan was ever created');
+});
+
+test('restart-safe replay of the exact original plan request replays identically without the planner or business tools', async () => {
+  const bridge = mockBridge();
+  const firstQueue = createQueue(bridge);
+  const original = await firstQueue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = original.task;
+
+  // Persisted snapshot round-trip through a fresh queue: the exact request
+  // fingerprint, plan and plan fingerprint survive restart unchanged.
+  const recoveredQueue = createQueue(bridge, { initialTasks: [task] });
+  const recovered = recoveredQueue.read(task.id, task.request.user_id).task;
+  assert.equal(recovered.request_fingerprint, task.request_fingerprint, 'request fingerprint survives restart unchanged');
+  assert.equal(recovered.plan.fingerprint, task.plan.fingerprint, 'plan fingerprint survives restart unchanged');
+  assert.equal(recovered.request.intent, task.request.intent, 'plan request shape survives restart');
+
+  // Replaying the exact original plan request must return the identical task
+  // id, plan fingerprint, request fingerprint and plan — the planner never
+  // runs and no business tool is contacted.
+  let plannerInvocations = 0;
+  const countingPlanner = { async plan(args) { plannerInvocations += 1; return createPlanner().plan(args); } };
+  const replayQueue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner: countingPlanner,
+    initialTasks: [task],
+    validateRuntimeContext: () => ({ ok: true }),
+  });
+  const replay = await replayQueue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(replay.ok, true, `exact replay after restart must succeed, not conflict (${replay.code})`);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.task.id, task.id, 'identical task id after restart');
+  assert.equal(replay.task.plan.fingerprint, task.plan.fingerprint, 'identical plan fingerprint after restart');
+  assert.equal(replay.task.request_fingerprint, task.request_fingerprint, 'identical request fingerprint after restart');
+  assert.equal(replay.task.plan.intent, task.plan.intent, 'identical plan content');
+  assert.equal(plannerInvocations, 0, 'replay must not invoke the planner');
+  await replayQueue.whenIdle();
+  assert.equal(bridge.calls.length, 0, 'replay must not invoke any business tool');
+});
+
+test('restart replay with altered intent or project fails closed; a different user is a separate identity', async () => {
+  const bridge = mockBridge();
+  const sourceQueue = createQueue(bridge);
+  const original = await sourceQueue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const task = original.task;
+  const restarted = createQueue(bridge, { initialTasks: [task] });
+  const alteredIntent = await restarted.plan(planRequest({ intent: '不同的意图' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(alteredIntent.code, 'IDEMPOTENCY_CONFLICT', 'altered intent under the same identity fails closed after restart');
+  const alteredProject = await restarted.plan(planRequest({ project_id: 'prj-bbbbbbbbbbbbbbbbbbbbbbbb' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(alteredProject.code, 'IDEMPOTENCY_CONFLICT', 'altered project under the same identity fails closed after restart');
+  const alteredUser = await restarted.plan(planRequest({ user_id: 'user-b' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(alteredUser.ok, true, 'a different user is a different trusted identity');
+  assert.notEqual(alteredUser.task.id, task.id, 'the different identity creates its own authoritative plan');
+});
+
+test('legacy non-plan task snapshots still reload through the legacy immediate-execution normalizer', () => {
+  const legacy = {
+    id: 'ht-33333333-3333-4333-8333-333333333333',
+    state: 'queued',
+    created_at: '2026-08-15T08:00:00.000Z',
+    updated_at: '2026-08-15T08:00:00.000Z',
+    request: {
+      schema_version: GATEWAY_SCHEMA_VERSION,
+      request_id: 'legacy-1',
+      user_id: 'user-a',
+      project_id: null,
+      intent: 'legacy immediate execution',
+      approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
+    },
+    result: null,
+    error: null,
+  };
+  const queue = new HarnessTaskQueue({ runner: async () => {}, initialTasks: [legacy], validateRuntimeContext: () => ({ ok: true }) });
+  const recovered = queue.read(legacy.id, 'user-a').task;
+  assert.equal(recovered.state, 'failed', 'queued legacy snapshot recovers as failed');
+  assert.equal(recovered.error.code, 'GATEWAY_RESTARTED');
+  const replay = queue.submit({ ...legacy.request }, null);
+  assert.equal(replay.replayed, true, 'legacy submit replay stays idempotent under the legacy normalizer');
+  assert.equal(replay.task.id, legacy.id);
+});
+
+test('corrupted persisted plan fails the task closed with zero execution', async () => {
+  const bridge = mockBridge();
+  const sourceQueue = createQueue(bridge);
+  const good = (await sourceQueue.plan(planRequest({ request_id: 'corrupt-1' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) })).task;
+  const corrupted = {
+    ...good,
+    plan: { ...good.plan, intent: '被篡改的意图', fingerprint: good.plan.fingerprint },
+    plan_fingerprint: good.plan.fingerprint,
+  };
+  const queue = createQueue(bridge, { initialTasks: [corrupted] });
+  const recovered = queue.read(good.id, 'user-a').task;
+  assert.equal(recovered.state, 'failed');
+  assert.equal(recovered.error.code, 'PLAN_CORRUPTED');
+  assert.equal(recovered.plan, null, 'corrupted plan is never executable');
+  assert.equal(recovered.plan_fingerprint, null);
+  const replay = await queue.plan(planRequest({ request_id: 'corrupt-1' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(replay.ok, false);
+  assert.equal(replay.code, 'IDEMPOTENCY_CONFLICT', 'the corrupted identity fails closed on replay');
+  await queue.whenIdle();
+  assert.equal(bridge.calls.length, 0, 'a corrupted plan executes zero tools');
+});
+
+test('restart rejects a valid plan attached to the wrong persisted task envelope', async () => {
+  const bridge = mockBridge();
+  const source = createQueue(bridge);
+  const first = (await source.plan(planRequest({ request_id: 'restore-bound-a' }))).task;
+  const second = (await source.plan(planRequest({ request_id: 'restore-bound-b', project_id: 'prj-bbbbbbbbbbbbbbbbbbbbbbbb' }))).task;
+  const crossBound = { ...first, plan: second.plan, plan_fingerprint: second.plan.fingerprint };
+  const restored = createQueue(bridge, { initialTasks: [crossBound] });
+  const task = restored.read(first.id, 'user-a').task;
+  assert.equal(task.state, 'failed');
+  assert.equal(task.error.code, 'PLAN_CORRUPTED');
+  assert.equal(task.plan, null);
+  assert.equal(bridge.calls.length, 0);
+});
+
+test('unconfirmed plans have exact per-user and global admission bounds', async () => {
+  const bridge = mockBridge();
+  let plannerInvocations = 0;
+  const countingPlanner = { async plan(args) { plannerInvocations += 1; return planner.plan(args); } };
+  const queue = createQueue(bridge, {
+    plannerOverride: countingPlanner,
+    queueOptions: { capacity: 3, plannedPerUserCapacity: 2 },
+  });
+  const first = await queue.plan(planRequest({ request_id: 'bound-a1' }));
+  const second = await queue.plan(planRequest({ request_id: 'bound-a2' }));
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  const sameUserOverflow = await queue.plan(planRequest({ request_id: 'bound-a3' }));
+  assert.equal(sameUserOverflow.code, 'PLANNED_TASK_LIMIT');
+  const otherUser = await queue.plan(planRequest({ request_id: 'bound-b1', user_id: 'user-b' }));
+  assert.equal(otherUser.ok, true);
+  const globalOverflow = await queue.plan(planRequest({ request_id: 'bound-c1', user_id: 'user-c' }));
+  assert.equal(globalOverflow.code, 'QUEUE_FULL');
+  assert.equal(plannerInvocations, 3, 'rejected admission creates no planner or tool side effect');
+  assert.equal(bridge.calls.length, 0);
+});
+
+test('planned tasks can be cancelled to release bounded admission capacity', async () => {
+  const bridge = mockBridge();
+  const queue = createQueue(bridge, { queueOptions: { capacity: 1, plannedPerUserCapacity: 1 } });
+  const first = await queue.plan(planRequest({ request_id: 'cancel-plan-1' }));
+  assert.equal(first.ok, true);
+  const cancelled = queue.cancel(first.task.id, 'user-a');
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.task.state, 'cancelled');
+  const next = await queue.plan(planRequest({ request_id: 'cancel-plan-2' }));
+  assert.equal(next.ok, true);
+  assert.equal(bridge.calls.length, 0);
+});
+
+test('legacy submit shares the global capacity bound with unconfirmed plans', async () => {
+  const bridge = mockBridge();
+  const queue = createQueue(bridge, { queueOptions: { capacity: 1, plannedPerUserCapacity: 1 } });
+  const planned = await queue.plan(planRequest({ request_id: 'capacity-plan' }));
+  assert.equal(planned.ok, true);
+  const submitted = queue.submit({
+    schema_version: GATEWAY_SCHEMA_VERSION,
+    request_id: 'capacity-submit',
+    user_id: 'user-b',
+    project_id: null,
+    intent: 'legacy immediate task',
+    approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
+  }, { delegatedAuthorization: 'Bearer ' + 'b'.repeat(40) });
+  assert.equal(submitted.ok, false);
+  assert.equal(submitted.code, 'QUEUE_FULL');
+});
+
+test('gateway rejects malformed or cross-bound planner output before persistence', async () => {
+  const bridge = mockBridge();
+  const malformed = createQueue(bridge, {
+    plannerOverride: { async plan() { return { ok: true, value: { schema_version: 'ams_harness_plan_v1' } }; } },
+  });
+  const malformedResult = await malformed.plan(planRequest({ request_id: 'bad-shape' }));
+  assert.equal(malformedResult.code, 'PLANNER_OUTPUT_INVALID');
+  assert.equal(malformed.list('user-a', 10).length, 0);
+
+  const crossBoundPlanner = {
+    async plan(args) {
+      const built = await planner.plan(args);
+      const value = { ...built.value, user_id: 'user-b' };
+      value.fingerprint = planFingerprint(value);
+      return { ok: true, value };
+    },
+  };
+  const crossBound = createQueue(bridge, { plannerOverride: crossBoundPlanner });
+  const crossBoundResult = await crossBound.plan(planRequest({ request_id: 'bad-binding' }));
+  assert.equal(crossBoundResult.code, 'PLANNER_OUTPUT_INVALID');
+  assert.equal(crossBound.list('user-a', 10).length, 0);
+  assert.equal(bridge.calls.length, 0);
+});
+
+test('inactive partial tasks share the bounded history retention limit', async () => {
+  const bridge = mockBridge({ failAnalysis: true });
+  const queue = createQueue(bridge, { queueOptions: { maxHistory: 2 } });
+  for (let index = 0; index < 3; index += 1) {
+    const planned = await queue.plan(planRequest({ request_id: `partial-bound-${index}` }));
+    const approval = planned.task.plan.approvals;
+    assert.equal(queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approval), 'user-a', { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) }).ok, true);
+    await queue.whenIdle();
+  }
+  const records = queue.list('user-a', 10);
+  assert.equal(records.length, 2);
+  assert.ok(records.every((task) => task.state === 'partial'));
+});
+
+test('restart fails excess unconfirmed plans closed and keeps retained history bounded', async () => {
+  const bridge = mockBridge();
+  const source = createQueue(bridge);
+  const snapshots = [];
+  for (const [requestId, userId] of [['restart-a1', 'user-a'], ['restart-a2', 'user-a'], ['restart-b1', 'user-b']]) {
+    snapshots.push((await source.plan(planRequest({ request_id: requestId, user_id: userId }))).task);
+  }
+  const events = [];
+  const restored = new HarnessTaskQueue({
+    runner: async () => {},
+    deterministicRunner: async () => ({}),
+    planner,
+    initialTasks: snapshots,
+    capacity: 2,
+    plannedPerUserCapacity: 1,
+    maxHistory: 2,
+    onEvent: (event) => events.push(event),
+  });
+  const records = [...restored.list('user-a', 10), ...restored.list('user-b', 10)];
+  assert.equal(records.filter((task) => task.state === 'planned').length, 2, 'one plan per user survives within the global bound');
+  const rejected = records.find((task) => task.error?.code === 'PLANNED_TASK_LIMIT_RESTORED');
+  assert.ok(rejected, 'excess persisted plan is explicit rather than silently retained or evicted');
+  assert.ok(events.some((event) => event.task_id === rejected.id && event.event === 'recovered_failed'));
+});

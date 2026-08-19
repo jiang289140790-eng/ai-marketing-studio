@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TOOL_DEFINITIONS, TOOL_SCHEMA_VERSION, normalizeToolResult, toBoundaryRequest, validateToolCall } from '../tool-contract.mjs';
+import { G1_COMMAND_SCHEMA_VERSION, TOOL_DEFINITIONS, TOOL_SCHEMA_VERSION, normalizeToolResult, toBoundaryRequest, validateToolCall } from '../tool-contract.mjs';
 
 const context = {
   task_id: 'ht-11111111-1111-4111-8111-111111111111',
@@ -13,11 +13,18 @@ function call(operation, payload = {}, extra = {}) {
   return { schema_version: TOOL_SCHEMA_VERSION, operation, payload, idempotency_key: `idem-${operation}`, ...extra };
 }
 
-test('tool registry contains only bounded P19/P22 operations and no destructive command', () => {
+test('tool registry contains only bounded P19/P22/G1 operations and no destructive command', () => {
   const operations = Object.keys(TOOL_DEFINITIONS);
-  assert.equal(operations.length, 16);
+  assert.equal(operations.length, 20, 'P19/P22 16 项 + G1 生成执行层 4 项');
   assert.equal(operations.some((value) => /delete|remove|archive|decide|sql|grant|auth/i.test(value)), false);
-  assert.deepEqual(new Set(Object.values(TOOL_DEFINITIONS).map((value) => value.endpoint)), new Set(['p19-workspace-command', 'p22-research-assist']));
+  assert.deepEqual(
+    new Set(Object.values(TOOL_DEFINITIONS).map((value) => value.endpoint)),
+    new Set(['p19-workspace-command', 'p22-research-assist', 'g1-generation-command']),
+  );
+  for (const operation of ['generation.quote', 'generation.submit', 'generation.status', 'generation.artifact']) {
+    assert.equal(TOOL_DEFINITIONS[operation].endpoint, 'g1-generation-command', `${operation} 必须路由到 g1 边界`);
+    assert.equal(TOOL_DEFINITIONS[operation].approval.includes('paid_external_calls'), operation === 'generation.submit', `${operation} 付费批准标记精确`);
+  }
 });
 
 test('unknown fields, operations, cross-project calls, invalid revisions and oversized payloads fail closed', () => {
@@ -128,6 +135,37 @@ test('write revisions and useful P22 top-level results are preserved exactly', (
     ok: true, entity: { type: 'card', id: 'card-1' },
   });
   assert.deepEqual(entity.artifact_refs, ['card-1']);
+});
+
+test('G1 boundary requests carry the exact immutable command schema version with no model override channel', () => {
+  const briefId = 'brief-111111111111111111111111';
+  const g1Payloads = {
+    'generation.quote': { project_id: context.project_id, brief_id: briefId, mode: 'image', prompt: '猫' },
+    'generation.submit': {
+      project_id: context.project_id, brief_id: briefId, mode: 'image', prompt: '猫',
+      quote_id: `g1q-${'a'.repeat(24)}`, quote_fingerprint: 'f'.repeat(64), estimated_max_cost_cny: 0.3,
+    },
+    'generation.status': { project_id: context.project_id, job_id: `g1j-${'b'.repeat(24)}` },
+    'generation.artifact': { project_id: context.project_id, job_id: `g1j-${'b'.repeat(24)}`, artifact_id: `g1x-${'c'.repeat(24)}` },
+  };
+  const expectedActions = { 'generation.quote': 'quote', 'generation.submit': 'approve_submit', 'generation.status': 'status', 'generation.artifact': 'artifact' };
+  for (const [operation, payload] of Object.entries(g1Payloads)) {
+    const extra = operation === 'generation.submit' ? { expected_revision: 1 } : {};
+    const checked = validateToolCall(call(operation, payload, extra), context);
+    assert.equal(checked.ok, true, `${operation} 必须通过校验`);
+    const boundary = toBoundaryRequest(checked.value);
+    assert.equal(boundary.endpoint, 'g1-generation-command');
+    assert.equal(boundary.body.schema_version, 'g1_generation_command_v1', `${operation} 必须携带精确 G1 命令版本`);
+    assert.equal(boundary.body.schema_version, G1_COMMAND_SCHEMA_VERSION, '版本必须来自网关固定常量');
+    assert.equal(boundary.body.action, expectedActions[operation]);
+    assert.match(boundary.body.idempotency_key, /^h-[0-9a-f]{64}$/);
+    assert.equal(TOOL_DEFINITIONS[operation].fields.includes('schema_version'), false, 'payload 字段清单绝不含 schema_version');
+    const payloadOverride = validateToolCall(call(operation, { ...payload, schema_version: 'g1_generation_command_v1' }), context);
+    assert.equal(payloadOverride.code, 'UNKNOWN_PAYLOAD_FIELD', `${operation} 载荷内携带 schema_version 必须 fail closed`);
+    assert.equal(payloadOverride.diagnostics.field, 'schema_version');
+    const envelopeOverride = validateToolCall({ ...call(operation, payload, extra), schema_version: 'g1_generation_command_v1' }, context);
+    assert.equal(envelopeOverride.code, 'SCHEMA_VERSION_MISMATCH', '信封 schema_version 必须是 ams_harness_tool_v1，绝不接受 G1 命令版本');
+  }
 });
 
 test('tool results are bounded and never trust caller task or operation identities', () => {

@@ -36,7 +36,7 @@ import {
 } from '../../src/services/p19-contracts.js';
 import { validateToolCall } from './tool-contract.mjs';
 import { validatePlanShape } from './planner.mjs';
-import { APPROVAL_SCOPES, COMPARE_METRIC_LABELS, MAX_FAN_OUT } from './workflow-catalog.mjs';
+import { APPROVAL_SCOPES, BRIEF_ID_PATTERN, CARD_ID_PATTERN, COMPARE_METRIC_LABELS, G1_JOB_ID_PATTERN, MAX_FAN_OUT } from './workflow-catalog.mjs';
 
 export const STEP_STATE_PLANNED = 'planned';
 export const STEP_STATE_RUNNING = 'running';
@@ -71,6 +71,12 @@ export const STEP_LABELS = Object.freeze({
   skipped: '已跳过',
 });
 
+// Fail-closed identity diagnostics for canonical Brief identity derivation:
+// a stable code plus the accurate field/index of the offending input — never
+// the raw value. No Brief ID is ever derived from an invalid or partial set.
+export const BRIEF_PROJECT_IDENTITY_INVALID = 'BRIEF_PROJECT_IDENTITY_INVALID';
+export const BRIEF_CARD_IDENTITY_INVALID = 'BRIEF_CARD_IDENTITY_INVALID';
+
 function bounded(value, limit) {
   return String(value ?? '').slice(0, limit);
 }
@@ -79,12 +85,157 @@ function sha256Hex(text) {
   return createHash('sha256').update(String(text), 'utf8').digest('hex');
 }
 
+const PROJECT_ID_PATTERN = /^prj-[0-9a-f]{24}$/;
+
+/**
+ * Deterministic replacement Brief identity: brief-<24 位小写十六进制> derived
+ * from the exact project plus the COMPLETE Knowledge Card identity set. Every
+ * input is validated against the exact identity contracts BEFORE any
+ * derivation — an invalid project binding, a non-array identity set, or any
+ * empty/malformed/non-canonical card identity fails closed with a bounded
+ * identity error (BRIEF_PROJECT_IDENTITY_INVALID / BRIEF_CARD_IDENTITY_INVALID,
+ * accurate field plus the first offending index, never the raw value) and NO
+ * Brief ID is generated from a filtered or partial set. Only the complete
+ * validated set — deduplicated and deterministically sorted — participates in
+ * the stable derivation: the same project/card set always yields the same
+ * identity; a changed card set or project never collides. This only ever
+ * derives a FRESH identity — already-canonical Brief versioning and reuse are
+ * unaffected.
+ */
+export function deriveCanonicalBriefId(projectId, cardIds) {
+  if (typeof projectId !== 'string' || !PROJECT_ID_PATTERN.test(projectId)) {
+    throw boundedError(BRIEF_PROJECT_IDENTITY_INVALID, '项目身份必须是精确的 prj-<24 位小写十六进制>：已拒绝派生 Brief 身份。', { field: 'project_id' });
+  }
+  if (!Array.isArray(cardIds)) {
+    throw boundedError(BRIEF_CARD_IDENTITY_INVALID, '知识卡身份集合必须是数组：已拒绝派生 Brief 身份。', { field: 'knowledge_cards' });
+  }
+  const canonicalCards = [];
+  for (let index = 0; index < cardIds.length; index += 1) {
+    const id = String(cardIds[index] ?? '');
+    if (!CARD_ID_PATTERN.test(id)) {
+      throw boundedError(BRIEF_CARD_IDENTITY_INVALID, '知识卡身份必须是精确的 kc-<24 位小写十六进制>：已拒绝派生 Brief 身份。', { field: 'knowledge_card_id', index });
+    }
+    canonicalCards.push(id);
+  }
+  return `brief-${sha256Hex(`${projectId}\0${[...new Set(canonicalCards)].sort().join('\0')}`).slice(0, 24)}`;
+}
+
+/**
+ * Complete, project-bound Knowledge Card identity set for Brief reuse and
+ * derivation. Every card must carry an exact canonical kc-<24 位小写十六进制>
+ * identity bound to the exact project; an empty/malformed/non-canonical or
+ * mis-bound card identity fails closed with BRIEF_CARD_IDENTITY_INVALID before
+ * any reuse or derivation — an illegal card is never silently filtered and
+ * never participates in a Brief identity.
+ */
+function validatedCardIds(cards, projectId) {
+  if (!Array.isArray(cards)) {
+    throw boundedError(BRIEF_CARD_IDENTITY_INVALID, '知识卡集合必须是数组：已拒绝生成 Brief。', { field: 'knowledge_cards' });
+  }
+  const output = [];
+  for (let index = 0; index < cards.length; index += 1) {
+    const card = cards[index];
+    const id = String(card?.id ?? '');
+    if (!CARD_ID_PATTERN.test(id)) {
+      throw boundedError(BRIEF_CARD_IDENTITY_INVALID, '知识卡身份必须是精确的 kc-<24 位小写十六进制>：已拒绝生成 Brief。', { field: 'knowledge_card_id', index });
+    }
+    if (card?.project_id !== projectId) {
+      throw boundedError(BRIEF_CARD_IDENTITY_INVALID, '知识卡身份与当前项目错绑：已拒绝生成 Brief。', { field: 'knowledge_card_id', index });
+    }
+    output.push(id);
+  }
+  return output;
+}
+
 function boundedError(code, message, diagnostics = {}) {
   return Object.assign(new Error(String(message).slice(0, 240)), { code: String(code).slice(0, 80), diagnostics });
 }
 
 function plainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// ---------------------------------------------------------------------------
+// G1 asynchronous job state. An accepted generation.submit is non-terminal:
+// the outer deterministic result must follow the real asynchronous G1 job
+// state through exact read-only generation.status reads (never a
+// resubmission), so a queued/running job is pending and a terminal
+// failed/needs_attention job fails the outer task instead of completing it.
+// ---------------------------------------------------------------------------
+
+const G1_JOB_STATUSES = new Set(['queued', 'running', 'completed', 'failed', 'needs_attention']);
+
+/** 规范化 G1 作业状态；未知/畸形状态返回 null（fail-closed 为非终态处理）。 */
+function g1JobStatus(job) {
+  if (!plainObject(job)) return null;
+  const status = typeof job.status === 'string' ? job.status : '';
+  return G1_JOB_STATUSES.has(status) ? status : null;
+}
+
+/** 有界作业诊断视图：仅保留有界 code/issues/provider_code/provider_message。 */
+function boundedG1JobDiagnostics(job) {
+  const source = plainObject(job?.diagnostics) ? job.diagnostics : {};
+  const issues = Array.isArray(source.issues)
+    ? source.issues.filter((entry) => typeof entry === 'string').slice(0, 3).map((entry) => String(entry).slice(0, 240))
+    : [];
+  const code = typeof source.code === 'string' ? source.code.slice(0, 80) : '';
+  const providerCode = typeof source.provider_code === 'string' ? source.provider_code.slice(0, 80) : '';
+  const providerMessage = typeof source.provider_message === 'string' ? source.provider_message.slice(0, 240) : '';
+  const message = issues[0] || (providerCode ? `${providerCode}${providerMessage ? ` — ${providerMessage}` : ''}` : '');
+  return { code, provider_code: providerCode, provider_message: providerMessage, issues, message };
+}
+
+/** 终态 G1 失败 → 外层任务的精确失败（绝不 completed）。 */
+function g1TerminalFailure(job) {
+  const diagnostics = boundedG1JobDiagnostics(job);
+  const needsAttention = g1JobStatus(job) === 'needs_attention';
+  const code = diagnostics.code || (needsAttention ? 'G1_JOB_NEEDS_ATTENTION' : 'G1_JOB_FAILED');
+  const message = diagnostics.message
+    || (needsAttention ? '生成作业需要人工关注（作业已进入 needs_attention）。' : '生成作业已失败。');
+  return { code, message, needs_attention: needsAttention };
+}
+
+/** 有界生成状态视图（随 result_data 持久化，供页面呈现准确的作业状态）。 */
+function boundedGenerationStatusView(job) {
+  const status = g1JobStatus(job);
+  if (!status) return null;
+  const diagnostics = boundedG1JobDiagnostics(job);
+  return {
+    job_id: typeof job.id === 'string' ? job.id.slice(0, 40) : null,
+    status,
+    mode: typeof job.mode === 'string' ? job.mode.slice(0, 20) : null,
+    model_name: typeof job.model_name === 'string' ? job.model_name.slice(0, 80) : null,
+    diagnostic_code: diagnostics.code || null,
+    diagnostic_issues: diagnostics.issues.slice(0, 3),
+  };
+}
+
+/**
+ * 刷新回合遇到终态 G1 失败时的步骤快照：保留已接受提交步骤的记录形状，
+ * 标记失败并携带精确有界终态诊断——外层任务聚合为 failed（绝不
+ * completed、绝不 partial）。
+ */
+function terminalGenerationFailureSnapshot(step, prior, terminal, jobId, jobStatus, finishedAt) {
+  return stepSnapshot(step, {
+    state: STEP_STATE_FAILED,
+    item_count: Number(prior.item_count) || 0,
+    reused_count: Number(prior.reused_count) || 0,
+    executed_count: Number(prior.executed_count) || 0,
+    failed_count: Math.max(1, Number(prior.failed_count) || 1),
+    refs: Array.isArray(prior.refs) ? prior.refs : [],
+    ...(Array.isArray(prior.completed_items) ? { completed_items: prior.completed_items } : {}),
+    resume_output: prior.resume_output || null,
+    ...(jobStatus ? { job_status: jobStatus } : {}),
+    finished_at: finishedAt,
+    error: {
+      code: String(terminal.code).slice(0, 80),
+      operation: bounded(step.operation, 80),
+      message: String(terminal.message).slice(0, 240),
+      ...(jobId ? { job_id: bounded(jobId, 200) } : {}),
+      g1_terminal: true,
+      g1_needs_attention: terminal.needs_attention === true,
+    },
+  });
 }
 
 function evidenceFromItem(value) {
@@ -321,7 +472,7 @@ function deriveCardRecord({ evidence, analysis }) {
   const mediaAnalysis = Array.isArray(result.media_analysis) ? result.media_analysis : [];
   return {
     schema_version: KNOWLEDGE_CARD_SCHEMA_VERSION,
-    id: `card-${sha256Hex(`${analysis.id}\0${analysis.fingerprint}`).slice(0, 24)}`,
+    id: `kc-${sha256Hex(`${analysis.id}\0${analysis.fingerprint}`).slice(0, 24)}`,
     project_id: evidence.project_id,
     evidence_id: evidence.id,
     analysis_id: analysis.id,
@@ -387,10 +538,22 @@ function deriveCardRecord({ evidence, analysis }) {
 }
 
 function deriveBriefRecord({ plan, project, cards, analyses, existing }) {
-  const citationIds = [...new Set(cards.map((card) => card.id))];
+  // Complete validated set: every cited card must be an exact canonical
+  // identity bound to this exact project (an illegal or mis-bound card fails
+  // closed in validatedCardIds before any Brief identity is derived or written).
+  const citationIds = [...new Set(validatedCardIds(cards, plan.project_id))];
   const analysisIds = [...new Set(analyses.map((analysis) => analysis.id))];
-  const version = existing ? Number(existing.version || 1) + 1 : 1;
-  const id = existing?.id || `brief-${sha256Hex(plan.project_id).slice(0, 24)}`;
+  // Canonical identity contract: a Brief ID is reused only when it exactly
+  // satisfies brief-<24 位小写十六进制>. A historical non-canonical identity
+  // (e.g. a 25-character legacy suffix) is never truncated, overwritten or
+  // mutated — the new version derives the deterministic canonical identity
+  // from the exact project plus the complete sorted Knowledge Card identity
+  // set (deriveCanonicalBriefId) and starts a fresh version lineage, while the
+  // historical record stays untouched. Already-canonical Brief versioning and
+  // reuse remain unchanged.
+  const canonicalExisting = existing && BRIEF_ID_PATTERN.test(String(existing.id || '')) ? existing : null;
+  const version = canonicalExisting ? Number(canonicalExisting.version || 1) + 1 : 1;
+  const id = canonicalExisting?.id || deriveCanonicalBriefId(plan.project_id, citationIds);
   const topic = bounded(project?.topic, 5000) || 'AI 营销内容策划';
   const objective = bounded(project?.objective, 5000) || '基于已保存公开来源生成可复用内容规律。';
   const constraints = Array.isArray(project?.constraints) ? project.constraints.map((entry) => bounded(entry, 5000)) : ['不虚构事实', '不抄袭原文'];
@@ -584,6 +747,12 @@ function exactBriefReuse(briefs, projectId, citationIds) {
   const sorted = [...candidates].sort((left, right) => Number(right.version || 0) - Number(left.version || 0));
   const latest = sorted[0];
   if (!latest) return { reused: false };
+  // Canonical identity contract: only an exactly canonical brief-<24 位
+  // 十六进制> identity is ever a reuse target. A historical non-canonical
+  // Brief (e.g. a 25-character legacy suffix) is preserved untouched but can
+  // never satisfy a reuse — assembly always supersedes it with a fresh
+  // deterministic canonical identity so a later G1 quote binds exactly.
+  if (!BRIEF_ID_PATTERN.test(String(latest.id || ''))) return { reused: false, existing: latest };
   const cited = new Set(Array.isArray(latest.knowledge_citation_ids) ? latest.knowledge_citation_ids : []);
   const sameSet = cited.size === citationIds.length && citationIds.every((id) => cited.has(id));
   if (sameSet) {
@@ -843,6 +1012,10 @@ export async function executeConfirmedPlan({
         });
       case 'research.analyze_persisted':
         return derived.analysis_results ? boundedResumeOutput({ analysis_results: derived.analysis_results }) : null;
+      case 'generation.submit':
+        return derived.quote || derived.job
+          ? boundedResumeOutput({ quote: derived.quote, job: derived.job })
+          : null;
       default:
         return null;
     }
@@ -856,6 +1029,7 @@ export async function executeConfirmedPlan({
       'research.search_x': ['search_items', 'search_x_items'],
       'research.search_reddit': ['search_items', 'search_reddit_items', 'combined_items'],
       'research.analyze_persisted': ['analysis_results'],
+      'generation.submit': ['quote', 'job'],
     }[step.operation] || [];
     for (const key of allowed) {
       if (resume[key] !== undefined) derived[key] = structuredClone(resume[key]);
@@ -926,6 +1100,21 @@ export async function executeConfirmedPlan({
       case 'workspace.evidence.create': {
         const entity = result?.entity;
         if (entity && entity.type === 'evidence' && entity.id) derived.created_evidence_id = entity.id;
+        break;
+      }
+      case 'generation.quote': {
+        const quote = result?.data?.quote || result?.quote || null;
+        if (quote && plainObject(quote)) derived.quote = quote;
+        break;
+      }
+      case 'generation.submit': {
+        const job = result?.data?.job || result?.job || null;
+        if (job && plainObject(job)) derived.job = job;
+        break;
+      }
+      case 'generation.status': {
+        const job = result?.data?.job || result?.job || null;
+        if (job && plainObject(job)) derived.job = job;
         break;
       }
       default:
@@ -1024,7 +1213,12 @@ export async function executeConfirmedPlan({
         };
       case 'workspace.brief.assemble':
         return () => {
-          const existing = derived.project?.brief || null;
+          const historical = derived.project?.brief || null;
+          // 规范身份契约：仅当历史 Brief 身份恰好符合 brief-<24 位小写十六
+          // 进制>时才沿用其身份与同实体指纹基线；非规范历史身份保持原样
+          // （绝不改写/删除），新 Brief 写入由当前项目派生的确定性规范身份，
+          // 无同实体基线（expected_fingerprint 为 null）。
+          const existing = historical && BRIEF_ID_PATTERN.test(String(historical.id || '')) ? historical : null;
           const record = deriveBriefRecord({
             plan,
             project: derived.project,
@@ -1040,6 +1234,47 @@ export async function executeConfirmedPlan({
           const existing = (derived.project?.handoffs || []).find((entry) => entry.id === record.id && entry.version === record.version) || null;
           return p19WritePayload(plan, ctx, { handoff: record }, { withFingerprint: true, expectedFingerprint: existing?.fingerprint || null });
         };
+      case 'generation.quote':
+        return () => {
+          const payload = {
+            project_id: plan.project_id,
+            brief_id: plan.slots.brief_id,
+            mode: plan.slots.mode,
+            prompt: plan.slots.prompt,
+          };
+          for (const field of ['negative_prompt', 'aspect_ratio', 'duration_seconds', 'resolution', 'reference_asset_id']) {
+            if (plan.slots[field] != null) payload[field] = plan.slots[field];
+          }
+          return payload;
+        };
+      case 'generation.submit':
+        return () => {
+          const quote = derived.quote;
+          if (!plainObject(quote) || !quote.quote_id || !quote.quote_fingerprint) {
+            throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '付费提交缺少 quote 步骤的精确绑定：未发起任何业务调用。');
+          }
+          if (!ctx.revision || !Number.isSafeInteger(ctx.revision)) {
+            throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '付费提交缺少可信的项目修订号：未发起任何业务调用。');
+          }
+          const payload = {
+            project_id: plan.project_id,
+            brief_id: plan.slots.brief_id,
+            mode: plan.slots.mode,
+            prompt: plan.slots.prompt,
+            quote_id: quote.quote_id,
+            quote_fingerprint: quote.quote_fingerprint,
+            estimated_max_cost_cny: Number(quote.estimated_max_cost_cny) || Number(quote.price_cny_max) || null,
+            expected_revision: ctx.revision,
+          };
+          for (const field of ['negative_prompt', 'aspect_ratio', 'duration_seconds', 'resolution', 'reference_asset_id']) {
+            if (plan.slots[field] != null) payload[field] = plan.slots[field];
+          }
+          return payload;
+        };
+      case 'generation.status':
+        return () => ({ project_id: plan.project_id, job_id: plan.slots.job_id });
+      case 'generation.artifact':
+        return () => ({ project_id: plan.project_id, job_id: plan.slots.job_id, artifact_id: plan.slots.artifact_id });
       default:
         throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `计划引用了未实现的确定性调用 ${step.operation}：未发起任何业务调用。`);
     }
@@ -1073,7 +1308,10 @@ export async function executeConfirmedPlan({
         return exactCardReuse(project?.knowledge_cards, plan.project_id, analysis.id, analysis.fingerprint);
       }
       case 'brief': {
-        const citationIds = [...new Set((project?.knowledge_cards || []).map((card) => card.id))];
+        // An illegal or mis-bound card identity fails closed here — before any
+        // reuse verdict or write — so a broken card set can never silently
+        // reuse an existing Brief or derive a colliding identity.
+        const citationIds = [...new Set(validatedCardIds(project?.knowledge_cards || [], plan.project_id))];
         const verdict = exactBriefReuse(project?.brief ? [project.brief] : [], plan.project_id, citationIds);
         if (!verdict.reused && verdict.existing) derived.existing_brief = verdict.existing;
         return verdict;
@@ -1101,6 +1339,33 @@ export async function executeConfirmedPlan({
         operation: bounded(result?.diagnostics?.operation || step.operation, 80),
         ...(result?.diagnostics?.field ? { field: bounded(result.diagnostics.field, 80) } : {}),
         retry_unsafe: ambiguous === true,
+      });
+    }
+    return result;
+  };
+
+  // Exact read-only generation.status read for the submitted job. Zero
+  // approval, zero cost, zero writes — it can never resubmit the paid job or
+  // cause a provider call; the canonical external call crosses the same tool
+  // client/bridge boundary as every other operation.
+  const invokeGenerationStatus = async (step, jobId) => {
+    if (signal?.aborted) throw Object.assign(new Error('Task cancelled.'), { code: 'CANCELLED' });
+    const call = {
+      schema_version: 'ams_harness_tool_v1',
+      operation: 'generation.status',
+      payload: { project_id: plan.project_id, job_id: jobId },
+      idempotency_key: `d-${sha256Hex(`${taskView.id}\0${plan.fingerprint}\0generation-status\0${jobId}`).slice(0, 32)}`,
+    };
+    const checked = validateToolCall(call, trustedContext);
+    if (!checked.ok) {
+      throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', `内部调用校验失败（${checked.code}）：未发起任何业务调用。`);
+    }
+    const result = await toolClient(call, trustedContext, signal);
+    if (!result || result.ok !== true) {
+      throw boundedError(String(result?.code || 'BOUNDARY_FAILED'), result?.diagnostics?.issues?.[0] || `边界拒绝了操作：${result?.code || 'BOUNDARY_FAILED'}。`, {
+        step: step.step,
+        operation: 'generation.status',
+        ...(result?.diagnostics?.field ? { field: bounded(result.diagnostics.field, 80) } : {}),
       });
     }
     return result;
@@ -1143,6 +1408,57 @@ export async function executeConfirmedPlan({
     }
     if (!isRetryTarget && dependencyBlocked) {
       recordStep(step, { state: STEP_STATE_SKIPPED, item_count: 0 });
+      continue;
+    }
+    // Refresh/reopen of an accepted asynchronous generation.submit: the paid
+    // submit is never repeated — the recorded job is re-checked through an
+    // exact read-only generation.status read so the outer task follows the
+    // real asynchronous G1 job state (running → completed/failed/
+    // needs_attention).
+    if (!isRetryTarget && step.operation === 'generation.submit' && SUCCESS_STEP_STATES.has(previous)) {
+      const prior = stepStates[step.step];
+      hydrateFromResumeOutput(step, prior);
+      const job = derived.job;
+      const recordedStatus = prior.job_status;
+      const jobId = plainObject(job) && typeof job.id === 'string' && G1_JOB_ID_PATTERN.test(job.id) ? job.id : null;
+      if (jobId && (recordedStatus === 'queued' || recordedStatus === 'running')) {
+        let status = recordedStatus;
+        let refreshed = null;
+        try {
+          refreshed = await invokeGenerationStatus(step, jobId);
+          const nextJob = refreshed?.data?.job || refreshed?.job || null;
+          if (plainObject(nextJob)) derived.job = nextJob;
+          const nextStatus = g1JobStatus(derived.job);
+          if (nextStatus) status = nextStatus;
+        } catch (statusError) {
+          if (statusError?.code === 'CANCELLED') throw statusError;
+          // A transient status-read failure must neither resubmit nor falsely
+          // complete the task: keep the recorded non-terminal state and
+          // surface the bounded read error for the next refresh.
+          recordStep(step, {
+            ...prior,
+            job_status: recordedStatus,
+            status_read_error: {
+              code: String(statusError?.code || 'BOUNDARY_FAILED').slice(0, 80),
+              message: String(statusError?.message || '生成状态读取失败。').slice(0, 240),
+            },
+            updated_at: now(),
+          });
+          continue;
+        }
+        if (status === 'failed' || status === 'needs_attention') {
+          // Terminal G1 failure: the outer task must be accurately failed/
+          // needs-attention rather than completed. Recorded here (not thrown)
+          // because the refresh branch runs before the step try/catch.
+          const terminal = g1TerminalFailure(derived.job);
+          recordStep(step, terminalGenerationFailureSnapshot(step, prior, terminal, jobId, g1JobStatus(derived.job), now()));
+          continue;
+        }
+        const refs = [...new Set([...(Array.isArray(prior.refs) ? prior.refs : []), ...(Array.isArray(refreshed?.artifact_refs) ? refreshed.artifact_refs : [])])].slice(0, 50);
+        recordStep(step, { ...prior, job_status: status, refs, status_read_error: null, updated_at: now() });
+      } else {
+        recordStep(step, { ...prior, updated_at: prior.updated_at });
+      }
       continue;
     }
     if (!isRetryTarget && SUCCESS_STEP_STATES.has(previous)) {
@@ -1277,6 +1593,44 @@ export async function executeConfirmedPlan({
         const result = await runOneCall(step, itemIndex, payloadBuilderFor(step, item));
         outcomes.push({ reused: false, result });
         captureDerived(step, result, item);
+        if (step.operation === 'generation.submit') {
+          // An accepted asynchronous submit means queued/running — never
+          // completed. While the job is non-terminal, one exact read-only
+          // generation.status read per execution round refreshes the real
+          // state (zero approval, zero cost, never a resubmission); a
+          // terminal failed/needs_attention job fails the outer task with
+          // bounded diagnostics instead of completing it.
+          const submitted = derived.job;
+          let status = g1JobStatus(submitted);
+          const jobId = plainObject(submitted) && typeof submitted.id === 'string' && G1_JOB_ID_PATTERN.test(submitted.id) ? submitted.id : null;
+          if (jobId && (status === 'queued' || status === 'running')) {
+            try {
+              const refreshed = await invokeGenerationStatus(step, jobId);
+              const job = refreshed?.data?.job || refreshed?.job || null;
+              if (plainObject(job)) derived.job = job;
+              const nextStatus = g1JobStatus(derived.job);
+              if (nextStatus) status = nextStatus;
+            } catch (statusError) {
+              if (statusError?.code === 'CANCELLED') throw statusError;
+              ctx.generationStatusReadError = {
+                code: String(statusError?.code || 'BOUNDARY_FAILED').slice(0, 80),
+                message: String(statusError?.message || '生成状态读取失败。').slice(0, 240),
+              };
+            }
+          }
+          if (status === 'failed' || status === 'needs_attention') {
+            const terminal = g1TerminalFailure(derived.job);
+            throw boundedError(terminal.code, terminal.message, {
+              step: step.step,
+              operation: step.operation,
+              ...(jobId ? { job_id: jobId } : {}),
+              g1_terminal: true,
+              g1_needs_attention: terminal.needs_attention === true,
+            });
+          }
+          ctx.generationJobId = jobId;
+          ctx.generationJobStatus = status || 'running';
+        }
         const isTerminal = !plan.steps.some((candidate) => candidate.depends_on.includes(step.step));
         if (isTerminal && step.write !== true) {
           const value = boundedTerminalResult(result.data || result);
@@ -1315,6 +1669,11 @@ export async function executeConfirmedPlan({
         refs: [...new Set(refs)].slice(0, 50),
         completed_items: stepProgress.completed_items.slice(0, MAX_FAN_OUT),
         ...(resumeOutput ? { resume_output: resumeOutput } : {}),
+        ...(step.operation === 'generation.submit' && ctx.generationJobStatus ? {
+          job_status: ctx.generationJobStatus,
+          ...(ctx.generationJobId ? { job_id: ctx.generationJobId } : {}),
+          ...(ctx.generationStatusReadError ? { status_read_error: ctx.generationStatusReadError } : {}),
+        } : {}),
         finished_at: now(),
       });
       if (plan.project_id && step.write !== true && (step.key === 'collect' || step.key === 'analyze' || step.key === 'make_card' || step.key === 'assemble_brief')) {
@@ -1343,12 +1702,16 @@ export async function executeConfirmedPlan({
         refs: completedRefs,
         ...(stepProgress ? { completed_items: stepProgress.completed_items.slice(0, MAX_FAN_OUT) } : {}),
         ...(resumeOutput ? { resume_output: resumeOutput } : {}),
+        ...(step.operation === 'generation.submit' && g1JobStatus(derived.job) ? { job_status: g1JobStatus(derived.job) } : {}),
         finished_at: now(),
         error: {
           code: String(error?.code || 'HARNESS_FAILED').slice(0, 80),
           operation: bounded(error?.diagnostics?.operation || step.operation, 80),
           message: String(error?.message || '步骤执行失败。').slice(0, 240),
           ...(error?.diagnostics?.field ? { field: bounded(error.diagnostics.field, 80) } : {}),
+          ...(error?.diagnostics?.job_id ? { job_id: bounded(error.diagnostics.job_id, 200) } : {}),
+          ...(error?.diagnostics?.g1_terminal === true ? { g1_terminal: true } : {}),
+          ...(error?.diagnostics?.g1_needs_attention === true ? { g1_needs_attention: true } : {}),
           retry_unsafe: error?.diagnostics?.retry_unsafe === true || error?.code === 'INTERNAL_PLAN_VALIDATION_ERROR',
         },
       });
@@ -1386,9 +1749,32 @@ export async function executeConfirmedPlan({
     const code = stepStates[entry.step]?.error?.code;
     return code === 'INTERNAL_PLAN_VALIDATION_ERROR' || code === 'REUSE_AMBIGUOUS';
   });
+  // Bounded task-state contract: the outer outcome is `partial` only when
+  // genuinely successful independent deliverables coexist with a failed
+  // required action. A prerequisite read (read_state) is never a deliverable —
+  // e.g. a definitive quote rejection that blocks submit produces no
+  // deliverable at all and must be `failed`. The existing contract keeps two
+  // read-only-before-failure shapes partial: an ambiguous paid failure
+  // (outcome unknowable, retry_unsafe) and a zero-call empty fan-out failure.
+  const stepByKey = new Map(plan.steps.map((step) => [step.step, step]));
+  const stepError = (entry) => stepStates[entry.step]?.error || {};
+  const hasGenuineDeliverable = succeeded.some((entry) => stepByKey.get(entry.step)?.kind !== 'read_state');
+  const hasAmbiguousFailure = failed.some((entry) => stepError(entry).retry_unsafe === true);
+  const hasEmptyFanOutFailure = failed.some((entry) => stepError(entry).code === 'FAN_OUT_SOURCE_EMPTY');
+  const independentProgress = hasGenuineDeliverable || hasAmbiguousFailure || hasEmptyFanOutFailure;
+  // A terminal G1 failure (failed/needs_attention) is never a partial success
+  // and never a completion — the outer task must be accurately failed.
+  const hasTerminalGenerationFailure = failed.some((entry) => stepError(entry).g1_terminal === true);
+  // An accepted submit whose recorded job is still queued/running is
+  // non-terminal pending/running state, not a completion.
+  const generationPending = plan.steps.some((step) => {
+    if (step.operation !== 'generation.submit') return false;
+    const snapshot = stepStates[step.step] || {};
+    return snapshot.state === STEP_STATE_SUCCEEDED && (snapshot.job_status === 'queued' || snapshot.job_status === 'running');
+  });
   const outcome = failed.length > 0
-    ? (succeeded.length > 0 && !validationFailure ? 'partial' : 'failed')
-    : 'succeeded';
+    ? (hasTerminalGenerationFailure || validationFailure || !(succeeded.length > 0 && independentProgress) ? 'failed' : 'partial')
+    : (generationPending ? 'running' : 'succeeded');
   const refs = [...new Set(plan.steps.flatMap((step) => stepStates[step.step]?.refs || []))].slice(0, 50);
   const response = {
     outcome,
@@ -1396,6 +1782,12 @@ export async function executeConfirmedPlan({
     artifact_refs: refs,
     partial_completion: outcome === 'partial',
   };
+  if (failed.some((entry) => stepError(entry).g1_needs_attention === true)) response.needs_attention = true;
+  if (generationPending) {
+    response.final_response = `生成作业已提交并正在执行（尚未完成，刷新可恢复最新状态）。\n${response.final_response}`;
+  } else if (response.needs_attention === true) {
+    response.final_response = `生成作业需要人工关注（详见作业诊断）。\n${response.final_response}`;
+  }
   if (plan.workflow === 'search_x_reddit' && Number(plan.slots.save_count) === 0) {
     const combined = boundedTerminalResult({ items: derived.combined_items || [] });
     if (combined) derived.terminal_results = { search_x_reddit: combined };
@@ -1413,6 +1805,13 @@ export async function executeConfirmedPlan({
       comparison: ctx.comparison,
     }));
     if (compare) derived.terminal_results = { ...(derived.terminal_results || {}), compare };
+  }
+  // A bounded generation status view follows the real asynchronous job state
+  // (queued/running/completed/failed/needs_attention) into the persisted
+  // terminal result so the page shows the accurate state after refresh.
+  if (plan.workflow === 'generate_media' && plainObject(derived.job)) {
+    const statusView = boundedGenerationStatusView(derived.job);
+    if (statusView) derived.terminal_results = { ...(derived.terminal_results || {}), generation_status: statusView };
   }
   if (plainObject(derived.terminal_results) && Object.keys(derived.terminal_results).length > 0) {
     response.result_data = boundedTerminalResult(derived.terminal_results);

@@ -12,7 +12,7 @@
 // step graph.
 import { createHash } from 'node:crypto';
 import { identifyPublicPostUrl } from '../../supabase/functions/p22-research-assist/assist-core.mjs';
-import { APPROVAL_SCOPES, MAX_WORKFLOW_STEPS, lookupWorkflow } from './workflow-catalog.mjs';
+import { APPROVAL_SCOPES, BRIEF_ID_PATTERN, MAX_WORKFLOW_STEPS, lookupWorkflow } from './workflow-catalog.mjs';
 
 export const PLAN_SCHEMA_VERSION = 'ams_harness_plan_v1';
 export const PLAN_VERSION = 2;
@@ -35,7 +35,24 @@ const SAVE_COUNT_PATTERNS = [
 const IDENTITY_CLAIMS = [
   [/(ev-[0-9a-f]{24})/i, 'evidence_id'],
   [/(an-[0-9a-f]{24})/i, 'analysis_id'],
+  [/(brief-[0-9a-f]{24})/i, 'brief_id'],
+  [/(g1j-[0-9a-f]{24})/i, 'g1_job_id'],
+  [/(g1x-[0-9a-f]{24})/i, 'g1_artifact_id'],
+  [/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i, 'reference_asset_id'],
 ];
+
+// Brief identity full-token contract. EVERY token beginning with `brief-` —
+// including an empty suffix (`brief-`) or a suffix with no initial hexadecimal
+// character (`brief-zzz...`) — is recognized as a brief-like identity token.
+// The COMPLETE token is validated as ONE identity against the canonical
+// brief-<24 位小写十六进制> contract (BRIEF_ID_PATTERN): an empty suffix,
+// non-hex, uppercase, 25+-character suffix, a prefix collision, trailing
+// alphanumeric/separator text or any other malformed brief-like token fails
+// closed with a bounded diagnostic BEFORE any business tool call. A valid
+// 24-character prefix is never extracted from a longer token, and a malformed
+// token is never silently treated as an absent identity, so the G1 quote can
+// never bind a truncated or invented Brief identity.
+const BRIEF_TOKEN_PATTERN = /brief-[0-9a-zA-Z_-]*/g;
 
 const SEARCH_TRIGGERS = /搜索|搜一搜|热门|话题|查找|search\b|find\b|trending|hot topic/i;
 const X_TRIGGERS = /(?:^|[^a-z])\bx\b|twitter|推特|X 平台|X 帖子|x 帖子|x 内容/i;
@@ -46,6 +63,22 @@ const ANALYZE_TRIGGERS = /分析|多模态|analy[sz]e\b|analysis\b/i;
 const PERSIST_TRIGGERS = /保存|存档|持久化|persist\b|save\b|evidence\b|证据/i;
 const HANDOFF_TRIGGERS = /交接包|交接|handoff|hand[- ]?off/i;
 const COMPARE_TRIGGERS = /比较|对比|compare\b|best[- ]?performing|表现最好|表现最佳/i;
+// G1 生成执行层：图片/视频生成（付费，需双重批准）与只读状态/产物读取。
+const GENERATION_TRIGGERS = /生成图片|图片生成|生成图像|图像生成|生成配图|生成图|生成广告图|生成封面|生成视频|视频生成|生成素材|文生图|图生图|文生视频|图生视频|图转视频|以图生视频|image\b|video\b|t2v|i2v/i;
+// 图生视频（i2v）确定性触发词：显式图转视频词 + 指向既有图片/素材的中文短语
+// （用这张图/参考图片/参照图等）。i2v 在视频/图片之前判定，因此「用这张图生成
+// 视频」绝不降级为文生视频；缺引用素材身份时由计划构建 fail closed。
+const I2V_TRIGGERS = /图生视频|图转视频|以图生视频|i2v|参考图|参考素材|用这张图|用这张图片|用此图|用该图|以这张图|拿这张图|把这张图|参照图|参考这张图|根据图片|用图片/i;
+const VIDEO_TRIGGERS = /生成视频|视频生成|文生视频|视频素材|video\b|t2v/i;
+const IMAGE_TRIGGERS = /生成图片|图片生成|生成图像|图像生成|生成配图|生成图|生成广告图|生成封面|文生图|图生图|图片素材|image\b/i;
+const GENERATION_READ_TRIGGERS = /生成任务|任务状态|生成状态|生成进度|查看生成|查询生成|生成结果|生成产物|打开生成|生成作业/i;
+const QUOTE_ONLY_TRIGGERS = /只要报价|只报价|先报价|只看报价|仅报价|quote\s+only|只出报价/i;
+const ASPECT_RATIO_CLAIM = /(1:1|4:3|3:4|16:9|9:16|21:9)/i;
+const DURATION_CLAIM = /(\d{1,2})\s*秒/;
+const RESOLUTION_CLAIM = /(720p|1080p|720P|1080P)/i;
+// 引号提取覆盖成对中文/ASCII 引号（「」『』“”‘’""''）；只匹配成对出现。
+const PROMPT_QUOTED = /「([^「」]{1,2000})」|『([^『』]{1,2000})』|“([^“”]{1,2000})”|‘([^‘’]{1,2000})’|"([^"]{1,2000})"|'([^']{1,2000})'/;
+const PROMPT_AFTER_LABEL = /(?:提示词|prompt\b|画面)[：:]?\s*([^，。；;]{1,2000})/i;
 // Chinese highest-metric requests select the fixed compare_project metric
 // slot. 展现量/浏览量/播放量/曝光量 all use the canonical views metric
 // (they never get an invented number); 互动 uses the single documented
@@ -194,6 +227,35 @@ function extractCompareMetric(text) {
   return null;
 }
 
+/** 确定性生成模式提取：图生视频 > 视频 > 图片（绝不发明 mode）。 */
+function extractGenerationMode(text) {
+  if (I2V_TRIGGERS.test(text)) return 'video_i2v';
+  if (VIDEO_TRIGGERS.test(text)) return 'video_t2v';
+  if (IMAGE_TRIGGERS.test(text)) return 'image';
+  return null;
+}
+
+/** 剥离恰好成对包裹整个文本的最外层引号（「」『』“”‘’""''）；内部内容绝不动。 */
+function stripOuterQuotePair(text) {
+  for (const [open, close] of [['「', '」'], ['『', '』'], ['“', '”'], ['‘', '’'], ['"', '"'], ["'", "'"]]) {
+    if (text.length >= 2 && text.startsWith(open) && text.endsWith(close)) {
+      const inner = text.slice(open.length, text.length - close.length);
+      if (!inner.includes(open) && !inner.includes(close)) return inner;
+    }
+  }
+  return text;
+}
+
+/** 确定性 prompt 提取：只接受引号或「提示词/prompt/画面：」标签后的文本。 */
+function extractGenerationPrompt(text) {
+  const quoted = PROMPT_QUOTED.exec(text);
+  const quotedText = quoted ? quoted.slice(1).find((entry) => entry != null) : null;
+  if (quotedText) return quotedText.trim().slice(0, 2000);
+  const labeled = PROMPT_AFTER_LABEL.exec(text);
+  if (labeled && labeled[1]) return stripOuterQuotePair(labeled[1].trim()).slice(0, 2000);
+  return null;
+}
+
 function extractKeyword(intent) {
   let text = String(intent).replace(POST_URL_PATTERN, ' ').replace(/r\/[A-Za-z0-9_]{2,32}/gi, ' ').trim();
   const quoted = /["“]([^"”]{1,240})["”]/.exec(text);
@@ -212,6 +274,18 @@ function extractKeyword(intent) {
 export function classifyIntent(intent) {
   const text = String(intent ?? '').trim();
   if (!text || text.length > MAX_PLAN_INTENT) return fail('PLANNER_INTENT_INVALID');
+  // Brief identity full-token validation (fail closed before any claim or
+  // workflow selection): every brief-like token in the intent must be exactly
+  // canonical. The complete token is the identity — a 24-character prefix is
+  // never extracted from a longer or malformed token.
+  for (const entry of text.matchAll(BRIEF_TOKEN_PATTERN)) {
+    if (!BRIEF_ID_PATTERN.test(entry[0])) {
+      return fail('PLANNER_IDENTITY_INVALID', {
+        field: 'brief_id',
+        message: `Brief 身份必须是精确的 brief-<24 位小写十六进制>；"${entry[0].slice(0, 200)}" 不符合规范，已拒绝。`,
+      });
+    }
+  }
   const urlMatch = POST_URL_PATTERN.exec(text);
   const claims = {};
   for (const [pattern, key] of IDENTITY_CLAIMS) {
@@ -259,6 +333,38 @@ export function classifyIntent(intent) {
       return { ok: true, value: { workflow: 'search_reddit', slots } };
     }
     return { ok: true, value: { workflow: 'search_x', slots: { keyword, count, save_count: saveCount } } };
+  }
+  // G1 生成执行层（在 URL/搜索之后、比较之前判定；付费生成必须显式批准）。
+  // 只读读取优先：意图含生成任务/状态/产物且（带 g1j- 作业身份，或未混入
+  // 图片/视频生成词）→ read_generation；否则生成意图 → generate_media。
+  if (GENERATION_READ_TRIGGERS.test(text)
+    && (claims.g1_job_id != null || !GENERATION_TRIGGERS.test(text))) {
+    return {
+      ok: true,
+      value: {
+        workflow: 'read_generation',
+        slots: {
+          job_id: claims.g1_job_id ?? null,
+          artifact_id: claims.g1_artifact_id ?? null,
+        },
+      },
+    };
+  }
+  if (GENERATION_TRIGGERS.test(text)) {
+    const slots = {
+      brief_id: claims.brief_id ?? null,
+      mode: extractGenerationMode(text),
+      prompt: extractGenerationPrompt(text),
+      submit_generation: !QUOTE_ONLY_TRIGGERS.test(text),
+    };
+    if (claims.reference_asset_id != null) slots.reference_asset_id = claims.reference_asset_id;
+    const aspect = ASPECT_RATIO_CLAIM.exec(text);
+    if (aspect) slots.aspect_ratio = aspect[1];
+    const duration = DURATION_CLAIM.exec(text);
+    if (duration) slots.duration_seconds = Number(duration[1]);
+    const resolution = RESOLUTION_CLAIM.exec(text);
+    if (resolution) slots.resolution = resolution[1].toLowerCase();
+    return { ok: true, value: { workflow: 'generate_media', slots } };
   }
   const metric = extractCompareMetric(text);
   if (COMPARE_TRIGGERS.test(text) || metric) {
@@ -320,6 +426,26 @@ export function derivePlanSteps(workflow, slots) {
 }
 
 /**
+ * G1 图生视频前置校验：video_i2v 必须绑定精确的已批准引用素材身份。该校验先
+ * 于任何无关必填字段（如 brief_id）——校验顺序即用户可诊断顺序；缺失报
+ * PLAN_SLOT_REQUIRED，非字符串/格式非法报 PLAN_SLOT_TYPE / PLAN_SLOT_IDENTITY，
+ * 与 normalizeSlots 对同一槽位的判定完全一致。绝不降级为文生视频、绝不发明
+ * 素材身份；非 i2v 计划返回 null（不适用）。
+ */
+function validateI2vReferenceAsset(workflow, candidateSlots) {
+  if (workflow.id !== 'generate_media' || candidateSlots?.mode !== 'video_i2v') return null;
+  const value = candidateSlots.reference_asset_id;
+  if (value == null || value === '') return fail('PLAN_SLOT_REQUIRED', { field: 'reference_asset_id' });
+  if (typeof value !== 'string') return fail('PLAN_SLOT_TYPE', { field: 'reference_asset_id' });
+  const schema = workflow.slots?.reference_asset_id;
+  const text = value.trim();
+  if (!schema?.pattern || !text || text.length > schema.max || !schema.pattern.test(text)) {
+    return fail('PLAN_SLOT_IDENTITY', { field: 'reference_asset_id' });
+  }
+  return null;
+}
+
+/**
  * Build the authoritative plan for one trusted task request. `workflowId` and
  * `slots` come from the deterministic classifier or from an injectable model
  * planner; both run through the same fail-closed normalization below.
@@ -336,9 +462,20 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots }
   }
   const workflow = lookupWorkflow(workflowId);
   if (!workflow) return fail('PLAN_WORKFLOW_UNKNOWN', { field: workflowId ?? null });
+  // G1 图生视频契约（前置）：video_i2v 的引用素材身份缺失/非法必须先于无关
+  // 必填字段（如 brief_id）报告，绝不降级、绝不发明素材；在 normalizeSlots
+  // 之前判定，覆盖确定性分类器与 modelPlanner 两条路径。
+  const i2vAsset = validateI2vReferenceAsset(workflow, candidateSlots);
+  if (i2vAsset) return i2vAsset;
   const normalized = normalizeSlots(workflow, candidateSlots);
   if (!normalized.ok) return normalized;
   const slots = workflow.id === 'collect_analyze_evidence' ? normalizeFlags(normalized.value) : normalized.value;
+  // G1 图生视频契约：video_i2v 必须绑定精确的已批准引用素材身份。缺失即
+  // fail closed（绝不让 quote/submit 带着无素材的 i2v 计划进入执行），绝不
+  // 降级为文生视频、绝不发明素材身份。
+  if (workflow.id === 'generate_media' && slots.mode === 'video_i2v' && !slots.reference_asset_id) {
+    return fail('PLAN_SLOT_REQUIRED', { field: 'reference_asset_id' });
+  }
   const steps = derivePlanSteps(workflow, slots);
   if (steps.length === 0 || steps.length > MAX_WORKFLOW_STEPS) return fail('PLAN_STEPS_INVALID');
   // A plan that reads or writes workspace state must be bound to one exact
@@ -348,7 +485,8 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots }
   // (Local deterministic steps carry no operation and are never project
   // boundaries by themselves.)
   const requiresProject = steps.some((step) => step.write === true
-    || (typeof step.operation === 'string' && step.operation.startsWith('workspace.')));
+    || (typeof step.operation === 'string' && step.operation.startsWith('workspace.'))
+    || (typeof step.operation === 'string' && step.operation.startsWith('generation.')));
   if (requiresProject && !request.project_id?.trim()) {
     return fail('PROJECT_BINDING_REQUIRED', { field: 'project_id' });
   }
@@ -424,11 +562,20 @@ export function validatePlanShape(plan) {
     || !Number.isSafeInteger(plan.cost_indicators.online_writes) || plan.cost_indicators.online_writes < 0) {
     return fail('PLAN_COST_INDICATORS_INVALID');
   }
+  // 与 buildPlan 同一 G1 图生视频契约（前置）：持久化计划缺/坏引用素材身份
+  // 同样先于无关必填字段报告（旧计划或篡改计划都不能绕过素材必需性）。
+  const i2vAsset = validateI2vReferenceAsset(workflow, plan.slots);
+  if (i2vAsset) return i2vAsset;
   const normalizedSlots = normalizeSlots(workflow, plan.slots);
   if (!normalizedSlots.ok) return normalizedSlots;
   const expectedSlots = workflow.id === 'collect_analyze_evidence'
     ? normalizeFlags(normalizedSlots.value)
     : normalizedSlots.value;
+  // 与 buildPlan 同一 G1 图生视频契约：持久化计划缺引用素材身份同样 fail
+  // closed（旧计划或篡改计划都不能绕过素材必需性）。
+  if (workflow.id === 'generate_media' && expectedSlots.mode === 'video_i2v' && !expectedSlots.reference_asset_id) {
+    return fail('PLAN_SLOT_REQUIRED', { field: 'reference_asset_id' });
+  }
   // Defaulted slots may be absent from plans persisted before the slot was
   // added to the fixed catalog; every slot that IS present must still equal
   // the fail-closed normalization exactly. Anything stale or tampered is

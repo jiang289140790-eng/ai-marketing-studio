@@ -31,7 +31,12 @@ export const MAX_SLOT_IDENTITY = 200;
 export const EVIDENCE_ID_PATTERN = /^ev-[0-9a-f]{24}$/;
 export const ANALYSIS_ID_PATTERN = /^an-[0-9a-f]{24}$/;
 export const BRIEF_ID_PATTERN = /^brief-[0-9a-f]{24}$/;
-export const CARD_ID_PATTERN = /^card-[0-9a-f]{24}$/;
+// 知识卡身份遵循 P19 权威契约：kc-<24 位小写十六进制>（旧 card- 前缀不是合法别名）。
+export const CARD_ID_PATTERN = /^kc-[0-9a-f]{24}$/;
+export const G1_JOB_ID_PATTERN = /^g1j-[0-9a-f]{24}$/;
+export const G1_ARTIFACT_ID_PATTERN = /^g1x-[0-9a-f]{24}$/;
+// 引用素材（assets.id）是 UUID；G1 边界要求该素材为当前用户已批准的图片。
+export const REFERENCE_ASSET_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const stringSlot = (overrides = {}) => ({
   type: 'string',
@@ -76,8 +81,10 @@ function toolStep(step, label, operation, overrides = {}) {
     operation,
     depends_on: [],
     approval: [...definition.approval],
-    cost: definition.endpoint === 'p22-research-assist' && definition.approval.includes('paid_external_calls'),
-    write: definition.endpoint === 'p19-workspace-command' && definition.approval.includes('online_writes'),
+    // 付费与写入标志由工具定义的批准范围派生（G1 generation.submit 同时
+    // 声明 paid_external_calls 与 online_writes，因此 cost 与 write 均为 true）。
+    cost: definition.approval.includes('paid_external_calls'),
+    write: definition.approval.includes('online_writes'),
     fan_out: null,
     reuse: null,
     terminal_artifact: null,
@@ -432,6 +439,72 @@ const WORKFLOW_DEFINITIONS = Object.freeze([
       }),
     ]),
   }),
+
+  Object.freeze({
+    id: 'generate_media',
+    title: '生成图片或视频素材',
+    description: '基于当前项目已批准/待审核 Brief 生成图片或视频（Bailian 固定模型）；quote 步骤只读返回不可变报价，submit 步骤是付费生成 + staging 作业写入，必须同时获得 paid_external_calls 与 online_writes 批准；quote_only 时仅获取报价，零费用零写入。',
+    slots: Object.freeze({
+      brief_id: identitySlot(BRIEF_ID_PATTERN, { required: true, note: '精确的已保存 Brief 身份 brief-<24 位十六进制>（pending_review 或 approved）。' }),
+      mode: enumSlot(['image', 'video_t2v', 'video_i2v'], { required: true, note: 'image：qwen-image-2.0；video_t2v：happyhorse-1.0-t2v；video_i2v：happyhorse-1.0-i2v（需要已批准引用素材）。' }),
+      prompt: stringSlot({ required: true, max: 2000, min: 1, note: '生成提示词（1–2000 字符）。' }),
+      negative_prompt: stringSlot({ max: 500, note: '负面提示词（可选，0–500 字符）。' }),
+      aspect_ratio: enumSlot(['1:1', '4:3', '3:4', '16:9', '9:16', '21:9'], { note: '画幅（可选；image 缺省 1:1，video 缺省 16:9）。' }),
+      duration_seconds: integerSlot({ min: 1, max: 10, note: '视频时长秒数（可选，仅 video；缺省 5 秒）。' }),
+      resolution: enumSlot(['720p', '1080p'], { note: '视频分辨率（可选，仅 video；缺省 720p）。' }),
+      reference_asset_id: identitySlot(REFERENCE_ASSET_PATTERN, { note: '已批准引用素材 UUID（video_i2v 必需；其余 mode 不可用）。' }),
+      submit_generation: booleanSlot({ default: true, note: '是否提交付费生成（false = 仅获取不可变报价，零费用零写入）。' }),
+    }),
+    terminal_artifacts: Object.freeze(['quote', 'job']),
+    steps: Object.freeze([
+      Object.freeze({ ...readStateStep(), gate: null }),
+      Object.freeze({
+        ...toolStep('quote', '获取不可变报价', 'generation.quote', {
+          depends_on: Object.freeze(['read_state']),
+          terminal_artifact: 'quote',
+          gate: null,
+          note: '只读报价：固定模型/模式 + 有界费用区间 + 到期时间 + 请求指纹，零费用零写入。',
+        }),
+      }),
+      Object.freeze({
+        ...toolStep('submit', '批准并提交付费生成', 'generation.submit', {
+          depends_on: Object.freeze(['quote']),
+          terminal_artifact: 'job',
+          gate: 'submit_generation',
+          note: '显式批准（paid_external_calls + online_writes 双重批准）后创建幂等付费生成作业；quote 步骤的结果（quote_id/指纹/预估最大费用）作为提交绑定。',
+        }),
+      }),
+    ]),
+  }),
+
+  Object.freeze({
+    id: 'read_generation',
+    title: '读取生成任务状态或产物',
+    description: '只读查询生成作业状态或产物签名链接；绝不继承 submit 的任何批准，不产生费用与写入。',
+    slots: Object.freeze({
+      job_id: identitySlot(G1_JOB_ID_PATTERN, { required: true, note: '精确的生成作业身份 g1j-<24 位十六进制>。' }),
+      artifact_id: identitySlot(G1_ARTIFACT_ID_PATTERN, { note: '精确的产物身份 g1x-<24 位十六进制>（可选；提供时同时返回产物签名链接）。' }),
+    }),
+    terminal_artifacts: Object.freeze(['job_status', 'artifact']),
+    steps: Object.freeze([
+      Object.freeze({
+        ...toolStep('status', '读取生成作业状态', 'generation.status', {
+          depends_on: Object.freeze([]),
+          terminal_artifact: 'job_status',
+          gate: null,
+          note: '只读：返回作业状态/尝试/事件与产物摘要。',
+        }),
+      }),
+      Object.freeze({
+        ...toolStep('artifact', '读取生成产物', 'generation.artifact', {
+          depends_on: Object.freeze(['status']),
+          terminal_artifact: 'artifact',
+          gate: 'artifact_id',
+          note: '只读：返回短时签名下载链接与产物血缘元数据。',
+        }),
+      }),
+    ]),
+  }),
 ]);
 
 export const WORKFLOW_BY_ID = Object.freeze(Object.fromEntries(
@@ -483,10 +556,12 @@ export function assertWorkflowIntegrity() {
         else {
           if (![...definition.approval].every((scope) => APPROVAL_SCOPES.includes(scope))) issues.push(`${workflow.id}.${step.step}: unknown approval scope`);
           if (![...step.approval].every((scope) => APPROVAL_SCOPES.includes(scope))) issues.push(`${workflow.id}.${step.step}: unknown declared scope`);
-          if (step.cost !== (definition.endpoint === 'p22-research-assist' && definition.approval.includes('paid_external_calls'))) {
+          // 付费/写入标志由工具定义的批准范围派生（任何端点一致适用；
+          // G1 generation.submit 同时声明 paid_external_calls 与 online_writes）。
+          if (step.cost !== definition.approval.includes('paid_external_calls')) {
             issues.push(`${workflow.id}.${step.step}: cost flag inconsistent with operation`);
           }
-          if (step.write !== (definition.endpoint === 'p19-workspace-command' && definition.approval.includes('online_writes'))) {
+          if (step.write !== definition.approval.includes('online_writes')) {
             issues.push(`${workflow.id}.${step.step}: write flag inconsistent with operation`);
           }
         }

@@ -1,5 +1,8 @@
 /* global TextDecoder, TextEncoder, structuredClone */
 export const BRIDGE_SCHEMA_VERSION = 'ams_harness_bridge_v1';
+// G1 边界命令信封的精确 schema 版本：桥梁只接受这个不可变值，缺失、错误值
+// 或任何覆盖尝试一律 fail closed（见 validateBridgeEnvelope）。
+export const G1_COMMAND_SCHEMA_VERSION = 'g1_generation_command_v1';
 
 export async function readBoundedText(request, maxBytes) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('BODY_LIMIT_INVALID');
@@ -45,6 +48,12 @@ export const OPERATIONS = Object.freeze({
   'research.search_reddit': ['p22-research-assist', 'action', 'search_reddit'],
   'research.analyze_persisted': ['p22-research-assist', 'action', 'analyze_persisted'],
   'research.generate_similar': ['p22-research-assist', 'action', 'generate_similar'],
+  // G1 生成执行层：quote 只读报价；approve_submit 显式批准 + 幂等付费提交
+  // （需 paid_external_calls + online_writes 双重批准）；status/artifact 只读。
+  'generation.quote': ['g1-generation-command', 'action', 'quote'],
+  'generation.submit': ['g1-generation-command', 'action', 'approve_submit'],
+  'generation.status': ['g1-generation-command', 'action', 'status'],
+  'generation.artifact': ['g1-generation-command', 'action', 'artifact'],
 });
 
 function fail(code, field = null) {
@@ -110,6 +119,18 @@ export function summarizeBridgeResponse(operation, body, maxBytes = 60 * 1024) {
     }
     return exact;
   }
+  // G1 生成执行层：quote 必须精确往返（submit 步骤的 quote_id/指纹/费用绑定
+  // 来自 quote 步骤结果，任何截断都会破坏精确绑定）；status/artifact 同样
+  // 只返回有界元数据，精确传递。
+  if (operation.startsWith('generation.')) {
+    const exact = structuredClone(body);
+    if (jsonBytes(exact) > maxBytes) {
+      const error = new Error('Exact generation response exceeded the gateway limit.');
+      error.code = 'BRIDGE_RESPONSE_TOO_LARGE';
+      throw error;
+    }
+    return exact;
+  }
   if (operation !== 'workspace.project.read') return boundAnyResponse(operation, body, maxBytes);
   const exact = structuredClone(body);
   if (jsonBytes(exact) > maxBytes) {
@@ -132,9 +153,19 @@ export function validateBridgeEnvelope(input, verifiedUserId) {
     || input.boundary.body[discriminator] !== value) return fail('BOUNDARY_BINDING_MISMATCH', discriminator);
   const allowedBoundary = endpoint === 'p19-workspace-command'
     ? new Set(['schema_version', 'command', 'idempotency_key', 'payload'])
-    : new Set(['action', 'idempotency_key', ...Object.keys(input.call.payload || {})]);
+    : new Set(['action', 'idempotency_key', 'expected_revision', ...(endpoint === 'g1-generation-command' ? ['schema_version'] : []), ...Object.keys(input.call.payload || {})]);
   const unknown = Object.keys(input.boundary.body).find((key) => !allowedBoundary.has(key));
   if (unknown) return fail('BOUNDARY_UNKNOWN_FIELD', unknown);
+  // G1 边界命令信封要求精确 schema_version（g1_generation_command_v1）：
+  // 缺失、错误值或任何覆盖尝试（含经 payload 键注入）都必须 fail closed，
+  // 绝不把非固定版本转发到 G1 Edge（其 parseEdgeRequest 同样拒绝非精确版本）。
+  if (endpoint === 'g1-generation-command') {
+    if (plainObject(input.call.payload) && Object.hasOwn(input.call.payload, 'schema_version')) {
+      return fail('BOUNDARY_SCHEMA_VERSION_OVERRIDE', 'schema_version');
+    }
+    if (!Object.hasOwn(input.boundary.body, 'schema_version')) return fail('BOUNDARY_SCHEMA_VERSION_MISSING', 'schema_version');
+    if (input.boundary.body.schema_version !== G1_COMMAND_SCHEMA_VERSION) return fail('BOUNDARY_SCHEMA_VERSION_MISMATCH', 'schema_version');
+  }
   return { ok: true, endpoint, operation: input.call.operation, body: structuredClone(input.boundary.body) };
 }
 

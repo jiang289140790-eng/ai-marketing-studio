@@ -1,0 +1,17 @@
+{
+  "name": "ams-generation-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "G1 private Bailian (DashScope) generation worker: claims leased jobs, submits bounded provider requests, polls the same provider task id, downloads and stores private artifacts. Never re-submits an ambiguous paid submission.",
+  "scripts": {
+    "start": "node worker.mjs",
+    "test": "node --test --test-reporter=tap test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.110.7"
+  }
+}

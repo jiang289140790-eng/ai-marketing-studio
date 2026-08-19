@@ -8,9 +8,18 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { TOOL_DEFINITIONS, validateToolCall } from '../tool-contract.mjs';
-import { createPlanner } from '../planner.mjs';
+import { buildPlan as buildExactPlan, createPlanner, validatePlanShape } from '../planner.mjs';
 import { createToolClient } from '../tool-client.mjs';
-import { PAID_AMBIGUOUS_CODES, STEP_LABELS, createBridgeStateReader, executeConfirmedPlan, metricValue } from '../deterministic-executor.mjs';
+import {
+  BRIEF_CARD_IDENTITY_INVALID,
+  BRIEF_PROJECT_IDENTITY_INVALID,
+  PAID_AMBIGUOUS_CODES,
+  STEP_LABELS,
+  createBridgeStateReader,
+  deriveCanonicalBriefId,
+  executeConfirmedPlan,
+  metricValue,
+} from '../deterministic-executor.mjs';
 
 const TASK_ID = 'ht-11111111-1111-4111-8111-111111111111';
 const planner = createPlanner();
@@ -108,7 +117,7 @@ function mockBoundary(seed = { evidence: [], analyses: [], cards: [], brief: nul
       }
       case 'workspace.card.create': {
         assertCurrentRevision(call);
-        const record = { ...call.payload.card, fingerprint: `kf${call.payload.card.id.slice(5)}` };
+        const record = { ...call.payload.card, fingerprint: `kf${call.payload.card.id.slice(3)}` };
         state.cards = [record];
         state.revision += 1;
         return { ok: true, entity: { type: 'card', id: record.id }, artifact_refs: [record.id] };
@@ -335,7 +344,7 @@ test('reuse adversarial: exact match skips cost/write; missing/duplicate/stale f
       fingerprint: 'a'.repeat(64), version: 1,
     }],
     cards: [{
-      id: 'card-111111111111111111111111', project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa', evidence_id: 'ev-111111111111111111111111',
+      id: 'kc-111111111111111111111111', project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa', evidence_id: 'ev-111111111111111111111111',
       analysis_id: 'an-aaaaaaaaaaaaaaaaaaaaaaaa', analysis_fingerprint: 'wrong-fingerprint',
       schema_version: 'content_knowledge_card_v1', version: 1, fingerprint: 'k'.repeat(64),
     }],
@@ -950,4 +959,394 @@ test('a failed-write retry re-reads project state through the same canonical cli
       }, 'every state re-read on retry crosses the exact P19 boundary');
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Brief canonical identity contract (milestone ams-g1-p19-brief-identity-
+// quote-binding-final-repair): a Brief ID is reused only when it exactly
+// satisfies brief-<24 位小写十六进制>. A historical non-canonical identity
+// (25-character legacy suffix) stays untouched in the pre-write snapshot; the
+// new assembly writes the deterministic canonical identity with the complete
+// three-card and provenance bindings, so a later G1 quote binds exactly.
+// ---------------------------------------------------------------------------
+
+const LEGACY_BRIEF_ID = 'brief-8a14d78ceee1a3ff2b32a076e'; // 25 位十六进制后缀（staging 实测身份）
+
+function legacyBrief(projectId, citationIds) {
+  return {
+    id: LEGACY_BRIEF_ID,
+    project_id: projectId,
+    schema_version: 'ams_content_brief_v1',
+    version: 1,
+    status: 'pending_review',
+    topic: '历史遗留主题',
+    objective: '历史遗留目标',
+    constraints: ['不虚构事实'],
+    knowledge_citation_ids: citationIds,
+    evidence_provenance: { evidence_ids: [], evidence_fingerprints: {}, statement: '历史记录' },
+    review: { schema_version: 'ams_brief_review_v1', brief_id: LEGACY_BRIEF_ID, comments: [], decision: null },
+    analysis_provenance: { method: 'multimodal_model', provider: 'dashscope', model: 'qwen-plus', executed_at: '2026-08-01T00:00:00.000Z', analysis_ids: [], media_count: 0, statement: '历史记录' },
+    fingerprint: 'f'.repeat(64),
+  };
+}
+
+function canonicalBrief(projectId, citationIds, version = 1, fingerprint = 'c'.repeat(64)) {
+  const id = `brief-${'a'.repeat(24)}`;
+  return {
+    id,
+    project_id: projectId,
+    schema_version: 'ams_content_brief_v1',
+    version,
+    status: 'pending_review',
+    topic: 't',
+    objective: 'o',
+    constraints: [],
+    knowledge_citation_ids: citationIds,
+    evidence_provenance: { evidence_ids: [], evidence_fingerprints: {}, statement: 's' },
+    review: { schema_version: 'ams_brief_review_v1', brief_id: id, comments: [], decision: null },
+    analysis_provenance: { method: 'multimodal_model', provider: 'dashscope', model: 'qwen-plus', executed_at: '2026-08-01T00:00:00.000Z', analysis_ids: [], media_count: 0, statement: 's' },
+    fingerprint,
+  };
+}
+
+// 完整三卡集：3 evidence + 3 analyses + 3 cards，供 Brief 装配继承。
+function threeCardProject(projectId) {
+  const evidence = Array.from({ length: 3 }, (_, i) => ({
+    id: `ev-${'0'.repeat(23)}${i + 1}`,
+    project_id: projectId,
+    source_url: `https://x.com/i/web/status/7${i}`,
+    fingerprint: 'e'.repeat(64),
+    version: 1,
+  }));
+  const analyses = Array.from({ length: 3 }, (_, i) => ({
+    id: `an-${'0'.repeat(23)}${i + 1}`,
+    project_id: projectId,
+    evidence_id: evidence[i].id,
+    evidence_fingerprint: evidence[i].fingerprint,
+    evidence_version: 1,
+    schema_version: 'p19_analysis_v1',
+    fingerprint: `a${i}`.repeat(64).slice(0, 64),
+    version: 1,
+    model_analysis: { media_ids: [] },
+  }));
+  const cards = Array.from({ length: 3 }, (_, i) => ({
+    id: `kc-${'0'.repeat(23)}${i + 1}`,
+    project_id: projectId,
+    evidence_id: evidence[i].id,
+    analysis_id: analyses[i].id,
+    analysis_fingerprint: analyses[i].fingerprint,
+    schema_version: 'content_knowledge_card_v1',
+    version: 1,
+    fingerprint: 'k'.repeat(64),
+  }));
+  return { evidence, analyses, cards };
+}
+
+test('非规范历史 Brief：写入完整三卡绑定的规范身份，历史记录保留在写前快照且不被改写', async () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const { evidence, analyses, cards } = threeCardProject(projectId);
+  const cardIds = cards.map((card) => card.id);
+  // 历史 Brief 引用与当前完全相同的卡集合 —— 在规范身份契约下也绝不复用，
+  // 必须写入新的规范身份（否则 G1 永远无法绑定该 Brief）。
+  const bridge = mockBoundary({ evidence, analyses, cards, brief: legacyBrief(projectId, cardIds) });
+  const preWrite = structuredClone(bridge.state.brief);
+  assert.equal(preWrite.id, LEGACY_BRIEF_ID, '写前快照保留历史 Brief 身份');
+
+  const plan = await buildPlan('生成待审核 Brief', projectId);
+  assert.equal(plan.workflow, 'assemble_brief');
+  const { taskView, output } = await run(plan, bridge);
+  assert.equal(output.outcome, 'succeeded', JSON.stringify(taskView.step_states));
+
+  // 历史记录保持原样（身份/内容未被改写或删除）。
+  assert.equal(preWrite.id, LEGACY_BRIEF_ID);
+  assert.equal(preWrite.topic, '历史遗留主题');
+  // 装配步骤实际执行（非规范身份绝不复用、绝不跳过写入）。
+  const briefStep = taskView.step_states[plan.steps[1].step];
+  assert.equal(briefStep.state, 'succeeded');
+  assert.equal(briefStep.reused_count, 0);
+
+  // 新 Brief 使用由当前项目 + 完整知识卡身份集合派生的确定性规范身份
+  // （乱序/重复输入恒等），携带完整三卡与来源绑定。
+  const expectedId = deriveCanonicalBriefId(projectId, cardIds);
+  const assembled = bridge.calls.find((call) => call.operation === 'workspace.brief.assemble');
+  assert.ok(assembled, '装配必须发起一次 brief.assemble 写入');
+  const record = assembled.payload.brief;
+  assert.equal(record.id, expectedId);
+  assert.match(record.id, /^brief-[0-9a-f]{24}$/);
+  assert.notEqual(record.id, LEGACY_BRIEF_ID);
+  assert.equal(record.status, 'pending_review');
+  assert.equal(record.version, 1, '新的规范实体从版本 1 开始独立谱系');
+  assert.equal(assembled.payload.expected_fingerprint, null, '新规范实体无同实体基线');
+  assert.deepEqual(record.knowledge_citation_ids, cardIds, '完整三卡引用继承');
+  assert.deepEqual(record.evidence_provenance.evidence_ids, evidence.map((entry) => entry.id), '精确 Evidence 绑定');
+  assert.equal(record.evidence_provenance.evidence_fingerprints[evidence[0].id], analyses[0].fingerprint, '指纹绑定来自卡的分析血缘');
+  assert.deepEqual(record.analysis_provenance.analysis_ids, analyses.map((entry) => entry.id), '精确分析血缘');
+  assert.equal(record.review.brief_id, record.id, '审核绑定新规范身份');
+  // 写后刷新/读取恢复：持久化状态 = 新规范 Brief。
+  assert.equal(bridge.state.brief.id, expectedId);
+  // 历史身份绝不出现在任何写入载荷中。
+  assert.ok(!JSON.stringify(bridge.calls.filter((call) => call.operation !== 'workspace.project.read')).includes(LEGACY_BRIEF_ID));
+});
+
+test('权威 P19 kc- 三卡集（staging 实卡身份）装配规范待审核 Brief：三卡引用与来源血缘精确保留', async () => {
+  // 既有 staging 权威知识卡身份（kc-<24 位小写十六进制>）；契约来自
+  // src/services/p19-contracts.js 的 CARD_ID_PATTERN。生产逻辑绝不硬编码具体
+  // 卡值，此处仅以真实身份形状做端到端证明：完整 kc- 卡集 → 确定性规范 Brief。
+  // 数组顺序即源卡顺序（刻意非字典序）：规范 Brief 身份派生对集合排序/去重，
+  // 而引用字段必须逐位保留该原始顺序（下方按完整原数组精确断言）。
+  const stagingCardIds = [
+    'kc-39a7a6a0de13b773f0edc61d',
+    'kc-a05847c2e314f856d3b19903',
+    'kc-8e29f99670cc5f7298609855',
+  ];
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const { evidence, analyses, cards } = threeCardProject(projectId);
+  const boundCards = cards.map((card, index) => ({ ...card, id: stagingCardIds[index] }));
+  const bridge = mockBoundary({ evidence, analyses, cards: boundCards });
+  const plan = await buildPlan('生成待审核 Brief', projectId);
+  const { taskView, output } = await run(plan, bridge);
+  assert.equal(output.outcome, 'succeeded', JSON.stringify(taskView.step_states));
+  const briefStep = plan.steps.find((step) => step.operation === 'workspace.brief.assemble');
+  assert.equal(taskView.step_states[briefStep.step].state, 'succeeded');
+  const calls = bridge.calls.filter((call) => call.operation !== 'workspace.project.read');
+  assert.deepEqual(
+    calls.map((call) => call.operation),
+    ['workspace.brief.assemble'],
+    '仅一次 Brief 装配写入，零其他 business/provider/paid 调用',
+  );
+  const record = calls[0].payload.brief;
+  assert.equal(record.id, deriveCanonicalBriefId(projectId, stagingCardIds), '规范身份由精确项目 + 完整 kc- 卡集合（乱序输入）确定性派生');
+  assert.match(record.id, /^brief-[0-9a-f]{24}$/);
+  assert.equal(record.status, 'pending_review');
+  assert.equal(record.version, 1);
+  // 引用字段精确保留源卡完整原始顺序（去重但绝不排序）：stagingCardIds 本身
+  // 非字典序，直接对原数组全量 deepEqual 即证明 —— 排序/去重只发生在规范 Brief
+  // 身份派生（deriveCanonicalBriefId）内部，绝不作用于引用列表本身。
+  assert.deepEqual(record.knowledge_citation_ids, stagingCardIds, '三卡引用精确保留（保持源卡完整原始顺序）');
+  assert.deepEqual(record.evidence_provenance.evidence_ids, evidence.map((entry) => entry.id), '精确 Evidence 绑定');
+  assert.equal(record.evidence_provenance.evidence_fingerprints[evidence[0].id], analyses[0].fingerprint, '指纹绑定来自卡的分析血缘');
+  assert.deepEqual(record.analysis_provenance.analysis_ids, analyses.map((entry) => entry.id), '精确分析血缘');
+  assert.equal(record.review.brief_id, record.id, '审核绑定新规范身份');
+  assert.equal(calls[0].payload.expected_fingerprint, null, '新规范实体无同实体基线');
+});
+
+test('规范 Brief 身份派生：同一项目+卡集合（乱序/重复）恒等，卡集合或项目变化绝不碰撞', () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const setA = [`kc-${'1'.repeat(24)}`, `kc-${'2'.repeat(24)}`, `kc-${'3'.repeat(24)}`];
+  const idA = deriveCanonicalBriefId(projectId, setA);
+  assert.match(idA, /^brief-[0-9a-f]{24}$/);
+  // 同一项目 + 同一卡集合 → 恒等；乱序或重复输入不改变身份。
+  assert.equal(deriveCanonicalBriefId(projectId, [`kc-${'3'.repeat(24)}`, `kc-${'1'.repeat(24)}`, `kc-${'2'.repeat(24)}`]), idA, '乱序的同一卡集合产生同一规范身份');
+  assert.equal(deriveCanonicalBriefId(projectId, [...setA, `kc-${'1'.repeat(24)}`]), idA, '重复的同一卡集合产生同一规范身份（去重后）');
+  // 卡集合变化 → 身份变化（绝不碰撞）。
+  assert.notEqual(deriveCanonicalBriefId(projectId, setA.slice(0, 2)), idA, '缺失一张卡 → 不同身份');
+  assert.notEqual(deriveCanonicalBriefId(projectId, [...setA, `kc-${'4'.repeat(24)}`]), idA, '新增一张卡 → 不同身份');
+  assert.notEqual(deriveCanonicalBriefId(projectId, []), idA, '空卡集合 → 不同身份');
+  // 项目变化 → 身份变化（项目隔离）。
+  assert.notEqual(deriveCanonicalBriefId('prj-bbbbbbbbbbbbbbbbbbbbbbbb', setA), idA, '不同项目 → 不同身份');
+  // 非法/非规范卡身份绝不进入派生输入：fail closed（见下方专门测试），绝不
+  // 静默剔除 —— 剔除会掩盖真实卡集合并产生身份碰撞（筛选后与空/更小集合同 ID）。
+  // card-<24 位十六进制> 在旧契约下曾是合法格式，现在必须作为别名整体拒绝。
+  assert.throws(
+    () => deriveCanonicalBriefId(projectId, [...setA, `card-${'1'.repeat(24)}`]),
+    (error) => error?.code === BRIEF_CARD_IDENTITY_INVALID && error?.diagnostics?.field === 'knowledge_card_id',
+    '任一非法卡身份使整个派生失败关闭',
+  );
+});
+
+test('规范 Brief 身份：非法卡/项目身份 fail closed —— 稳定 code、准确 field、绝不生成 Brief ID', () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const validCard = `kc-${'1'.repeat(24)}`;
+  // 项目身份错绑/非法：非字符串、空、非法格式 → BRIEF_PROJECT_IDENTITY_INVALID。
+  for (const badProject of [null, undefined, '', 'prj-zz', 'project-x', 42, `PRJ-${'a'.repeat(24)}`]) {
+    assert.throws(
+      () => deriveCanonicalBriefId(badProject, [validCard]),
+      (error) => error?.code === BRIEF_PROJECT_IDENTITY_INVALID && error?.diagnostics?.field === 'project_id',
+      `项目身份 ${String(badProject)} 必须 fail closed`,
+    );
+  }
+  // 卡身份集合输入错绑：非数组（含单个身份字符串）→ BRIEF_CARD_IDENTITY_INVALID。
+  for (const badSet of [null, undefined, validCard, { 0: validCard }, 42]) {
+    assert.throws(
+      () => deriveCanonicalBriefId(projectId, badSet),
+      (error) => error?.code === BRIEF_CARD_IDENTITY_INVALID && error?.diagnostics?.field === 'knowledge_cards',
+      '卡身份集合必须为数组，否则 fail closed',
+    );
+  }
+  // 非法卡身份条目：空值/非字符串/非法格式/非规范（大写、25/23 位、非 kc 前缀），
+  // 以及完整的 card-<24 位十六进制> 旧前缀别名（整体拒绝，绝不当作合法身份）
+  // → 稳定 code + 准确 field + 首个非法条目下标；诊断绝不泄漏原值。
+  const illegalEntries = ['', '   ', null, undefined, 42, 'card-not-canonical', `card-${'1'.repeat(24)}`, `card-${'A'.repeat(24)}`, `kc-${'A'.repeat(24)}`, `KC-${'1'.repeat(24)}`, `kc-${'1'.repeat(25)}`, `kc-${'1'.repeat(23)}`, 'brief-111111111111111111111111', 'kc-zzzzzzzzzzzzzzzzzzzzzzzz'];
+  for (const illegal of illegalEntries) {
+    assert.throws(
+      () => deriveCanonicalBriefId(projectId, [validCard, illegal]),
+      (error) => {
+        assert.equal(error?.code, BRIEF_CARD_IDENTITY_INVALID);
+        assert.equal(error?.diagnostics?.field, 'knowledge_card_id');
+        assert.equal(error?.diagnostics?.index, 1, '必须指出首个非法条目的精确下标');
+        assert.ok(!/[0-9a-f]{24}/.test(String(error?.message)), '诊断不泄漏卡身份原值');
+        return true;
+      },
+      `非法卡身份条目 ${String(illegal)} 必须 fail closed`,
+    );
+  }
+  // 单条目集合含非法身份同样失败：绝不静默退化为「空集合派生」身份。
+  assert.throws(
+    () => deriveCanonicalBriefId(projectId, ['']),
+    (error) => error?.code === BRIEF_CARD_IDENTITY_INVALID && error?.diagnostics?.index === 0,
+  );
+});
+
+test('规范 Brief 身份：相同引用集合精确复用零写入；普通版本更新沿用同一身份与指纹基线', async () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const { evidence, analyses, cards } = threeCardProject(projectId);
+  const cardIds = cards.map((card) => card.id);
+  // 规范身份 + 相同引用集合 → 精确复用（既有行为保持：零写入，身份不变）。
+  const reuseBridge = mockBoundary({ evidence, analyses, cards, brief: canonicalBrief(projectId, cardIds) });
+  const reuseRun = await run(await buildPlan('生成待审核 Brief', projectId), reuseBridge);
+  assert.equal(reuseRun.output.outcome, 'succeeded');
+  assert.equal(reuseRun.taskView.step_states['st-1'].state, 'reused', '规范身份 + 相同引用集合 → 精确复用');
+  assert.equal(reuseBridge.calls.filter((call) => call.operation === 'workspace.brief.assemble').length, 0, '零写入');
+  assert.equal(reuseBridge.state.brief.id, `brief-${'a'.repeat(24)}`, '身份保持不变');
+
+  // 引用集合变化 → 普通版本更新：同一规范身份、版本 +1、指纹基线精确，
+  // 新 Brief 仍携带完整当前卡集合。
+  const changedSet = canonicalBrief(projectId, cardIds.slice(0, 2));
+  const updateBridge = mockBoundary({ evidence, analyses, cards, brief: changedSet });
+  const updateRun = await run(await buildPlan('生成待审核 Brief', projectId), updateBridge);
+  assert.equal(updateRun.output.outcome, 'succeeded');
+  assert.equal(updateRun.taskView.step_states['st-1'].state, 'succeeded');
+  const updateCall = updateBridge.calls.find((call) => call.operation === 'workspace.brief.assemble');
+  assert.ok(updateCall, '引用集合变化必须写入新版本');
+  assert.equal(updateCall.payload.brief.id, `brief-${'a'.repeat(24)}`, '普通版本更新沿用同一规范身份');
+  assert.equal(updateCall.payload.brief.version, 2, '版本 +1');
+  assert.equal(updateCall.payload.expected_fingerprint, 'c'.repeat(64), '同实体指纹基线精确');
+  assert.deepEqual(updateCall.payload.brief.knowledge_citation_ids, cardIds, '新 Brief 携带完整当前卡集合');
+});
+
+test('项目隔离：其他项目的非规范 Brief 绝不命中本项目复用，也不作为本项目基线', async () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const otherProjectId = 'prj-bbbbbbbbbbbbbbbbbbbbbbbb';
+  const { evidence, analyses, cards } = threeCardProject(projectId);
+  const bridge = mockBoundary({ evidence, analyses, cards, brief: legacyBrief(otherProjectId, cards.map((card) => card.id)) });
+  const { taskView, output } = await run(await buildPlan('生成待审核 Brief', projectId), bridge);
+  assert.equal(output.outcome, 'succeeded', JSON.stringify(taskView.step_states));
+  const call = bridge.calls.find((entry) => entry.operation === 'workspace.brief.assemble');
+  assert.ok(call, '其他项目的 Brief 不能命中复用，必须写入本项目规范 Brief');
+  assert.equal(call.payload.brief.project_id, projectId);
+  assert.match(call.payload.brief.id, /^brief-[0-9a-f]{24}$/);
+  assert.notEqual(call.payload.brief.id, LEGACY_BRIEF_ID);
+  assert.equal(call.payload.expected_fingerprint, null, '其他项目的身份绝不作为本项目同实体基线');
+});
+
+test('畸形 Brief 身份计划在计划与执行两层均 fail closed：零 bridge/business/provider/paid 调用', async () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const request = { user_id: 'user-a', project_id: projectId, intent: '生成图片', request_fingerprint: 'a'.repeat(64) };
+  // 计划层：通过底层计划构造入口 buildPlan({taskId, request, workflowId, slots})
+  // 直接构造合法与畸形计划（同步入口，断言真实生效）。此前把
+  // {taskId, workflowId, slots} 对象当 intent 误喂给自然语言 planner helper
+  // —— 那是把对象喂给分类器的错误用法，断言从未到达目标代码。
+  const overlong = buildExactPlan({
+    taskId: TASK_ID,
+    request,
+    workflowId: 'generate_media',
+    slots: { brief_id: LEGACY_BRIEF_ID, mode: 'image', prompt: '猫' },
+  });
+  assert.equal(overlong.ok, false);
+  assert.equal(overlong.code, 'PLAN_SLOT_IDENTITY');
+  assert.equal(overlong.diagnostics.field, 'brief_id');
+  // 空身份按必填拒绝；其余非规范身份（大写/25 位/23 位后缀）一律 PLAN_SLOT_IDENTITY。
+  assert.equal(buildExactPlan({
+    taskId: TASK_ID, request, workflowId: 'generate_media', slots: { brief_id: '', mode: 'image', prompt: '猫' },
+  }).code, 'PLAN_SLOT_REQUIRED');
+  for (const badBriefId of [`brief-${'A'.repeat(24)}`, `brief-${'1'.repeat(25)}`, `brief-${'1'.repeat(23)}`]) {
+    const rejected = buildExactPlan({
+      taskId: TASK_ID, request, workflowId: 'generate_media', slots: { brief_id: badBriefId, mode: 'image', prompt: '猫' },
+    });
+    assert.equal(rejected.ok, false, `身份 ${badBriefId} 必须在计划层被拒绝`);
+    assert.equal(rejected.code, 'PLAN_SLOT_IDENTITY');
+    assert.equal(rejected.diagnostics.field, 'brief_id');
+  }
+  // 底层 builder 生成的合法计划（quote-only：零付费零写入批准；其成功执行
+  // 路径由 g1-harness-tools 全链路覆盖）。
+  const valid = buildExactPlan({
+    taskId: TASK_ID,
+    request,
+    workflowId: 'generate_media',
+    slots: { brief_id: `brief-${'a'.repeat(24)}`, mode: 'image', prompt: '猫', submit_generation: false },
+  });
+  assert.equal(valid.ok, true, valid.code);
+  assert.equal(valid.value.approvals.paid_external_calls, false);
+  // 执行层：篡改计划携带超长身份 → validatePlanShape 拒绝 → 零桥调用
+  // （含项目读取），business/provider/paid 调用自然为零。
+  const forged = { ...valid.value, slots: { ...valid.value.slots, brief_id: LEGACY_BRIEF_ID } };
+  assert.equal(validatePlanShape(forged).code, 'PLAN_SLOT_IDENTITY');
+  const bridge = mockBoundary();
+  const taskView = view(valid.value);
+  const output = await executeConfirmedPlan({
+    taskView, plan: forged, signal: null, emit: () => {}, toolClient: bridge.client, stateReader: createBridgeStateReader(bridge.client),
+  });
+  assert.equal(output.outcome, 'failed');
+  assert.equal(taskView.step_states['st-0'].error.code, 'INTERNAL_PLAN_VALIDATION_ERROR');
+  assert.equal(taskView.step_states['st-0'].error.retry_unsafe, true, '畸形计划不可重试');
+  assert.equal(bridge.calls.length, 0, '畸形身份绝不产生任何 bridge 调用（含项目读取）');
+});
+
+test('项目知识卡含非法或错绑身份：Brief 装配与复用均 fail closed，零 business/provider/paid 调用', async () => {
+  const projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  const { evidence, analyses, cards } = threeCardProject(projectId);
+  const plan = await buildPlan('生成待审核 Brief', projectId);
+  const briefStep = plan.steps.find((step) => step.operation === 'workspace.brief.assemble');
+  // 非法卡身份（空值/非规范格式）进入项目状态 → 装配步骤失败关闭。
+  const illegalBridge = mockBoundary({ evidence, analyses, cards: [{ ...cards[0], id: 'kc-broken' }, ...cards.slice(1)] });
+  const illegalRun = await run(plan, illegalBridge);
+  assert.equal(illegalRun.output.outcome, 'failed');
+  assert.equal(illegalRun.taskView.step_states[briefStep.step].state, 'failed');
+  assert.equal(illegalRun.taskView.step_states[briefStep.step].error.code, BRIEF_CARD_IDENTITY_INVALID);
+  assert.equal(illegalRun.taskView.step_states[briefStep.step].error.field, 'knowledge_card_id');
+  assert.equal(
+    illegalBridge.calls.filter((call) => call.operation !== 'workspace.project.read').length,
+    0,
+    '非法卡身份绝不触发 business/provider/paid 调用',
+  );
+  // 错绑身份：卡记录绑定到其他项目 → 同样失败关闭（绝不被静默混入本项目身份）。
+  const misboundBridge = mockBoundary({ evidence, analyses, cards: [{ ...cards[0], project_id: 'prj-bbbbbbbbbbbbbbbbbbbbbbbb' }, ...cards.slice(1)] });
+  const misboundRun = await run(plan, misboundBridge);
+  assert.equal(misboundRun.output.outcome, 'failed');
+  assert.equal(misboundRun.taskView.step_states[briefStep.step].error.code, BRIEF_CARD_IDENTITY_INVALID);
+  assert.equal(misboundRun.taskView.step_states[briefStep.step].error.field, 'knowledge_card_id');
+  assert.equal(
+    misboundBridge.calls.filter((call) => call.operation !== 'workspace.project.read').length,
+    0,
+    '错绑卡身份绝不触发 business/provider/paid 调用',
+  );
+  // card-<24 位十六进制> 旧前缀别名：即使格式完全合规（合法十六进制、正确长度），
+  // 也整体拒绝 —— 权威身份严格为 kc-，card- 不是合法别名。
+  const aliasBridge = mockBoundary({ evidence, analyses, cards: [{ ...cards[0], id: `card-${'1'.repeat(24)}` }, ...cards.slice(1)] });
+  const aliasRun = await run(plan, aliasBridge);
+  assert.equal(aliasRun.output.outcome, 'failed');
+  assert.equal(aliasRun.taskView.step_states[briefStep.step].state, 'failed');
+  assert.equal(aliasRun.taskView.step_states[briefStep.step].error.code, BRIEF_CARD_IDENTITY_INVALID);
+  assert.equal(aliasRun.taskView.step_states[briefStep.step].error.field, 'knowledge_card_id');
+  assert.equal(
+    aliasBridge.calls.filter((call) => call.operation !== 'workspace.project.read').length,
+    0,
+    'card- 别名身份绝不触发 business/provider/paid 调用',
+  );
+  // 既有规范 Brief + 非法卡集合：绝不复用、绝不写入，同样失败关闭。
+  const reuseBridge = mockBoundary({
+    evidence, analyses,
+    cards: [{ ...cards[0], id: 'kc-broken' }, ...cards.slice(1)],
+    brief: canonicalBrief(projectId, cards.map((card) => card.id)),
+  });
+  const reuseRun = await run(plan, reuseBridge);
+  assert.equal(reuseRun.output.outcome, 'failed');
+  assert.equal(reuseRun.taskView.step_states[briefStep.step].state, 'failed');
+  assert.equal(reuseRun.taskView.step_states[briefStep.step].error.code, BRIEF_CARD_IDENTITY_INVALID);
+  assert.equal(reuseBridge.calls.filter((call) => call.operation === 'workspace.brief.assemble').length, 0, '非法卡身份绝不触发任何写入');
+  assert.equal(
+    reuseBridge.calls.filter((call) => call.operation !== 'workspace.project.read').length,
+    0,
+    '非法卡身份绝不复用、绝不写入、零 business/provider/paid 调用',
+  );
 });

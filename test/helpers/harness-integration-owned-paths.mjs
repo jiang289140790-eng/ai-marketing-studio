@@ -26,6 +26,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/planner.mjs',
   'services/harness-gateway/deterministic-executor.mjs',
   'services/harness-gateway/state-store.mjs',
+  'services/harness-gateway/test/plan-confirm-queue.test.mjs',
   'services/harness-gateway/test/profile-bootstrap.test.mjs',
   'services/harness-gateway/test/profile-config.test.mjs',
   'services/harness-gateway/test/state-store.test.mjs',
@@ -35,6 +36,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'src/pages/AIWorkspacePage.css',
   'src/services/harness-client.js',
   'src/services/harness-presentation.js',
+  'test/g1-harness-tools.test.mjs',
   'test/h2-harness-edge-contract.test.mjs',
   'test/h3-harness-ui.browser.test.mjs',
   'test/h3-harness-ui.test.mjs',
@@ -42,6 +44,14 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/harness-genui-visualize.browser.test.mjs',
   'test/harness-deterministic-orchestrator.browser.test.mjs',
   'test/helpers/harness-integration-owned-paths.mjs',
+  // G1 generation execution layer (accepted image-contract repair + video
+  // status/artifact preview repair): exact modified paths only.
+  'services/generation-worker/bailian-adapter.mjs',
+  'services/generation-worker/worker.mjs',
+  'test/g1-provider-adapter.test.mjs',
+  'test/g1-worker.test.mjs',
+  'test/g1-generation.browser.test.mjs',
+  'src/pages/GenerationTasksPage.jsx',
   // Legacy union from earlier harness milestones (their tests call `.has()`).
   'services/harness-gateway/compose.yaml',
   'services/harness-gateway/home-lockdown.patch.yml',
@@ -59,6 +69,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/test/tool-client.test.mjs',
   'services/harness-gateway/test/tool-contract.test.mjs',
   'services/harness-gateway/test/deterministic-executor.test.mjs',
+  'services/harness-gateway/test/planner.test.mjs',
   'services/harness-gateway/tool-client.mjs',
   'services/harness-gateway/tool-contract.mjs',
   'src/App.jsx',
@@ -108,11 +119,13 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/test/**',
   'supabase/functions/harness-command/index.ts',
   'supabase/functions/harness-command/edge-core.mjs',
+  'supabase/functions/harness-tool-bridge/bridge-core.mjs',
   'src/pages/AIWorkspacePage.jsx',
   'src/pages/AIWorkspacePage.css',
   'src/components/harness-presentation/**',
   'src/services/harness-client.js',
   'src/services/harness-presentation.js',
+  'test/g1-harness-tools.test.mjs',
   'test/h2-harness-edge-contract.test.mjs',
   'test/h3-harness-ui.browser.test.mjs',
   'test/h3-harness-ui.test.mjs',
@@ -120,6 +133,14 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'test/harness-genui-visualize.browser.test.mjs',
   'test/harness-deterministic-orchestrator.browser.test.mjs',
   'test/helpers/harness-integration-owned-paths.mjs',
+  // G1 generation execution layer (accepted image-contract repair + video
+  // status/artifact preview repair): exact modified paths only.
+  'services/generation-worker/bailian-adapter.mjs',
+  'services/generation-worker/worker.mjs',
+  'test/g1-provider-adapter.test.mjs',
+  'test/g1-worker.test.mjs',
+  'test/g1-generation.browser.test.mjs',
+  'src/pages/GenerationTasksPage.jsx',
 ]);
 
 // Environment files the harness itself writes next to the worktree; they are

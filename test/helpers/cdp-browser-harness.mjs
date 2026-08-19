@@ -16,9 +16,9 @@
 import { Buffer } from 'node:buffer';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -296,19 +296,65 @@ export async function waitForPageTarget(debugPort, { timeout = 20_000, label = '
 
 // ---- 临时 profile（只删除本次创建且路径经过校验的独立目录） ----------------------
 
+// 创建注册表：仅记录本模块 makeTempProfile 创建的精确路径与其有界前缀
+// （所有权/身份凭据；伪造路径不可能出现在注册表内）。
+const createdProfiles = new Map(); // 解析后路径 -> { prefix, basename }
+// mkdtemp 的 6 字符随机后缀（固定有界）。
+const TEMP_SUFFIX_RE = /^[A-Za-z0-9]{6}$/;
+
 export async function makeTempProfile(prefix) {
   const profile = await mkdtemp(join(tmpdir(), prefix));
-  if (!profile.startsWith(tmpdir()) || !profile.includes(prefix)) {
+  const root = resolve(tmpdir());
+  const resolved = resolve(profile);
+  const name = basename(resolved);
+  const suffix = name.slice(prefix.length);
+  if (dirname(resolved) !== root || !name.startsWith(prefix)
+    || suffix.length !== 6 || !TEMP_SUFFIX_RE.test(suffix)) {
     throw new Error(`临时 profile 路径校验失败: ${profile}`);
   }
-  return profile;
+  createdProfiles.set(resolved, { prefix, basename: name });
+  return resolved;
 }
 
 export async function removeTempProfile(profile) {
-  if (!profile || !profile.startsWith(tmpdir()) || !/ams-(p20|p29|p30|p32)/.test(profile)) {
-    throw new Error(`拒绝删除未通过校验的路径: ${profile}`);
+  if (typeof profile !== 'string' || profile.length === 0) {
+    throw new Error(`拒绝删除未通过校验的路径: ${String(profile)}`);
   }
-  await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  // 路径穿越（/.. 与 \..、. 段）一律拒绝；解析前先拒绝，解析后靠直接包含校验兜底。
+  const segments = profile.split(/[\\/]+/);
+  if (segments.includes('..') || segments.includes('.')) {
+    throw new Error(`拒绝删除含路径穿越的路径: ${profile}`);
+  }
+  const root = resolve(tmpdir());
+  const resolved = resolve(profile);
+  const name = basename(resolved);
+  const record = createdProfiles.get(resolved);
+  if (!record) {
+    throw new Error(`拒绝删除非本测试创建的路径: ${resolved}`);
+  }
+  // 直接包含：必须是临时根的直接子目录（解析后精确相等），不允许中间层/越界。
+  if (dirname(resolved) !== root) {
+    throw new Error(`拒绝删除不在临时根直接子目录的路径: ${resolved}`);
+  }
+  // 精确有界 basename：与创建时记录完全一致（前缀 + 6 字符 mkdtemp 后缀）。
+  const suffix = name.slice(record.prefix.length);
+  if (name !== record.basename || !name.startsWith(record.prefix)
+    || suffix.length !== 6 || !TEMP_SUFFIX_RE.test(suffix)) {
+    throw new Error(`拒绝删除前缀/身份不符的路径: ${resolved}`);
+  }
+  let stat;
+  try {
+    stat = await lstat(resolved);
+  } catch (error) {
+    if (error.code === 'ENOENT') { createdProfiles.delete(resolved); return; }
+    throw error;
+  }
+  // 符号链接/junction 等重解析歧义一律拒绝（只删真实目录本身）。
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`拒绝删除符号链接/非目录路径: ${resolved}`);
+  }
+  await rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  createdProfiles.delete(resolved);
 }
 
 // ---- Edge 进程树确定性关闭 ------------------------------------------------------

@@ -10,7 +10,7 @@ import { canonicalJson, derivePlanSteps, normalizeSlots, PLAN_SCHEMA_VERSION, pl
 test('catalog integrity: every entry, operation, scope, dependency and bound is exact', () => {
   const verdict = assertWorkflowIntegrity();
   assert.equal(verdict.ok, true, verdict.issues.join('; '));
-  assert.equal(WORKFLOW_IDS.length, 11, 'the fixed catalog exposes exactly the bounded workflow set');
+  assert.equal(WORKFLOW_IDS.length, 13, 'the fixed catalog exposes exactly the bounded workflow set (G1 生成执行层加入 generate_media / read_generation)');
   for (const id of WORKFLOW_IDS) {
     const workflow = lookupWorkflow(id);
     assert.ok(workflow, `workflow ${id} resolves`);
@@ -105,11 +105,39 @@ test('approval derivation and dependency graph are exact per workflow', () => {
   assert.ok(handoff.flatMap((step) => step.approval).includes('handoff_creation'), 'handoff declares handoff_creation');
 });
 
+test('G1 生成执行层工作流：quote 只读零批准；submit 付费+写入双重批准；读取零批准', () => {
+  const generate = lookupWorkflow('generate_media');
+  const steps = derivePlanSteps(generate, {
+    brief_id: `brief-${'a'.repeat(24)}`, mode: 'image', prompt: '猫', submit_generation: true,
+  });
+  assert.deepEqual(steps.map((step) => step.operation), [
+    'workspace.project.read', 'generation.quote', 'generation.submit',
+  ]);
+  assert.deepEqual(steps[2].depends_on, ['st-1'], 'submit 必须依赖 quote');
+  assert.equal(steps[1].cost, false, 'quote 步骤零费用');
+  assert.equal(steps[1].write, false, 'quote 步骤零写入');
+  assert.deepEqual(steps[2].approval, ['paid_external_calls', 'online_writes'], 'submit 必须声明双重批准');
+  assert.equal(steps[2].cost, true, 'submit 必须标记付费');
+  assert.equal(steps[2].write, true, 'submit 必须标记 staging 写入');
+  const quoteOnly = derivePlanSteps(generate, {
+    brief_id: `brief-${'a'.repeat(24)}`, mode: 'image', prompt: '猫', submit_generation: false,
+  });
+  assert.deepEqual(quoteOnly.map((step) => step.operation), ['workspace.project.read', 'generation.quote'],
+    'quote-only 计划绝不包含 submit 步骤');
+  const read = lookupWorkflow('read_generation');
+  const readSteps = derivePlanSteps(read, { job_id: `g1j-${'a'.repeat(24)}` });
+  assert.deepEqual(readSteps.map((step) => step.operation), ['generation.status'], '只读状态步骤');
+  assert.deepEqual(readSteps.flatMap((step) => step.approval), [], '只读读取绝不要求批准');
+  const readWithArtifact = derivePlanSteps(read, { job_id: `g1j-${'a'.repeat(24)}`, artifact_id: `g1x-${'a'.repeat(24)}` });
+  assert.deepEqual(readWithArtifact.map((step) => step.operation), ['generation.status', 'generation.artifact']);
+  assert.equal(readWithArtifact[1].depends_on[0], 'st-0');
+});
+
 test('workflow ids and titles are stable for the UI contract', () => {
   assert.deepEqual(WORKFLOW_IDS, [
     'read_capability', 'collect_analyze_evidence', 'search_x', 'search_reddit',
     'search_x_reddit', 'analyze_evidence', 'compare_project', 'generate_similar',
-    'assemble_brief', 'lineage_audit', 'create_handoff',
+    'assemble_brief', 'lineage_audit', 'create_handoff', 'generate_media', 'read_generation',
   ]);
   for (const id of WORKFLOW_IDS) assert.ok(typeof WORKFLOW_BY_ID[id].title === 'string' && WORKFLOW_BY_ID[id].title.length > 0);
   assert.equal(canonicalJson({ b: 1, a: 2 }), canonicalJson({ a: 2, b: 1 }), 'canonical JSON is key-order stable');

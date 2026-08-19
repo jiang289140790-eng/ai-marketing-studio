@@ -1,223 +1,454 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmptyState } from '../components/EmptyState';
-import { ExecutionButton } from '../components/ExecutionButton';
-import { StatusBadge } from '../components/StatusBadge';
-import { getAssets, loadGenerationTaskData } from '../services/ops-service';
+import { GenerationQuotePanel } from '../components/generation-execution/GenerationQuotePanel';
+import { GenerationJobCard } from '../components/generation-execution/GenerationJobCard';
+import { GenerationArtifactViewer } from '../components/generation-execution/GenerationArtifactViewer';
+import { createP19Store } from '../services/p19-store.js';
+import { createP20OnlineStore } from '../services/p20-online-store.js';
 import { isSupabaseConfigured } from '../services/supabase-client';
-import { buildAssetBusinessName, getAssetContext } from '../utils/asset-library-model';
-import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
-import { formatDate, statusLabel } from '../utils/formatters';
+import {
+  G1_ASPECT_RATIOS,
+  G1_MODES,
+  G1_RESOLUTIONS,
+  createGenerationClient,
+  newGenerationRequestId,
+  readGenerationActiveProject,
+  readGenerationDemoUser,
+} from '../services/generation-execution-service';
+import './GenerationTasksPage.css';
 
-const FILTERS = [
-  ['queued', '排队中'],
-  ['running', '运行中'],
-  ['completed', '已完成'],
-  ['failed', '失败'],
-  ['cancelled', '已取消'],
-];
+const MODE_LABELS = {
+  image: '图片（qwen-image-2.0）',
+  video_t2v: '视频·文生视频（happyhorse-1.0-t2v）',
+  video_i2v: '视频·图生视频（happyhorse-1.0-i2v，需已批准引用素材）',
+};
 
-function normalizedStatus(status) {
-  const value = String(status || '').toLowerCase();
-  if (['pending', 'queued'].includes(value)) return 'queued';
-  if (['running', 'generating'].includes(value)) return 'running';
-  if (['success', 'completed'].includes(value)) return 'completed';
-  if (['cancelled', 'canceled'].includes(value)) return 'cancelled';
-  return value === 'failed' || value === 'error' ? 'failed' : 'queued';
+const ACTIVE_STATUSES = new Set(['queued', 'running']);
+// 有界轮询间隔：生产默认 4 秒；本地测试经 VITE_G1_POLL_INTERVAL_MS 收紧。
+const runtimePollEnv = Number((import.meta.env || {}).VITE_G1_POLL_INTERVAL_MS || 4000);
+const POLL_INTERVAL_MS = Number.isFinite(runtimePollEnv) && runtimePollEnv >= 200 ? runtimePollEnv : 4000;
+
+function boundedMessage(error) {
+  return String(error?.message || error || '操作失败。').slice(0, 200);
+}
+
+/** 作业明细中的有界费用上限（来自不可变报价/批准对象；无则显示 —）。 */
+function boundedCostText(job) {
+  const raw = job?.quote?.estimated_max_cost_cny ?? job?.approval?.estimated_max_cost_cny ?? null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return '—';
+  return `¥${value.toFixed(2)}`;
+}
+
+/** 有界终态诊断文本：仅显示代码与首条固定文案，绝不回显 raw 载荷/密钥。 */
+function boundedJobDiagnosticsText(job, attempts) {
+  const diagnostics = job?.diagnostics && typeof job.diagnostics === 'object' ? job.diagnostics : {};
+  const code = String(diagnostics.code || '').slice(0, 80);
+  const issues = Array.isArray(diagnostics.issues) ? diagnostics.issues.filter((entry) => typeof entry === 'string') : [];
+  const first = issues[0] ? `：${issues[0].slice(0, 240)}` : '';
+  let text = code || first ? `${code}${first}` : '';
+  const latest = Array.isArray(attempts) && attempts.length > 0 ? attempts[attempts.length - 1] : null;
+  const attemptDiagnostics = latest?.diagnostics && typeof latest.diagnostics === 'object' ? latest.diagnostics : {};
+  const providerCode = String(attemptDiagnostics.provider_code || '').slice(0, 80);
+  const providerMessage = String(attemptDiagnostics.provider_message || '').slice(0, 240);
+  if (providerCode) {
+    text += (text ? '；' : '') + `${providerCode}${providerMessage ? ` — ${providerMessage}` : ''}`;
+  }
+  return text.slice(0, 400);
 }
 
 export function GenerationTasksPage({
-  activeCampaignId,
-  auxiliaryMode = 'normal',
-  campaignContext,
-  dataScope = 'campaign',
   userId,
-  detailId,
   onNavigate,
-  routeParams = {},
+  detailId,
+  routeParams,
 }) {
-  const [data, setData] = useState({ workflowRuns: [], characters: [], comfyWorkflows: [], assets: [], legacyAssets: [], contentPackages: [], campaigns: [] });
-  const [filter, setFilter] = useState('queued');
-  const [selectedId, setSelectedId] = useState(detailId || '');
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
+  const activeProjectId = useMemo(() => readGenerationActiveProject(), []);
+  const demoUser = useMemo(() => readGenerationDemoUser(), []);
+  const resolvedUserId = userId || demoUser;
 
-  // P31 v2：草稿 → 图片生成准备 handoff
+  const client = useMemo(() => createGenerationClient({ demoUser: resolvedUserId }), [resolvedUserId]);
+  const store = useMemo(() => createP19Store(), []);
+  const onlineStore = useMemo(() => createP20OnlineStore(), []);
+
+  const [project, setProject] = useState(null);
+  const [projectLoading, setProjectLoading] = useState(true);
+  const [projectError, setProjectError] = useState('');
+
+  const [mode, setMode] = useState('image');
+  const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState('');
+  const [aspectRatio, setAspectRatio] = useState('');
+  const [durationSeconds, setDurationSeconds] = useState('');
+  const [resolution, setResolution] = useState('');
+  const [referenceAssetId, setReferenceAssetId] = useState('');
+  const [referenceAssets, setReferenceAssets] = useState([]);
+
+  const [quote, setQuote] = useState(null);
+  const [quoteError, setQuoteError] = useState('');
+  const [quoting, setQuoting] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [submitMessage, setSubmitMessage] = useState('');
+
+  const [jobs, setJobs] = useState([]);
+  const [selectedJobId, setSelectedJobId] = useState(detailId || '');
+  const [jobDetail, setJobDetail] = useState(null);
+  const [jobDetailError, setJobDetailError] = useState('');
+  const [jobsLoading, setJobsLoading] = useState(true);
+
+  const pollRef = useRef(null);
+
   const draftHandoff = useMemo(() => {
-    if (!routeParams || !routeParams.draftId) return null;
+    const draftId = String(routeParams?.draftId || '').trim();
+    if (!draftId) return null;
     return {
-      draftId: routeParams.draftId,
-      title: routeParams.title || '',
-      visualPlan: routeParams.visualPlan || '',
-      aspectRatio: routeParams.aspectRatio || '1:1',
+      draftId,
+      title: String(routeParams?.title || '').trim(),
+      visualPlan: String(routeParams?.visualPlan || '').trim(),
+      aspectRatio: String(routeParams?.aspectRatio || '').trim(),
     };
   }, [routeParams]);
 
-  const refresh = useCallback(async () => {
-    if (!userId || !isSupabaseConfigured) {
-      setLoading(false);
-      return;
+  useEffect(() => {
+    if (!draftHandoff) return;
+    setPrompt((current) => current || draftHandoff.visualPlan || draftHandoff.title);
+    if (G1_ASPECT_RATIOS.includes(draftHandoff.aspectRatio)) {
+      setAspectRatio((current) => current || draftHandoff.aspectRatio);
     }
-    setLoading(true);
+  }, [draftHandoff]);
+
+  // ---- 项目加载（本地 p19 store / 在线 p20 store；与研究工作台同一套）----
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProject() {
+      setProjectLoading(true);
+      setProjectError('');
+      try {
+        if (!activeProjectId) {
+          setProject(null);
+          return;
+        }
+        let next = null;
+        if (isSupabaseConfigured) {
+          next = await onlineStore.getProject(activeProjectId);
+        } else {
+          const localRead = store.getProject(activeProjectId);
+          if (!localRead.ok) throw new Error(localRead.message || localRead.code || 'Local project unavailable.');
+          next = localRead.project;
+        }
+        if (cancelled) return;
+        setProject(next);
+      } catch (error) {
+        if (!cancelled) setProjectError(boundedMessage(error));
+      } finally {
+        if (!cancelled) setProjectLoading(false);
+      }
+    }
+    loadProject();
+    return () => { cancelled = true; };
+  }, [activeProjectId, onlineStore, store]);
+
+  // ---- 引用素材（仅 i2v 需要；服务端只返回已批准图片素材）----
+  useEffect(() => {
+    if (mode !== 'video_i2v') return undefined;
+    let cancelled = false;
+    client.listReferenceAssets()
+      .then((result) => { if (!cancelled) setReferenceAssets(result?.data?.assets || []); })
+      .catch(() => { if (!cancelled) setReferenceAssets([]); });
+    return () => { cancelled = true; };
+  }, [client, mode]);
+
+  // ---- 作业列表 + 有界轮询（终态自动停止；刷新/重登录后自动恢复）----
+  const refreshJobs = useCallback(async () => {
+    if (!activeProjectId || !resolvedUserId) return;
     try {
-      const next = await loadGenerationTaskData();
-      const scopeOptions = { scope: dataScope, campaignContext, activeCampaignId };
-      setData({
-        ...next,
-        workflowRuns: filterRecordsForAuxiliaryScope(next.workflowRuns, scopeOptions),
-        legacyAssets: filterRecordsForAuxiliaryScope(next.legacyAssets, scopeOptions),
-      });
+      const result = await client.list({ projectId: activeProjectId, limit: 20 });
+      setJobs(result?.data?.jobs || []);
     } catch (error) {
-      setMessage(error.message);
+      setSubmitMessage(boundedMessage(error));
     } finally {
-      setLoading(false);
+      setJobsLoading(false);
     }
-  }, [activeCampaignId, campaignContext, dataScope, userId]);
+  }, [activeProjectId, client, resolvedUserId]);
 
-  useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => { if (detailId) setSelectedId(detailId); }, [detailId]);
+  const refreshSelectedJob = useCallback(async () => {
+    if (!selectedJobId) return;
+    try {
+      const result = await client.status({ jobId: selectedJobId });
+      setJobDetail(result?.data || null);
+      setJobDetailError('');
+    } catch (error) {
+      setJobDetailError(boundedMessage(error));
+    }
+  }, [client, selectedJobId]);
 
-  const assets = useMemo(() => getAssets(data), [data]);
-  const tasks = useMemo(() => data.workflowRuns.map((run) => {
-    const input = run.input_data || {};
-    const character = data.characters.find((row) => String(row.id) === String(run.character_id));
-    const workflow = data.comfyWorkflows.find((row) => (
-      String(row.id) === String(run.workflow_id)
-      || row.name === run.tool_id
-    ));
-    const outputIds = new Set([...(run.asset_ids || []), run.output_data?.asset_id].filter(Boolean).map(String));
-    const outputs = assets.filter((asset) => outputIds.has(String(asset.id)) || String(asset.generationJobId || '') === String(run.id));
-    const packageId = input.content_package_id || input.contentPackageId || '';
-    const contentPackage = data.contentPackages.find((row) => String(row.id) === String(packageId));
-    const campaignId = input.campaign_id || contentPackage?.campaign_id || '';
-    const campaign = data.campaigns.find((row) => String(row.id) === String(campaignId));
-    return {
-      ...run,
-      normalizedStatus: normalizedStatus(run.status),
-      character,
-      workflow,
-      outputs,
-      contentPackage,
-      campaign,
-      day: Number(input.day || contentPackage?.source_insights?.day_index || outputs.map(getAssetContext).find((ctx) => ctx.day)?.day || 0) || null,
-      provider: input.provider || run.output_data?.provider || workflow?.recommended_provider || '未上报',
-      progress: run.status === 'success' ? 100 : Number(run.output_data?.progress || input.progress || (run.status === 'running' ? 50 : 0)),
+  useEffect(() => { refreshJobs(); }, [refreshJobs]);
+
+  useEffect(() => {
+    const hasActive = jobs.some((job) => ACTIVE_STATUSES.has(job.status));
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (hasActive) {
+      pollRef.current = window.setInterval(() => { refreshJobs(); refreshSelectedJob(); }, POLL_INTERVAL_MS);
+    }
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
     };
-  }), [assets, data]);
-  const visibleTasks = tasks.filter((task) => task.normalizedStatus === filter);
-  const selected = tasks.find((task) => String(task.id) === String(selectedId)) || null;
+  }, [jobs, refreshJobs, refreshSelectedJob]);
+
+  useEffect(() => { refreshSelectedJob(); }, [refreshSelectedJob]);
+
+  const brief = useMemo(() => {
+    const candidate = project?.brief || null;
+    if (!candidate) return null;
+    if (!['approved', 'pending_review'].includes(candidate.status)) return null;
+    return candidate;
+  }, [project]);
+
+  const briefCardIds = useMemo(() => (Array.isArray(brief?.knowledge_citation_ids) ? brief.knowledge_citation_ids : []), [brief]);
+  const briefEvidenceIds = useMemo(() => {
+    if (Array.isArray(brief?.evidence_provenance?.evidence_ids)) {
+      return brief.evidence_provenance.evidence_ids;
+    }
+    if (!brief || !project) return [];
+    const citedCards = new Map((project.knowledge_cards || []).map((card) => [card.id, card]));
+    const analyses = new Map((project.analyses || []).map((analysis) => [analysis.id, analysis]));
+    return [...new Set(briefCardIds.map((cardId) => {
+      const card = citedCards.get(cardId);
+      return analyses.get(card?.analysis_id)?.evidence_id || null;
+    }).filter(Boolean))];
+  }, [brief, briefCardIds, project]);
+
+  const requestPayload = useMemo(() => {
+    if (!activeProjectId || !brief) return null;
+    return {
+      project_id: activeProjectId,
+      brief_id: brief.id,
+      mode,
+      prompt,
+      negative_prompt: negativePrompt || undefined,
+      aspect_ratio: aspectRatio || undefined,
+      duration_seconds: mode.startsWith('video') && durationSeconds ? Number(durationSeconds) : undefined,
+      resolution: mode.startsWith('video') && resolution ? resolution : undefined,
+      reference_asset_id: mode === 'video_i2v' && referenceAssetId ? referenceAssetId : undefined,
+      knowledge_card_ids: briefCardIds,
+      evidence_ids: briefEvidenceIds,
+    };
+  }, [activeProjectId, aspectRatio, brief, briefCardIds, briefEvidenceIds, durationSeconds, mode, negativePrompt, prompt, referenceAssetId, resolution]);
+
+  const requestQuote = useCallback(async () => {
+    if (!requestPayload) return;
+    setQuoting(true);
+    setQuoteError('');
+    setQuote(null);
+    try {
+      const result = await client.quote(requestPayload);
+      setQuote(result?.data?.quote || null);
+      if (!result?.data?.quote) setQuoteError('报价返回为空。');
+    } catch (error) {
+      setQuoteError(boundedMessage(error));
+    } finally {
+      setQuoting(false);
+    }
+  }, [client, requestPayload]);
+
+  const approveSubmit = useCallback(async () => {
+    if (!requestPayload || !quote) return;
+    setApproving(true);
+    setSubmitMessage('');
+    try {
+      const approval = {
+        quote_id: quote.quote_id,
+        quote_fingerprint: quote.quote_fingerprint,
+        request_fingerprint: quote.request_sha256,
+        estimated_max_cost_cny: quote.estimated_max_cost_cny,
+        expires_at: quote.expires_at,
+        source: 'browser',
+      };
+      const result = await client.approveSubmit({
+        ...requestPayload,
+        ...approval,
+        idempotency_key: newGenerationRequestId(),
+      });
+      const job = result?.data?.job;
+      if (!job) throw new Error('提交未返回作业。');
+      setSubmitMessage(`作业已创建（${job.id}）；付费生成将在显式批准后执行。`);
+      setQuote(null);
+      setSelectedJobId(job.id);
+      await refreshJobs();
+      await refreshSelectedJob();
+    } catch (error) {
+      setSubmitMessage(boundedMessage(error));
+    } finally {
+      setApproving(false);
+    }
+  }, [client, quote, refreshJobs, refreshSelectedJob, requestPayload]);
+
+  const canRequestQuote = Boolean(brief && requestPayload?.prompt?.trim() && resolvedUserId);
+
+  const drawerDiagnosticsText = jobDetail?.job ? boundedJobDiagnosticsText(jobDetail.job, jobDetail.attempts) : '';
+  const drawerCostText = jobDetail?.job ? boundedCostText(jobDetail.job) : '—';
 
   return (
-    <section className="page-stack generation-tasks-page">
+    <section className="page-stack generation-tasks-page g1-page">
       <div className="section-head">
         <div>
           <p className="eyebrow">执行过程</p>
           <h2>生成任务</h2>
-          <p>这里只跟踪图片、视频和其它工作流的执行过程。任务完成后，真实文件进入素材库。</p>
+          <p>选择 Brief → 预览不可变报价 → 显式批准 → 提交幂等生成作业 → 私有产物预览与版本历史。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => onNavigate?.('workspace')}>在内容工作台创建任务</button>
+        <button className="primary-button" type="button" onClick={() => onNavigate?.('research')}>在研究工作台准备 Brief</button>
       </div>
-      {message && <div className={/失败|不可用/.test(message) ? 'notice error' : 'notice'}>{message}</div>}
 
-      {/* P31 v2：草稿图片生成准备 */}
+      {projectError && <div className="notice error">{projectError}</div>}
+      {submitMessage && <div className={/失败|过期|冲突|无效|拒绝/.test(submitMessage) ? 'notice error' : 'notice'} data-testid="g1-submit-message">{submitMessage}</div>}
+
       {draftHandoff && (
-        <div className="draft-handoff-panel" role="region" aria-label="准备从草稿生成图片">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">图片生成准备</p>
-              <h3>从草稿创建图片生成任务</h3>
-            </div>
-            <span className="status-badge approved">草稿已就绪</span>
-          </div>
+        <section className="draft-handoff-panel" aria-label="图片生成准备">
+          <p className="eyebrow">图片生成准备</p>
+          <h3>草稿已就绪</h3>
           <div className="draft-handoff-grid">
-            <div className="detail-item"><span className="detail-label">草稿 ID</span><strong>{draftHandoff.draftId}</strong></div>
-            <div className="detail-item"><span className="detail-label">标题</span><strong>{draftHandoff.title || '未命名'}</strong></div>
-            <div className="detail-item"><span className="detail-label">画幅</span><strong>{draftHandoff.aspectRatio}</strong></div>
-            <div className="detail-item detail-full"><span className="detail-label">视觉方案</span><strong>{draftHandoff.visualPlan || '暂无视觉描述'}</strong></div>
+            <div><strong>草稿 ID</strong><p>{draftHandoff.draftId}</p></div>
+            <div><strong>标题</strong><p>{draftHandoff.title || '未命名草稿'}</p></div>
+            <div><strong>画幅</strong><p>{draftHandoff.aspectRatio || '1:1'}</p></div>
           </div>
-          <p className="form-hint">
-            来自 P31 内容工作台的草稿 handoff。你可以在此页面选择角色、LoRA 和工作流，基于上述视觉方案和画幅创建图片生成任务。草稿正文不会自动填充为生成 prompt——可根据需要在创建任务时手动组合。
-          </p>
-        </div>
+          {draftHandoff.visualPlan && <p><strong>视觉方案：</strong>{draftHandoff.visualPlan}</p>}
+          <p>这里只准备生成请求；不会自动调用模型、创建作业或产生费用。</p>
+        </section>
       )}
-      <div className="segmented-tabs generation-status-tabs">
-        {FILTERS.map(([id, label]) => <button className={filter === id ? 'active' : ''} type="button" key={id} onClick={() => setFilter(id)}>{label}<strong>{tasks.filter((task) => task.normalizedStatus === id).length}</strong></button>)}
-      </div>
-      {loading ? (
+
+      {!activeProjectId ? (
+        <EmptyState title="尚未选择研究项目" description="先在研究工作台选择或创建项目并生成待审核/已批准 Brief，再回到这里发起图片或视频生成。" action={<button className="primary-button" type="button" onClick={() => onNavigate?.('research')}>进入研究工作台</button>} />
+      ) : projectLoading ? (
         <div className="skeleton skeleton-card" />
-      ) : !visibleTasks.length ? (
-        <EmptyState title={`没有${statusLabel(filter)}任务`} description="生成任务必须从内容工作台发起，避免脱离内容、角色和素材上下文。" action={<button className="primary-button" type="button" onClick={() => onNavigate?.('workspace')}>进入内容工作台</button>} />
+      ) : !brief ? (
+        <EmptyState title="当前项目没有可选择的 Brief" description="需要一份 pending_review 或 approved 状态的 Brief，并引用至少一张知识卡与证据。" action={<button className="primary-button" type="button" onClick={() => onNavigate?.('research')}>返回研究工作台生成 Brief</button>} />
       ) : (
-        <div className="generation-task-list">
-          {visibleTasks.map((task) => (
-            <article className="generation-task-card" key={task.id}>
-              <div className="generation-task-head">
-                <div><h3>{task.contentPackage?.title || `${task.character?.display_name || task.character?.name || '角色'}生成任务`}</h3><small>{task.campaign?.name || task.campaign?.title || '当前运营活动'} · {task.day ? `Day ${task.day}` : '未指定 Day'}</small></div>
-                <StatusBadge status={task.normalizedStatus} />
+        <>
+          <section className="g1-create-panel" data-testid="g1-create-panel" role="region" aria-label="创建生成作业">
+            <div className="g1-panel-head">
+              <div>
+                <p className="eyebrow">来源 Brief</p>
+                <h3>{brief.topic || '未命名 Brief'}（第 {brief.version} 版）</h3>
               </div>
-              <div className="generation-task-facts">
-                <Fact label="角色" value={task.character?.display_name || task.character?.name || '未绑定'} />
-                <Fact label="LoRA" value={task.character?.lora_info?.name || '未上报'} />
-                <Fact label="工作流" value={task.workflow?.name || task.tool_id || '未上报'} />
-                <Fact label="Provider" value={task.provider} />
-                <Fact label="当前进度" value={`${task.progress}%`} />
-                <Fact label="创建时间" value={formatDate(task.created_at)} />
-                <Fact label="输出结果" value={task.outputs.length ? `${task.outputs.length} 个素材` : '等待回传'} />
-                <Fact label="下一步" value={nextAction(task)} />
-              </div>
-              <div className="task-progress"><span style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} /></div>
-              <div className="button-row">
-                {task.outputs.length > 0 && <button className="primary-button compact" type="button" onClick={() => onNavigate?.('assets', task.outputs[0].id)}>查看结果</button>}
-                {['queued', 'running'].includes(task.normalizedStatus) && (
-                  <ExecutionButton
-                    action="get_generation_job"
-                    resourceType="generation_job"
-                    resourceId={task.id}
-                    payload={{ generation_job_id: task.id }}
-                    onCompleted={() => refresh()}
-                  >回传状态</ExecutionButton>
-                )}
-                {task.normalizedStatus === 'failed' && <button className="ghost-button compact" type="button" onClick={() => onNavigate?.('workspace', task.contentPackage?.id || '', { retry_job_id: task.id })}>准备重试</button>}
-                {['queued', 'running'].includes(task.normalizedStatus) && <button className="ghost-button compact" type="button" disabled title="当前运行结构没有安全取消状态，避免伪造取消结果。">取消</button>}
-                <button className="ghost-button compact" type="button" onClick={() => { setSelectedId(task.id); onNavigate?.('generation', task.id); }}>查看技术详情</button>
-              </div>
-              {task.normalizedStatus === 'failed' && <p className="quality-warning">重试会回到内容工作台重新确认参数和费用，不会在此自动调用付费工作流。</p>}
-            </article>
-          ))}
-        </div>
+              <span className={`status-badge ${brief.status === 'approved' ? 'approved' : 'review'}`}>{brief.status === 'approved' ? '已批准' : '待审核'}</span>
+            </div>
+            <div className="g1-form-grid">
+              <label className="g1-field">
+                <span>生成模式</span>
+                <select value={mode} onChange={(event) => { setMode(event.target.value); setQuote(null); }} data-testid="g1-mode-select">
+                  {G1_MODES.map((value) => <option value={value} key={value}>{MODE_LABELS[value]}</option>)}
+                </select>
+              </label>
+              <label className="g1-field g1-field-wide">
+                <span>提示词（1–2000 字符）</span>
+                <textarea rows={3} value={prompt} maxLength={2000} onChange={(event) => { setPrompt(event.target.value); setQuote(null); }} placeholder="描述要生成的图片或视频画面" data-testid="g1-prompt-input" />
+              </label>
+              <label className="g1-field g1-field-wide">
+                <span>负面提示词（可选，0–500 字符）</span>
+                <input type="text" value={negativePrompt} maxLength={500} onChange={(event) => { setNegativePrompt(event.target.value); setQuote(null); }} data-testid="g1-negative-input" />
+              </label>
+              <label className="g1-field">
+                <span>画幅</span>
+                <select value={aspectRatio} onChange={(event) => { setAspectRatio(event.target.value); setQuote(null); }} data-testid="g1-aspect-select">
+                  <option value="">{mode === 'image' ? '默认 1:1' : '默认 16:9'}</option>
+                  {G1_ASPECT_RATIOS.map((value) => <option value={value} key={value}>{value}</option>)}
+                </select>
+              </label>
+              {mode.startsWith('video') && (
+                <>
+                  <label className="g1-field">
+                    <span>时长（秒）</span>
+                    <select value={durationSeconds} onChange={(event) => { setDurationSeconds(event.target.value); setQuote(null); }} data-testid="g1-duration-select">
+                      <option value="">默认 5 秒</option>
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <option value={value} key={value}>{value} 秒</option>)}
+                    </select>
+                  </label>
+                  <label className="g1-field">
+                    <span>分辨率</span>
+                    <select value={resolution} onChange={(event) => { setResolution(event.target.value); setQuote(null); }} data-testid="g1-resolution-select">
+                      <option value="">默认 720p</option>
+                      {G1_RESOLUTIONS.map((value) => <option value={value} key={value}>{value}</option>)}
+                    </select>
+                  </label>
+                </>
+              )}
+              {mode === 'video_i2v' && (
+                <label className="g1-field g1-field-wide">
+                  <span>已批准引用素材（i2v 必需）</span>
+                  <select value={referenceAssetId} onChange={(event) => { setReferenceAssetId(event.target.value); setQuote(null); }} data-testid="g1-reference-select">
+                    <option value="">选择引用素材…</option>
+                    {referenceAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name || asset.id}</option>)}
+                  </select>
+                  {!referenceAssets.length && <small className="form-hint">没有已批准的图片引用素材；请在素材库先批准一张图片（asset_context.approval = approved）。</small>}
+                </label>
+              )}
+            </div>
+            <div className="button-row">
+              <button className="primary-button" type="button" disabled={!canRequestQuote || quoting} onClick={requestQuote} data-testid="g1-request-quote">
+                {quoting ? '正在获取报价…' : '预览不可变报价'}
+              </button>
+              <span className="form-hint">引用 {briefCardIds.length} 张知识卡与 {briefEvidenceIds.length} 条证据；quote 只读、零费用。</span>
+            </div>
+            {quoteError && <div className="notice error">{quoteError}</div>}
+          </section>
+
+          {quote && (
+            <GenerationQuotePanel
+              quote={quote}
+              busy={approving}
+              onApprove={approveSubmit}
+              onDiscard={() => setQuote(null)}
+            />
+          )}
+        </>
       )}
-      {selected && <GenerationTaskDrawer task={selected} mode={auxiliaryMode} onClose={() => { setSelectedId(''); onNavigate?.('generation'); }} onAsset={(id) => onNavigate?.('assets', id)} />}
+
+      <div className="g1-jobs-section">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">执行进度</p>
+            <h3>当前项目作业</h3>
+            <p>状态自动刷新（有界轮询）；任何时刻都不会在未显式批准时发起付费调用。</p>
+          </div>
+        </div>
+        {jobsLoading ? <div className="skeleton skeleton-card" /> : jobs.length === 0 ? (
+          <EmptyState title="还没有生成作业" description="完成上述报价与批准流程后，作业会出现在这里。" />
+        ) : (
+          <div className="generation-task-list">
+            {jobs.map((job) => (
+              <GenerationJobCard key={job.id} job={job} selected={selectedJobId === job.id} onSelect={setSelectedJobId} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {jobDetailError && <div className="notice error">{jobDetailError}</div>}
+      {selectedJobId && jobDetail?.job && (
+        <aside className="detail-drawer generation-task-drawer g1-job-drawer" data-testid="g1-job-drawer">
+          <div className="detail-drawer-header">
+            <div>
+              <p className="eyebrow">生成作业详情</p>
+              <h3>{jobDetail.job.model_name || jobDetail.job.id}</h3>
+              <p>{jobDetail.job.id} · {jobDetail.job.status}</p>
+            </div>
+            <button className="ghost-button" type="button" onClick={() => setSelectedJobId('')}>关闭</button>
+          </div>
+          <div className="drawer-body">
+            <div className="drawer-section-grid">
+              <div className="detail-card"><span>模式</span><div>{jobDetail.job.mode}</div></div>
+              <div className="detail-card"><span>绑定 Brief</span><div>第 {jobDetail.job.brief_version} 版（{jobDetail.job.brief_id}）</div></div>
+              <div className="detail-card"><span>尝试</span><div>{jobDetail.job.attempt_count} / {jobDetail.job.max_attempts}</div></div>
+              <div className="detail-card"><span>费用上限（报价）</span><div>{drawerCostText}</div></div>
+              <div className="detail-card"><span>创建时间</span><div>{new Date(jobDetail.job.created_at).toLocaleString('zh-CN', { hour12: false })}</div></div>
+            </div>
+            {drawerDiagnosticsText && <p className="quality-warning" data-testid="g1-job-detail-diagnostics">{drawerDiagnosticsText}</p>}
+            <GenerationArtifactViewer artifacts={jobDetail.artifacts || []} client={client} jobId={selectedJobId} onError={(error) => setJobDetailError(boundedMessage(error))} />
+          </div>
+        </aside>
+      )}
     </section>
   );
 }
-
-function GenerationTaskDrawer({ task, mode, onClose, onAsset }) {
-  return (
-    <aside className="detail-drawer generation-task-drawer">
-      <div className="detail-drawer-header"><div><p className="eyebrow">生成任务详情</p><h3>{task.contentPackage?.title || task.tool_id || '生成任务'}</h3><p>{statusLabel(task.normalizedStatus)} · {task.progress}%</p></div><button className="ghost-button" type="button" onClick={onClose}>关闭</button></div>
-      <div className="drawer-body">
-        <div className="drawer-section-grid">
-          <DetailCard title="运营活动">{task.campaign?.name || '当前运营活动'}</DetailCard>
-          <DetailCard title="Day">{task.day ? `Day ${task.day}` : '未指定'}</DetailCard>
-          <DetailCard title="角色">{task.character?.name || '未绑定'}</DetailCard>
-          <DetailCard title="LoRA">{task.character?.lora_info?.name || '未上报'}</DetailCard>
-          <DetailCard title="工作流">{task.workflow?.name || task.tool_id || '未上报'}</DetailCard>
-          <DetailCard title="Provider">{task.provider}</DetailCard>
-        </div>
-        <div className="drawer-list">
-          {task.outputs.map((asset, index) => <article key={asset.id}><strong>{buildAssetBusinessName(asset, { characterName: task.character?.name, index: index + 1 })}</strong><button className="text-button" type="button" onClick={() => onAsset(asset.id)}>打开素材</button></article>)}
-        </div>
-        {mode === 'advanced' && <details className="technical-details" open data-technical-detail><summary>技术详情</summary><pre>{JSON.stringify({ id: task.id, workflow_id: task.workflow_id, tool_id: task.tool_id, status: task.status, error: task.error_message || task.last_error }, null, 2)}</pre></details>}
-      </div>
-    </aside>
-  );
-}
-
-function nextAction(task) {
-  if (task.normalizedStatus === 'completed') return task.outputs.length ? '审核输出素材' : '检查结果回传';
-  if (task.normalizedStatus === 'failed') return '回内容工作台确认后重试';
-  if (task.normalizedStatus === 'cancelled') return '无需处理';
-  return '等待或回传状态';
-}
-function Fact({ label, value }) { return <div><span>{label}</span><strong>{value || '—'}</strong></div>; }
-function DetailCard({ title, children }) { return <section className="detail-card"><span>{title}</span><div>{children}</div></section>; }
-

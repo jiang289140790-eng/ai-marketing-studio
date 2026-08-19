@@ -122,11 +122,11 @@ test('SQL 集成：全新数据库回放 47 迁移 + SQL 测试 + 并发幂等�
     result = psql(dbName, null, { stdin: ext });
     assert.equal(result.status, 0, `扩展引导失败：${result.stderr || result.stdout}`);
 
-    // ---- 45 个迁移按顺序回放 ----
+    // ---- 全部迁移按顺序回放 ----
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 47, '迁移集必须包含 Harness Brief 版本并发门禁，共 47 项');
+    assert.equal(migrations.length, 48, '迁移集必须包含 G1 百炼生成执行层，共 48 项');
     for (const name of migrations) {
       if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
         const legacy = `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous)

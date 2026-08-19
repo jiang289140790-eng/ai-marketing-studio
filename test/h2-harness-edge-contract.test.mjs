@@ -2,9 +2,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EDGE_SCHEMA_VERSION, fixedGatewayBase, signGatewayRequest, validateEdgeRequest } from '../supabase/functions/harness-command/edge-core.mjs';
-import { OPERATIONS, readBoundedText, sha256Hex, summarizeBridgeResponse, validateBridgeEnvelope, verifyToolBridgeSignature } from '../supabase/functions/harness-tool-bridge/bridge-core.mjs';
+import { G1_COMMAND_SCHEMA_VERSION as BRIDGE_G1_COMMAND_SCHEMA_VERSION, OPERATIONS, readBoundedText, sha256Hex, summarizeBridgeResponse, validateBridgeEnvelope, verifyToolBridgeSignature } from '../supabase/functions/harness-tool-bridge/bridge-core.mjs';
 import { signRequest, verifySignedRequest } from '../services/harness-gateway/gateway-core.mjs';
-import { TOOL_DEFINITIONS, TOOL_SCHEMA_VERSION, toBoundaryRequest } from '../services/harness-gateway/tool-contract.mjs';
+import { G1_COMMAND_SCHEMA_VERSION as GATEWAY_G1_COMMAND_SCHEMA_VERSION, TOOL_DEFINITIONS, TOOL_SCHEMA_VERSION, toBoundaryRequest } from '../services/harness-gateway/tool-contract.mjs';
+import { G1_EDGE_SCHEMA_VERSION } from '../supabase/functions/g1-generation-command/generation-core.mjs';
 import { executeCommand, parseCommandRequest } from '../supabase/functions/p19-workspace-command/command-core.mjs';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
@@ -38,6 +39,11 @@ function costDb({ rpc }) {
       return { rpc };
     },
   };
+}
+
+function withoutKey(source, key) {
+  const { [key]: _removed, ...rest } = source;
+  return rest;
 }
 
 test('gateway base is HTTPS root-only so routed paths cannot discard configuration', () => {
@@ -136,6 +142,58 @@ test('tool bridge operation registry exactly matches the gateway allowlist', () 
     const call = { schema_version: TOOL_SCHEMA_VERSION, task_id: 'ht-11111111-1111-4111-8111-111111111111', user_id: userId, project_id: projectId, operation, payload, idempotency_key: 'idem-1', expected_revision: null };
     const boundary = toBoundaryRequest(call);
     assert.equal(validateBridgeEnvelope({ schema_version: 'ams_harness_bridge_v1', call, boundary }, userId).ok, true, operation);
+  }
+});
+
+test('G1 command schema version is immutable across gateway, bridge and edge, and the bridge fails closed on missing/wrong/override values', () => {
+  assert.equal(GATEWAY_G1_COMMAND_SCHEMA_VERSION, 'g1_generation_command_v1');
+  assert.equal(BRIDGE_G1_COMMAND_SCHEMA_VERSION, GATEWAY_G1_COMMAND_SCHEMA_VERSION, '桥梁常量必须与网关常量逐字一致');
+  assert.equal(G1_EDGE_SCHEMA_VERSION, GATEWAY_G1_COMMAND_SCHEMA_VERSION, 'G1 Edge 精确版本必须与网关/桥梁一致');
+
+  const payloads = {
+    'generation.quote': { project_id: projectId, brief_id: 'brief-111111111111111111111111', mode: 'image', prompt: '猫' },
+    'generation.submit': {
+      project_id: projectId, brief_id: 'brief-111111111111111111111111', mode: 'image', prompt: '猫',
+      quote_id: `g1q-${'a'.repeat(24)}`, quote_fingerprint: 'f'.repeat(64), estimated_max_cost_cny: 0.3,
+    },
+    'generation.status': { project_id: projectId, job_id: `g1j-${'b'.repeat(24)}` },
+    'generation.artifact': { project_id: projectId, job_id: `g1j-${'b'.repeat(24)}`, artifact_id: `g1x-${'c'.repeat(24)}` },
+  };
+  for (const [operation, payload] of Object.entries(payloads)) {
+    const call = {
+      schema_version: TOOL_SCHEMA_VERSION, task_id: 'ht-11111111-1111-4111-8111-111111111111',
+      user_id: userId, project_id: projectId, operation, payload,
+      idempotency_key: `idem-g1-${operation}`,
+      ...(operation === 'generation.submit' ? { expected_revision: 1 } : {}),
+    };
+    const boundary = toBoundaryRequest(call);
+    assert.equal(boundary.body.schema_version, 'g1_generation_command_v1', '网关必须在边界请求中固定写入精确版本');
+    const envelope = { schema_version: 'ams_harness_bridge_v1', call, boundary };
+    assert.equal(validateBridgeEnvelope(envelope, userId).ok, true, `${operation} 精确版本必须通过桥梁校验`);
+
+    const without = validateBridgeEnvelope({ ...envelope, boundary: { ...boundary, body: withoutKey(boundary.body, 'schema_version') } }, userId);
+    assert.equal(without.code, 'BOUNDARY_SCHEMA_VERSION_MISSING', `${operation} 缺失版本必须 fail closed`);
+    assert.equal(without.diagnostics.field, 'schema_version');
+
+    const wrong = validateBridgeEnvelope({ ...envelope, boundary: { ...boundary, body: { ...boundary.body, schema_version: 'g1_generation_command_v2' } } }, userId);
+    assert.equal(wrong.code, 'BOUNDARY_SCHEMA_VERSION_MISMATCH', `${operation} 错误版本必须 fail closed`);
+    assert.equal(wrong.diagnostics.field, 'schema_version');
+
+    const override = validateBridgeEnvelope({
+      schema_version: 'ams_harness_bridge_v1',
+      call: { ...call, payload: { ...payload, schema_version: 'evil' } },
+      boundary: { ...boundary, body: { ...boundary.body, schema_version: 'evil' } },
+    }, userId);
+    assert.equal(override.code, 'BOUNDARY_SCHEMA_VERSION_OVERRIDE', `${operation} 经 payload 键注入的覆盖尝试必须 fail closed`);
+    assert.equal(override.diagnostics.field, 'schema_version');
+
+    const duplicateSameValue = validateBridgeEnvelope({
+      schema_version: 'ams_harness_bridge_v1',
+      call: { ...call, payload: { ...payload, schema_version: GATEWAY_G1_COMMAND_SCHEMA_VERSION } },
+      boundary,
+    }, userId);
+    assert.equal(duplicateSameValue.code, 'BOUNDARY_SCHEMA_VERSION_OVERRIDE', `${operation} 即使重复注入同值也必须 fail closed`);
+    assert.equal(duplicateSameValue.diagnostics.field, 'schema_version');
   }
 });
 

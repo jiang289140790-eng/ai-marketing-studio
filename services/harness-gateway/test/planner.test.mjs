@@ -240,6 +240,62 @@ test('built plans re-validate exactly and bind user/project/intent', async () =>
   assert.equal(buildPlan({ taskId: TASK_ID, request: request('x'), workflowId: 'not_a_workflow', slots: {} }).code, 'PLAN_WORKFLOW_UNKNOWN');
 });
 
+test('G1 生成执行层：图片/视频/报价/状态/产物意图精确分类且绝不发明字段', () => {
+  const cases = [
+    [`用 brief-${'a'.repeat(24)} 生成图片，提示词：「一只猫」`, 'generate_media', { mode: 'image', brief_id: `brief-${'a'.repeat(24)}`, prompt: '一只猫' }],
+    [`用 brief-${'a'.repeat(24)} 生成视频，提示词：「海边日落」，5 秒`, 'generate_media', { mode: 'video_t2v', brief_id: `brief-${'a'.repeat(24)}`, prompt: '海边日落', duration_seconds: 5 }],
+    [`用 brief-${'a'.repeat(24)} 图生视频，提示词：「参考图动画」，引用素材 ${'d'.repeat(8)}-${'d'.repeat(4)}-${'d'.repeat(4)}-${'d'.repeat(4)}-${'d'.repeat(12)}`, 'generate_media', { mode: 'video_i2v', reference_asset_id: `${'d'.repeat(8)}-${'d'.repeat(4)}-${'d'.repeat(4)}-${'d'.repeat(4)}-${'d'.repeat(12)}` }],
+    [`用 brief-${'a'.repeat(24)} 生成图片，提示词：「猫」，只要报价`, 'generate_media', { submit_generation: false }],
+    [`查看生成任务状态 g1j-${'e'.repeat(24)}`, 'read_generation', { job_id: `g1j-${'e'.repeat(24)}` }],
+    [`打开生成产物 g1j-${'e'.repeat(24)} 的 g1x-${'f'.repeat(24)}`, 'read_generation', { job_id: `g1j-${'e'.repeat(24)}`, artifact_id: `g1x-${'f'.repeat(24)}` }],
+  ];
+  for (const [intent, workflow, expectedSlots] of cases) {
+    const verdict = classifyIntent(intent);
+    assert.equal(verdict.ok, true, intent);
+    assert.equal(verdict.value.workflow, workflow, intent);
+    for (const [key, value] of Object.entries(expectedSlots)) {
+      assert.equal(verdict.value.slots[key], value, `${intent}: slot ${key}`);
+    }
+  }
+  // 缺提示词/mode 绝不从噪音中发明；缺作业身份的读取 fail closed。
+  const noPrompt = classifyIntent(`用 brief-${'a'.repeat(24)} 生成图片`);
+  assert.equal(noPrompt.value.slots.prompt, null);
+  const noMode = classifyIntent(`用 brief-${'a'.repeat(24)} 生成素材，提示词：「猫」`);
+  assert.equal(noMode.value.slots.mode, null);
+  const noJob = classifyIntent('查看生成任务状态');
+  assert.equal(noJob.value.slots.job_id, null);
+  // 既有能力不受 G1 触发器干扰。
+  assert.equal(classifyIntent('生成交接包').value.workflow, 'create_handoff');
+  assert.equal(classifyIntent('Generate a pending Brief from the existing analysis results').value.workflow, 'assemble_brief');
+  assert.equal(classifyIntent('比较当前项目中表现最好的帖子').value.workflow, 'compare_project');
+});
+
+test('G1 生成计划：quote-only 零费用零写入；submit 双重批准且引用精确修订', () => {
+  const slots = {
+    brief_id: `brief-${'a'.repeat(24)}`,
+    mode: 'image',
+    prompt: '一只猫',
+    aspect_ratio: '1:1',
+    submit_generation: true,
+  };
+  const plan = buildPlan({ taskId: TASK_ID, request: request('生成图片'), workflowId: 'generate_media', slots });
+  assert.equal(plan.ok, true, plan.code);
+  assert.deepEqual(plan.value.steps.map((step) => step.operation), [
+    'workspace.project.read', 'generation.quote', 'generation.submit',
+  ]);
+  assert.equal(plan.value.approvals.paid_external_calls, true);
+  assert.equal(plan.value.approvals.online_writes, true);
+  assert.equal(plan.value.cost_indicators.paid_calls, 1);
+  assert.equal(plan.value.cost_indicators.online_writes, 1);
+  const quoteOnly = buildPlan({ taskId: TASK_ID, request: request('只要报价'), workflowId: 'generate_media', slots: { ...slots, submit_generation: false } });
+  assert.equal(quoteOnly.ok, true, quoteOnly.code);
+  assert.equal(quoteOnly.value.approvals.paid_external_calls, false, 'quote-only 计划绝不要求付费批准');
+  assert.equal(quoteOnly.value.cost_indicators.paid_calls, 0);
+  assert.equal(quoteOnly.value.cost_indicators.online_writes, 0);
+  const unbound = buildPlan({ taskId: TASK_ID, request: request('生成图片', { project_id: null }), workflowId: 'generate_media', slots });
+  assert.equal(unbound.code, 'PROJECT_BINDING_REQUIRED', '生成必须绑定精确项目');
+});
+
 test('project-bound workflows fail closed at plan time without an exact project', () => {
   const unbound = request('x', { project_id: null });
   for (const [workflowId, slots] of [
@@ -257,4 +313,75 @@ test('project-bound workflows fail closed at plan time without an exact project'
   assert.equal(publicSearch.ok, true, 'a genuinely project-independent search-only plan remains valid');
   const boundBrief = buildPlan({ taskId: TASK_ID, request: request('x'), workflowId: 'assemble_brief', slots: {} });
   assert.equal(boundBrief.ok, true, 'the same workflow is valid with an exact project binding');
+});
+
+test('Brief 身份完整令牌契约：25+ 位后缀/前缀碰撞/尾随内容绝不截断，任何业务调用前 fail closed', async () => {
+  const canonical = `brief-${'a'.repeat(24)}`;
+  // staging 实测身份：25 位十六进制后缀（brief- + 25 hex）。
+  const legacy25 = 'brief-8a14d78ceee1a3ff2b32a076e';
+  assert.equal(legacy25.length, 31);
+  // 25 位后缀：完整令牌不是规范身份 → PLANNER_IDENTITY_INVALID（绝不提取
+  // 前 24 位前缀，G1 报价绝不绑定截断身份）。
+  const v25 = classifyIntent(`用 ${legacy25} 生成图片，提示词：「猫」`);
+  assert.equal(v25.ok, false);
+  assert.equal(v25.code, 'PLANNER_IDENTITY_INVALID');
+  assert.equal(v25.diagnostics.field, 'brief_id');
+  assert.match(v25.diagnostics.message, /24 位小写十六进制/);
+  // 更长后缀同样拒绝。
+  for (const token of [`brief-${'b'.repeat(32)}`, `brief-${'c'.repeat(64)}`]) {
+    const verdict = classifyIntent(`用 ${token} 生成图片，提示词：「猫」`);
+    assert.equal(verdict.ok, false, token);
+    assert.equal(verdict.code, 'PLANNER_IDENTITY_INVALID', token);
+    assert.equal(verdict.diagnostics.field, 'brief_id', token);
+  }
+  // 前缀碰撞 / 尾随分隔符 / 尾随字母数字 / 非纯十六进制 / 大小写不规范。
+  for (const token of [
+    `${canonical}-x`,
+    `${canonical}_`,
+    `${canonical}abc`,
+    `brief-${'a'.repeat(23)}xy`,
+    `brief-${'A'.repeat(24)}`,
+  ]) {
+    const verdict = classifyIntent(`用 ${token} 生成图片，提示词：「猫」`);
+    assert.equal(verdict.ok, false, token);
+    assert.equal(verdict.code, 'PLANNER_IDENTITY_INVALID', token);
+  }
+  // 空后缀 / 无初始十六进制字符 / 非十六进制后缀：这些 brief- 令牌同样必须
+  // fail closed（PLANNER_IDENTITY_INVALID, field: brief_id），绝不静默当作
+  // 无身份而放行。
+  for (const token of [
+    'brief-',
+    `brief-${'z'.repeat(24)}`,
+    `brief-${'g'.repeat(24)}`,
+    'brief-xyz',
+    'brief-测试',
+  ]) {
+    const verdict = classifyIntent(`用 ${token} 生成图片，提示词：「猫」`);
+    assert.equal(verdict.ok, false, token);
+    assert.equal(verdict.code, 'PLANNER_IDENTITY_INVALID', token);
+    assert.equal(verdict.diagnostics.field, 'brief_id', token);
+  }
+  // 坏令牌出现在任何意图（即使不是生成意图）中都 fail closed。
+  assert.equal(classifyIntent(`搜索 ${legacy25} 相关内容`).code, 'PLANNER_IDENTITY_INVALID');
+  assert.equal(classifyIntent(`把 ${legacy25} 保存为证据`).code, 'PLANNER_IDENTITY_INVALID');
+  // 规范身份不受影响：分类与完整计划构建均通过。
+  const ok = classifyIntent(`用 ${canonical} 生成图片，提示词：「猫」，只要报价`);
+  assert.equal(ok.ok, true, ok.code);
+  assert.equal(ok.value.slots.brief_id, canonical);
+  const planned = await createPlanner().plan({ taskId: TASK_ID, request: request(`用 ${canonical} 生成图片，提示词：「猫」，只要报价`) });
+  assert.equal(planned.ok, true, planned.code);
+  assert.equal(planned.value.slots.brief_id, canonical);
+  // 计划层兜底：显式传入超长 Brief 身份槽位同样 fail closed（PLAN_SLOT_IDENTITY）。
+  const slotRejected = buildPlan({
+    taskId: TASK_ID,
+    request: request('生成图片'),
+    workflowId: 'generate_media',
+    slots: { brief_id: legacy25, mode: 'image', prompt: '猫' },
+  });
+  assert.equal(slotRejected.ok, false);
+  assert.equal(slotRejected.code, 'PLAN_SLOT_IDENTITY');
+  // 坏令牌无法产生任何计划 → 不会有任何执行或业务工具调用。
+  const badPlan = await createPlanner().plan({ taskId: TASK_ID, request: request(`用 ${legacy25} 生成图片，提示词：「猫」`) });
+  assert.equal(badPlan.ok, false);
+  assert.equal(badPlan.code, 'PLANNER_IDENTITY_INVALID');
 });

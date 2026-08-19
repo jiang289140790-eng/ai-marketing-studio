@@ -4,6 +4,9 @@ import { createHash } from 'node:crypto';
 
 export const TOOL_SCHEMA_VERSION = 'ams_harness_tool_v1';
 export const TOOL_RESULT_SCHEMA_VERSION = 'ams_harness_tool_result_v1';
+// G1 边界命令信封的精确 schema 版本：由网关以固定常量写入边界请求，绝不
+// 来自模型载荷或任何外部输入（见 toBoundaryRequest 与 validateToolCall）。
+export const G1_COMMAND_SCHEMA_VERSION = 'g1_generation_command_v1';
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const PROJECT_ID = /^prj-[0-9a-f]{24}$/;
@@ -31,6 +34,13 @@ const definitions = {
   'research.search_reddit': { endpoint: 'p22-research-assist', action: 'search_reddit', fields: ['keyword', 'count', 'sort', 'subreddit', 'time_filter', 'project_id'], optional: ['count', 'sort', 'subreddit', 'time_filter', 'project_id'], approval: ['paid_external_calls'], stripProjectId: true },
   'research.analyze_persisted': { endpoint: 'p22-research-assist', action: 'analyze_persisted', fields: ['project_id', 'evidence_id'], approval: ['paid_external_calls'] },
   'research.generate_similar': { endpoint: 'p22-research-assist', action: 'generate_similar', fields: ['project_id', 'evidence_id', 'analysis_id'], approval: ['paid_external_calls'] },
+  // G1 百炼生成执行层：quote 是只读报价（零费用零写入）；submit 是付费生成 +
+  // staging 作业写入，必须同时获得 paid_external_calls 与 online_writes 两个
+  // 批准；status/artifact 是只读且绝不继承 submit 的批准。
+  'generation.quote': { endpoint: 'g1-generation-command', action: 'quote', fields: ['project_id', 'brief_id', 'mode', 'prompt', 'negative_prompt', 'aspect_ratio', 'duration_seconds', 'resolution', 'reference_asset_id', 'knowledge_card_ids', 'evidence_ids'], optional: ['negative_prompt', 'aspect_ratio', 'duration_seconds', 'resolution', 'reference_asset_id', 'knowledge_card_ids', 'evidence_ids'], approval: [] },
+  'generation.submit': { endpoint: 'g1-generation-command', action: 'approve_submit', fields: ['project_id', 'brief_id', 'mode', 'prompt', 'negative_prompt', 'aspect_ratio', 'duration_seconds', 'resolution', 'reference_asset_id', 'knowledge_card_ids', 'evidence_ids', 'quote_id', 'quote_fingerprint', 'estimated_max_cost_cny', 'expected_revision'], optional: ['negative_prompt', 'aspect_ratio', 'duration_seconds', 'resolution', 'reference_asset_id', 'knowledge_card_ids', 'evidence_ids', 'expected_revision'], approval: ['paid_external_calls', 'online_writes'], requiresRevision: true },
+  'generation.status': { endpoint: 'g1-generation-command', action: 'status', fields: ['project_id', 'job_id'], approval: [] },
+  'generation.artifact': { endpoint: 'g1-generation-command', action: 'artifact', fields: ['project_id', 'job_id', 'artifact_id'], approval: [] },
 };
 
 export const TOOL_DEFINITIONS = Object.freeze(Object.fromEntries(
@@ -140,6 +150,25 @@ export function toBoundaryRequest(validated) {
       },
     };
   }
+  if (definition.endpoint === 'g1-generation-command') {
+    // G1 边界把 expected_revision 作为 payload 字段接收（与 p19 不同，G1 是
+    // action 契约）；提交步骤的精确项目修订守卫必须在边界内生效。
+    const payload = structuredClone(validated.payload);
+    if (validated.expected_revision != null) payload.expected_revision = validated.expected_revision;
+    return {
+      endpoint: definition.endpoint,
+      body: {
+        action: definition.action,
+        ...payload,
+        // G1 边界命令信封要求精确 schema_version（g1_generation_command_v1），
+        // 否则 G1 Edge 以 SCHEMA_VERSION_MISMATCH fail closed。此版本由网关以
+        // 固定常量写入并放在载荷展开之后：模型载荷不允许该字段（validateToolCall
+        // 的 UNKNOWN_PAYLOAD_FIELD），任何碰撞也会被固定值覆盖，绝不用户可控。
+        schema_version: G1_COMMAND_SCHEMA_VERSION,
+        idempotency_key: boundaryIdempotencyKey,
+      },
+    };
+  }
   if (definition.stripProjectId === true) {
     const payload = structuredClone(validated.payload);
     delete payload.project_id;
@@ -166,6 +195,9 @@ const RESULT_DATA_FIELDS = Object.freeze([
   'capabilities', 'limits', 'cost_tracking', 'execution_flags', 'items', 'analyses',
   'usage', 'draft', 'project_id', 'search_batch_id', 'platform', 'keyword', 'count',
   'sort_intent', 'time_filter', 'subreddit', 'collected_at', 'harness_summary',
+  // G1 生成执行层结果字段（quote/job/status/artifact 的 bounded 数据）。
+  'quote', 'job', 'jobs', 'attempts', 'artifacts', 'events', 'artifact', 'signed_url',
+  'registry', 'assets',
 ]);
 
 function normalizedData(source) {

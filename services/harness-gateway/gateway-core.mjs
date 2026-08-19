@@ -467,9 +467,21 @@ export class HarnessTaskQueue {
         }
       }
       if (task.state === 'queued' || task.state === 'running') {
-        task.state = 'failed';
-        task.updated_at = new Date().toISOString();
-        task.error = { code: 'GATEWAY_RESTARTED', message: 'Gateway restarted before the task reached a durable terminal state.' };
+        if (task.pending_continuation === true) {
+          // A durably parked nonterminal task (deterministic outcome
+          // `running`) survives the restart with its job identity (the
+          // submitted quote/job resume state) attached: an explicit
+          // authenticated same-task continuation can still converge it
+          // through an exact read-only generation.status — never a
+          // resubmission. A transient queued/running task without the park
+          // marker still fails closed as before.
+          task.state = 'running';
+          task.updated_at = new Date().toISOString();
+        } else {
+          task.state = 'failed';
+          task.updated_at = new Date().toISOString();
+          task.error = { code: 'GATEWAY_RESTARTED', message: 'Gateway restarted before the task reached a durable terminal state.' };
+        }
       }
       if (task.state === 'planned') {
         const planned = [...this.#tasks.values()].filter((entry) => entry.state === 'planned');
@@ -686,6 +698,31 @@ export class HarnessTaskQueue {
       return { ok: false, code: 'DETERMINISTIC_RUNNER_UNAVAILABLE' };
     }
     if (task.plan.fingerprint !== validated.value.plan_fingerprint) return { ok: false, code: 'PLAN_FINGERPRINT_MISMATCH' };
+    // Durable nonterminal park (a deterministic `running` outcome): an
+    // explicit authenticated same-task continuation schedules exactly one
+    // bounded refresh round through the deterministic runner. The executor's
+    // refresh path performs exactly one read-only generation.status and never
+    // repeats quote, submit, provider, paid or completed write steps. Wrong
+    // identity (read above), wrong fingerprint, mismatched approvals and
+    // invalid delegated authorization all fail closed before any execution.
+    // A task whose refresh round is already queued or executing is merged
+    // idempotently through the replay branch below instead of being enqueued
+    // a second time.
+    if (task.state === 'running' && task.pending_continuation === true && !this.#controllers.has(task.id)) {
+      const runtimeCheck = this.#validateRuntimeContext(runtimeContext, { phase: 'submit', position: this.#pending.length + this.#active });
+      if (!runtimeCheck?.ok) return { ok: false, code: runtimeCheck?.code || 'DELEGATED_AUTHORIZATION_INVALID' };
+      if (this.#pending.length + this.#active >= this.#capacity) return { ok: false, code: 'QUEUE_FULL' };
+      task.confirmation = { approval: validated.value.approval, confirmed_at: new Date().toISOString() };
+      // A continuation is a fresh confirmation: it must never replay an
+      // explicit step retry target, so the executor's read-only refresh path
+      // applies to the accepted submit step instead of re-invoking it.
+      task.retry_target = null;
+      this.#transition(task, 'queued');
+      this.#pending.push(task.id);
+      if (runtimeContext) this.#runtimeContexts.set(task.id, runtimeContext);
+      queueMicrotask(() => this.#drain());
+      return { ok: true, replayed: false, continued: true, task: externalTask(task) };
+    }
     if (task.state === 'queued' || task.state === 'running' || TERMINAL.has(task.state)) {
       return { ok: true, replayed: true, task: externalTask(task) };
     }
@@ -806,9 +843,11 @@ export class HarnessTaskQueue {
     if (!found.ok) return found;
     const task = this.#tasks.get(taskId);
     if (TERMINAL.has(task.state)) return { ok: true, task: externalTask(task), unchanged: true };
-    if (task.state === 'running') {
-      const controller = this.#controllers.get(taskId);
-      if (!controller) return { ok: false, code: 'ACTIVE_CANCEL_UNAVAILABLE' };
+    // Active execution is aborted through its controller. A durably parked
+    // running task (pending continuation) has no controller and is cancelled
+    // exactly like a queued task.
+    const controller = this.#controllers.get(taskId);
+    if (controller) {
       controller.abort();
       return { ok: true, task: externalTask(task), cancellation_requested: true };
     }
@@ -885,7 +924,25 @@ export class HarnessTaskQueue {
       }
       if (output?.partial_completion === true) task.result.partial_completion = true;
       if (output?.retry_unsafe_step) task.result.retry_unsafe_step = bounded(output.retry_unsafe_step, 40);
-      this.#transition(task, output?.outcome === 'partial' ? 'partial' : output?.outcome === 'failed' ? 'failed' : 'succeeded');
+      if (output?.outcome === 'running') {
+        // A deterministic `running` outcome is a durable nonterminal park,
+        // never succeeded: the real asynchronous G1 job is still queued or
+        // running and only an explicit authenticated same-task continuation
+        // may converge the task. The park marker distinguishes this state
+        // from a transient in-flight `running` task (active controller) and
+        // makes it restart-safe.
+        task.pending_continuation = true;
+        this.#transition(task, 'running');
+      } else {
+        delete task.pending_continuation;
+        if (output?.outcome === 'failed' && output?.needs_attention === true) {
+          // Bounded queue-level signal for a needs_attention terminal job; the
+          // exact bounded diagnostics live in the submit step snapshot and the
+          // persisted generation_status result view.
+          task.error = { code: 'G1_JOB_NEEDS_ATTENTION', message: '生成作业需要人工关注（详见作业诊断）。' };
+        }
+        this.#transition(task, output?.outcome === 'partial' ? 'partial' : output?.outcome === 'failed' ? 'failed' : 'succeeded');
+      }
     } catch (error) {
       const taskFailure = controller.signal.aborted
         ? null

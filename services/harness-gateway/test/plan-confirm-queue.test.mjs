@@ -3,10 +3,11 @@
 // the exact failed step only, RETRY_UNSAFE for ambiguous paid outcomes, and
 // restart recovery of planned/partial tasks.
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { setTimeout } from 'node:timers';
-import { HarnessTaskQueue, GATEWAY_SCHEMA_VERSION, runWithIsolatedTaskView, runWithTaskTimeout, validateConfirmRequest, validatePlanRequest, validateRetryRequest } from '../gateway-core.mjs';
+import { HarnessTaskQueue, GATEWAY_SCHEMA_VERSION, runWithIsolatedTaskView, runWithTaskTimeout, validateConfirmRequest, validateDelegatedAuthorization, validatePlanRequest, validateRetryRequest } from '../gateway-core.mjs';
 import { createPlanner, planFingerprint } from '../planner.mjs';
 import { createBridgeStateReader, executeConfirmedPlan } from '../deterministic-executor.mjs';
 
@@ -820,6 +821,189 @@ test('inactive partial tasks share the bounded history retention limit', async (
   assert.equal(records.length, 2);
   assert.ok(records.every((task) => task.state === 'partial'));
 });
+
+// ---------------------------------------------------------------------------
+// Queue-level running→terminal continuation contract. The deterministic
+// executor returns outcome `running` while the submitted G1 job is still
+// queued/running; the gateway must park that task durably nonterminal (never
+// succeeded) and converge it only through an explicit authenticated same-task
+// continuation that re-runs the bounded deterministic round (the executor
+// performs exactly one read-only generation.status there).
+// ---------------------------------------------------------------------------
+
+function scriptedQueue({ outcomes, initialTasks = [], onEvent = () => {}, capacity = 10 }) {
+  let executions = 0;
+  const deterministicRunner = async () => {
+    const outcome = outcomes[Math.min(executions, outcomes.length - 1)];
+    executions += 1;
+    return { outcome, final_response: `scripted-round-${executions - 1}`, artifact_refs: [] };
+  };
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    deterministicRunner,
+    planner,
+    initialTasks,
+    onEvent,
+    capacity,
+    validateRuntimeContext: (context) => (context?.delegatedAuthorization ? { ok: true } : { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' }),
+  });
+  return { queue, executions: () => executions };
+}
+
+async function parkedTask(outcomes) {
+  const { queue, executions } = scriptedQueue({ outcomes });
+  const planned = await queue.plan(planRequest({ request_id: `park-${outcomes[0]}` }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const approvals = planned.task.plan.approvals;
+  const confirmed = queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), planned.task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(confirmed.ok, true);
+  await queue.whenIdle();
+  return { queue, executions, task: queue.read(planned.task.id, planned.task.request.user_id).task, approvals };
+}
+
+const validAuth = () => ({ delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+
+test('deterministic running outcome parks the task durably nonterminal and is never succeeded', async () => {
+  const { queue, executions, task } = await parkedTask(['running']);
+  assert.equal(task.state, 'running', 'running outcome must remain a durable nonterminal state');
+  assert.equal(task.pending_continuation, true, 'the park marker must be durable');
+  assert.equal(executions(), 1, 'the bounded deterministic round ran exactly once');
+  assert.equal(task.result.final_response, 'scripted-round-0');
+  assert.equal(queue.listSummaries(task.request.user_id, 10)[0].state, 'running', 'summaries never report succeeded for a parked task');
+});
+
+test('a durably parked running task is cancelled without an active controller', async () => {
+  const { queue, task } = await parkedTask(['running']);
+  const cancelled = queue.cancel(task.id, task.request.user_id);
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.task.state, 'cancelled', 'a parked task cancels exactly like a queued task');
+  assert.equal(queue.read(task.id, task.request.user_id).task.state, 'cancelled');
+});
+
+test('explicit authenticated same-task continuation performs exactly one refresh round and converges', async () => {
+  const { queue, executions, task, approvals } = await parkedTask(['running', 'succeeded']);
+  const continuation = queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, validAuth());
+  assert.equal(continuation.ok, true);
+  assert.equal(continuation.continued, true, 'a parked task confirms as a fresh continuation');
+  assert.equal(continuation.replayed, false);
+  assert.equal(continuation.task.state, 'queued', 'the continuation schedules one bounded refresh round');
+  await queue.whenIdle();
+  const done = queue.read(task.id, task.request.user_id).task;
+  assert.equal(done.state, 'succeeded', 'the continuation converges the task to the real terminal state');
+  assert.equal(done.pending_continuation, undefined, 'terminal convergence clears the park marker');
+  assert.equal(executions(), 2, 'exactly one refresh round ran');
+  const replay = queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, validAuth());
+  assert.equal(replay.replayed, true, 'a terminal continuation is an idempotent replay');
+  assert.equal(executions(), 2, 'a terminal replay never executes');
+});
+
+test('continuation fails closed before execution on wrong identity, fingerprint, approvals or authorization', async () => {
+  const { queue, executions, task, approvals } = await parkedTask(['running']);
+  const wrongUser = queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), 'user-b', validAuth());
+  assert.equal(wrongUser.code, 'TASK_NOT_FOUND', 'wrong identity fails closed');
+  const wrongFingerprint = queue.confirm(confirmRequest(task.id, 'f'.repeat(64), approvals), task.request.user_id, validAuth());
+  assert.equal(wrongFingerprint.code, 'PLAN_FINGERPRINT_MISMATCH', 'wrong plan fingerprint fails closed');
+  const missingApproval = queue.confirm(
+    confirmRequest(task.id, task.plan.fingerprint, { ...approvals, paid_external_calls: false }),
+    task.request.user_id,
+    validAuth(),
+  );
+  assert.equal(missingApproval.code, 'CONFIRM_APPROVAL_MISMATCH', 'mismatched approvals fail closed');
+  const unauthorized = queue.confirm(confirmRequest(task.id, task.plan.fingerprint, approvals), task.request.user_id, null);
+  assert.equal(unauthorized.code, 'DELEGATED_AUTHORIZATION_REQUIRED', 'invalid delegated authorization fails closed');
+  assert.equal(executions(), 1, 'every rejected continuation executes zero rounds');
+  assert.equal(queue.read(task.id, task.request.user_id).task.state, 'running', 'the task stays parked after rejected continuations');
+});
+
+test('concurrent continuations are idempotently merged into exactly one refresh round', async () => {
+  let release;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let executions = 0;
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner,
+    deterministicRunner: async () => {
+      executions += 1;
+      if (executions === 1) return { outcome: 'running', final_response: 'round-1', artifact_refs: [] };
+      markStarted();
+      await gate;
+      return { outcome: 'succeeded', final_response: 'round-2', artifact_refs: [] };
+    },
+    validateRuntimeContext: (context) => (context?.delegatedAuthorization ? { ok: true } : { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' }),
+  });
+  const planned = await queue.plan(planRequest({ request_id: 'continuation-merge' }), validAuth());
+  const approvals = planned.task.plan.approvals;
+  const confirm = () => queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), planned.task.request.user_id, validAuth());
+  confirm();
+  await queue.whenIdle();
+  assert.equal(queue.read(planned.task.id, planned.task.request.user_id).task.state, 'running');
+  const first = confirm();
+  assert.equal(first.continued, true);
+  const whileQueued = confirm();
+  assert.equal(whileQueued.replayed, true, 'a queued continuation round merges concurrent confirms');
+  await started;
+  const whileRunning = confirm();
+  assert.equal(whileRunning.replayed, true, 'an executing continuation round merges concurrent confirms');
+  release();
+  await queue.whenIdle();
+  const done = queue.read(planned.task.id, planned.task.request.user_id).task;
+  assert.equal(done.state, 'succeeded');
+  assert.equal(executions, 2, 'concurrent continuations produce exactly one refresh round');
+  const terminalReplay = confirm();
+  assert.equal(terminalReplay.replayed, true);
+  assert.equal(executions, 2);
+});
+
+test('parked running task survives a gateway restart with its identity and converges after reload', async () => {
+  const events = [];
+  await parkedTaskWithEvents(['running'], events);
+  const snapshot = events.find((event) => event.event === 'running' && event.task?.pending_continuation === true)?.task;
+  assert.ok(snapshot, 'the parked snapshot is emitted durably');
+  const target = scriptedQueue({ outcomes: ['succeeded'], initialTasks: [snapshot] });
+  const recovered = target.queue.read(snapshot.id, snapshot.request.user_id).task;
+  assert.equal(recovered.state, 'running', 'the parked task stays nonterminal across the restart');
+  assert.equal(recovered.pending_continuation, true, 'the park marker survives the restart');
+  assert.equal(recovered.plan.fingerprint, snapshot.plan.fingerprint, 'the plan identity survives the restart');
+  const continued = target.queue.confirm(confirmRequest(snapshot.id, snapshot.plan.fingerprint, snapshot.plan.approvals), snapshot.request.user_id, validAuth());
+  assert.equal(continued.ok, true);
+  assert.equal(continued.continued, true);
+  await target.queue.whenIdle();
+  assert.equal(target.queue.read(snapshot.id, snapshot.request.user_id).task.state, 'succeeded', 'the reloaded task converges after the continuation');
+  assert.equal(target.executions(), 1, 'the reloaded queue executed exactly the one continuation round');
+});
+
+test('continuation rejects an expired delegated authorization before any execution', async () => {
+  const now = 1786686000000;
+  const jwt = (expiresAt) => `Bearer a.${Buffer.from(JSON.stringify({ exp: Math.floor(expiresAt / 1000) })).toString('base64url')}.signature`;
+  let executions = 0;
+  const queue = new HarnessTaskQueue({
+    runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
+    planner,
+    deterministicRunner: async () => {
+      executions += 1;
+      return { outcome: 'running', final_response: 'parked', artifact_refs: [] };
+    },
+    validateRuntimeContext: (context) => validateDelegatedAuthorization(context, { now, minimumValidityMs: 750_000 }),
+  });
+  const planned = await queue.plan(planRequest({ request_id: 'expired-continuation' }), { delegatedAuthorization: jwt(now + 800_000) });
+  const approvals = planned.task.plan.approvals;
+  queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), planned.task.request.user_id, { delegatedAuthorization: jwt(now + 800_000) });
+  await queue.whenIdle();
+  assert.equal(queue.read(planned.task.id, planned.task.request.user_id).task.state, 'running');
+  const rejected = queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), planned.task.request.user_id, { delegatedAuthorization: jwt(now + 700_000) });
+  assert.equal(rejected.code, 'DELEGATED_AUTHORIZATION_EXPIRES_TOO_SOON', 'an expired delegation fails closed before execution');
+  assert.equal(executions, 1, 'the expired continuation executed zero refresh rounds');
+});
+
+async function parkedTaskWithEvents(outcomes, events) {
+  const { queue, executions } = scriptedQueue({ outcomes, onEvent: (event) => events.push(event) });
+  const planned = await queue.plan(planRequest({ request_id: 'restart-park' }), validAuth());
+  const confirmed = queue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, planned.task.plan.approvals), planned.task.request.user_id, validAuth());
+  assert.equal(confirmed.ok, true);
+  await queue.whenIdle();
+  return { queue, executions, task: queue.read(planned.task.id, planned.task.request.user_id).task };
+}
 
 test('restart fails excess unconfirmed plans closed and keeps retained history bounded', async () => {
   const bridge = mockBridge();

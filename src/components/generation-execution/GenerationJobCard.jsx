@@ -24,6 +24,9 @@ export function GenerationJobCard({ job, onSelect, selected = false }) {
   const status = String(job.status || 'queued');
   const progress = status === 'completed' ? 100 : status === 'running' ? 45 : status === 'queued' ? 10 : 0;
   const diagnostics = boundedDiagnosticsText(job.diagnostics);
+  const diagnosticsLabel = status === 'completed' && diagnostics
+    ? `历史诊断（已恢复）：${diagnostics}`
+    : diagnostics;
   return (
     <article
       className={`generation-task-card g1-job-card ${selected ? 'selected' : ''}`}
@@ -45,7 +48,15 @@ export function GenerationJobCard({ job, onSelect, selected = false }) {
         <div><span>更新于</span><strong>{job.updated_at ? new Date(job.updated_at).toLocaleString('zh-CN', { hour12: false }) : '—'}</strong></div>
       </div>
       <div className="task-progress"><span style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>
-      {diagnostics && <p className="quality-warning" data-testid="g1-job-diagnostics">{diagnostics}</p>}
+      {diagnosticsLabel && (
+        <p
+          className="quality-warning"
+          data-testid="g1-job-diagnostics"
+          data-diagnostic-state={status === 'completed' ? 'historical' : 'active'}
+        >
+          {diagnosticsLabel}
+        </p>
+      )}
       <div className="button-row">
         <button className="ghost-button compact" type="button" onClick={(event) => { event.stopPropagation(); onSelect?.(job.id); }}>查看详情与版本历史</button>
       </div>

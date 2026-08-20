@@ -6,7 +6,7 @@
 // 判为通过）。
 //
 // 覆盖（要求验证 #1 与 #8 的真实 SQL 执行部分）：
-//   - 全新数据库上回放全部 45 个迁移（bootstrap 仅复刻已验收环境：
+//   - 全新数据库上回放全部 51 个迁移（bootstrap 仅复刻已验收环境：
 //     storage/auth/extensions/graphql_public/vault 架构与扩展，非迁移变更）；
 //   - 全部 SQL 测试（已验收 P17 系列 + P19 + P20 + P22 + P17-B2 对抗测试）
 //     逐一通过；其中 P17-B2 的 helper 由本文件从 P17-A4 迁移提取并同源注入
@@ -101,7 +101,7 @@ const CONCURRENT_USER = '44444444-4444-4444-8444-444444444444';
 const CONCURRENT_PROJECT = 'prj-eeeeeeeeeeeeeeeeeeeeeeee';
 const CONCURRENT_KEY = 'conc-key-1';
 
-test('SQL 集成：全新数据库回放 47 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
+test('SQL 集成：全新数据库回放 51 迁移 + SQL 测试 + 并发幂等（真实 PostgreSQL 17）', async () => {
   // 基础设施前置：Docker/PostgreSQL 17 缺失时给出明确基础设施失败（M1 验收）。
   const docker = dockerReady();
   assert.ok(docker.ok, `基础设施失败：Docker CLI/daemon 不可用（${docker.version || '无法探测'}），无法回放真实 PostgreSQL 17 迁移`);
@@ -126,7 +126,7 @@ test('SQL 集成：全新数据库回放 47 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 48, '迁移集必须包含 G1 百炼生成执行层，共 48 项');
+    assert.equal(migrations.length, 51, '迁移集必须包含 G1 生成执行层、P19 证据报价绑定、ACL 收尾与既有 Provider task 恢复，共 51 项');
     for (const name of migrations) {
       if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
         const legacy = `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous)

@@ -112,6 +112,57 @@ const FAKE_EDGE_SCRIPT = `
             return project?.brief || null;
           } catch { return null; }
         };
+        const projectFor = (projectId) => {
+          try {
+            const raw = localStorage.getItem('p19_workspace_store_v1');
+            if (!raw) return null;
+            const envelope = JSON.parse(raw);
+            const list = envelope.projects || [];
+            return list.find((p) => p.id === projectId) || null;
+          } catch { return null; }
+        };
+        // P19 证据报价绑定合同镜像（与数据库 g1_resolve_evidence_binding 同语义）：
+        // 卡片集 = Brief 引用集（规范排序、去重前拒绝重复）；权威证据集 = 卡片
+        // evidence_links[].source_ref 去重排序；请求证据必须精确等于权威集。
+        const canonicalCardSet = (brief, project) => {
+          const ids = (brief.knowledge_citation_ids || []).slice().sort();
+          if (!project || ids.length === 0) return { ok: false, code: 'G1_BINDING_INVALID', message: '知识卡集合不合法。' };
+          const seen = new Set();
+          for (const id of ids) {
+            if (typeof id !== 'string' || !/^kc-[0-9a-f]{24}$/.test(id)) return { ok: false, code: 'G1_BINDING_INVALID', message: '知识卡身份不合法。' };
+            if (seen.has(id)) return { ok: false, code: 'G1_BINDING_INVALID', message: '知识卡重复。' };
+            seen.add(id);
+          }
+          const cited = new Set((project.knowledge_cards || []).map((c) => c.id));
+          for (const id of ids) if (!cited.has(id)) return { ok: false, code: 'G1_BINDING_MISSING', message: '知识卡不存在。' };
+          return { ok: true, ids };
+        };
+        const deriveEvidence = (brief, project) => {
+          const refs = new Set();
+          const cardById = new Map((project?.knowledge_cards || []).map((c) => [c.id, c]));
+          for (const cardId of (brief.knowledge_citation_ids || [])) {
+            const card = cardById.get(cardId);
+            for (const link of (card?.evidence_links || [])) {
+              const ref = link && typeof link === 'object' ? link.source_ref : null;
+              if (typeof ref === 'string' && /^ev-[0-9a-f]{24}$/.test(ref)) refs.add(ref);
+            }
+          }
+          return [...refs].sort();
+        };
+        const canonicalEvidenceCheck = (brief, project, requested) => {
+          const derived = deriveEvidence(brief, project);
+          if (derived.length === 0) return { ok: false, code: 'G1_BINDING_INVALID', message: '知识卡未派生任何证据。' };
+          if (!Array.isArray(requested) || requested.length === 0) return { ok: false, code: 'G1_BINDING_INVALID', message: '证据数组不合法。' };
+          const seen = new Set();
+          for (const id of requested) {
+            if (typeof id !== 'string' || !/^ev-[0-9a-f]{24}$/.test(id)) return { ok: false, code: 'G1_BINDING_INVALID', message: '证据身份不合法。' };
+            if (seen.has(id)) return { ok: false, code: 'G1_BINDING_INVALID', message: '证据重复。' };
+            seen.add(id);
+          }
+          const canon = [...new Set(requested)].sort();
+          if (JSON.stringify(canon) !== JSON.stringify(derived)) return { ok: false, code: 'G1_BINDING_MISMATCH', message: '请求证据与权威证据集不精确匹配。' };
+          return { ok: true, ids: derived };
+        };
         if (body.action === 'providers') {
           return new Response(JSON.stringify(ok({ action: 'providers', data: { registry: providers } })), { status: 200, headers: { 'content-type': 'application/json' } });
         }
@@ -123,7 +174,32 @@ const FAKE_EDGE_SCRIPT = `
           if (!brief || !['pending_review', 'approved'].includes(brief.status)) {
             return new Response(JSON.stringify(fail('G1_BRIEF_NOT_FOUND', 'Brief 不存在或不可选择。')), { status: 400, headers: { 'content-type': 'application/json' } });
           }
-          const requestSha = await sha256(canonicalRequest(body));
+          const project = projectFor(body.project_id);
+          // 卡片集必须与 Brief 引用集精确相等（规范排序；重复去重前拒绝）。
+          const cardCheck = canonicalCardSet(brief, project);
+          if (!cardCheck.ok) {
+            return new Response(JSON.stringify(fail(cardCheck.code, cardCheck.message)), { status: 400, headers: { 'content-type': 'application/json' } });
+          }
+          const requestedCardCanon = [...new Set((Array.isArray(body.knowledge_card_ids) ? body.knowledge_card_ids : []) || [])].sort();
+          if (JSON.stringify(requestedCardCanon) !== JSON.stringify(cardCheck.ids)) {
+            return new Response(JSON.stringify(fail('G1_BINDING_MISMATCH', '请求知识卡集合与 Brief 引用集不精确匹配。')), { status: 400, headers: { 'content-type': 'application/json' } });
+          }
+          // 证据集：请求提供时必须精确等于权威集；省略时自动绑定权威集
+          // （历史 Brief 无 evidence_ids 时从卡片 evidence_links[].source_ref 派生）。
+          let evidenceIds;
+          if (body.evidence_ids === undefined || body.evidence_ids === null) {
+            evidenceIds = deriveEvidence(brief, project);
+            if (evidenceIds.length === 0) {
+              return new Response(JSON.stringify(fail('G1_BINDING_INVALID', '知识卡未派生任何证据。')), { status: 400, headers: { 'content-type': 'application/json' } });
+            }
+          } else {
+            const evCheck = canonicalEvidenceCheck(brief, project, body.evidence_ids);
+            if (!evCheck.ok) {
+              return new Response(JSON.stringify(fail(evCheck.code, evCheck.message)), { status: 400, headers: { 'content-type': 'application/json' } });
+            }
+            evidenceIds = evCheck.ids;
+          }
+          const requestSha = await sha256(canonicalRequest({ ...body, knowledge_card_ids: cardCheck.ids, evidence_ids: evidenceIds }));
           const quote = {
             schema_version: 'g1_quote_v1',
             quote_id: 'g1q-' + requestSha.slice(0, 24),
@@ -142,8 +218,8 @@ const FAKE_EDGE_SCRIPT = `
             brief_version: brief.version || 1,
             brief_fingerprint: brief.fingerprint || 'b'.repeat(64),
             project_revision: 1,
-            knowledge_card_ids: (body.knowledge_card_ids || brief.knowledge_citation_ids || []).slice().sort(),
-            evidence_ids: (body.evidence_ids || brief.evidence_provenance?.evidence_ids || []).slice().sort(),
+            knowledge_card_ids: cardCheck.ids,
+            evidence_ids: evidenceIds,
             reference_asset_id: body.reference_asset_id || null,
             will_use_storage: true,
             will_write: true,
@@ -238,8 +314,15 @@ const FAKE_EDGE_SCRIPT = `
                     brief_version: job.brief_version,
                     knowledge_card_ids: (job.request.knowledge_card_ids || []),
                     evidence_ids: (job.request.evidence_ids || []),
+                    cost_cny: null,
                     created_at: new Date().toISOString(),
                   });
+                  if (String(job.request.prompt || '').includes('恢复诊断测试')) {
+                    job.diagnostics = {
+                      code: 'G1_WORKER_INTERNAL',
+                      issues: ['恢复前的历史诊断。'],
+                    };
+                  }
                   save();
                 }
               }
@@ -337,10 +420,16 @@ const SEED_SCRIPT = `
       topic: projectIndex === 1 ? 'G1 浏览器生成项目' : 'G1 浏览器隔离项目',
       objective: '验证真实浏览器闭环', audience: '测试用户', channel: 'X', constraints: ['只读来源'], now: fixedNow
     });
-    const input = await makeInput(projectIndex);
-    project = await service.addEvidence(project, input, { now: fixedNow, hasher: contracts.fingerprintOf });
-    project = await service.runAnalysis(project, project.evidence[0].id, { now: fixedNow, hasher: contracts.fingerprintOf });
-    project = await service.buildKnowledgeCard(project, project.analyses[0].id, { now: fixedNow, hasher: contracts.fingerprintOf });
+    // 项目 A 三卡/三证据（历史 Brief 无显式 evidence_ids 的浏览器合同），项目 B 单卡。
+    const cardCount = projectIndex === 1 ? 3 : 1;
+    for (let cardIndex = 1; cardIndex <= cardCount; cardIndex += 1) {
+      const input = await makeInput(projectIndex * 10 + cardIndex);
+      project = await service.addEvidence(project, input, { now: fixedNow, hasher: contracts.fingerprintOf });
+      const evidence = project.evidence[project.evidence.length - 1];
+      project = await service.runAnalysis(project, evidence.id, { now: fixedNow, hasher: contracts.fingerprintOf });
+      const analysis = project.analyses[project.analyses.length - 1];
+      project = await service.buildKnowledgeCard(project, analysis.id, { now: fixedNow, hasher: contracts.fingerprintOf });
+    }
     project = await service.assembleBrief(project, { now: fixedNow, hasher: contracts.fingerprintOf });
     const saved = store.putProject(project);
     if (!saved.ok) throw new Error(saved.code + ': ' + saved.message);
@@ -435,7 +524,9 @@ test('G1 real browser: quote → explicit approval → submit → status → pri
     assert.match(quoteText, /¥0\.02 – ¥0\.30/, `quote 必须显示有界费用区间：${quoteText.slice(0, 200)}`);
     assert.match(quoteText, /付费生成 \+ 私有存储写入/, `quote 必须声明付费执行与存储写入`);
     assert.match(quoteText, /第 1 版/, `quote 必须绑定 Brief 版本`);
-    assert.match(quoteText, /1 \/ 1/, `quote 必须绑定知识卡/证据`);
+    // 种子 Brief 是历史形态（evidence_provenance 无 evidence_ids）：fake edge 必须
+    // 从被引知识卡 evidence_links[].source_ref 派生权威证据集并绑定（三卡/三证据）。
+    assert.match(quoteText, /3 \/ 3/, `quote 必须绑定三卡/三证据（历史 Brief 派生权威集）：${quoteText.slice(0, 200)}`);
     const maxCost = await cdp.evaluate(`document.querySelector('[data-testid="g1-quote-max"]').textContent`);
     assert.match(maxCost, /¥0\.30/, `预估最大费用必须显示：${maxCost}`);
 
@@ -464,8 +555,10 @@ test('G1 real browser: quote → explicit approval → submit → status → pri
     assert.match(downloadHref, /^blob:/, `下载必须是短时私有链接：${String(downloadHref).slice(0, 60)}`);
     const drawerText = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-drawer"]').innerText`);
     assert.match(drawerText, /第 1 版/, `作业详情必须绑定 Brief 版本`);
-    assert.match(drawerText, /1 张/, `作业详情必须显示知识卡血缘`);
-    assert.match(drawerText, /1 条/, `作业详情必须显示证据血缘`);
+    assert.match(drawerText, /3 张/, `作业详情必须显示三张知识卡血缘`);
+    assert.match(drawerText, /3 条/, `作业详情必须显示三条证据血缘`);
+    const actualCost = await cdp.evaluate(`document.querySelector('[data-testid="g1-actual-cost"]').textContent`);
+    assert.equal(actualCost, 'Provider 未返回', 'Provider 未返回实际结算值时不得用报价上限代替');
 
     // ---- 硬刷新恢复：作业与产物仍在 ----
     await reloadAndWait(cdp, tracker, { label: 'hard refresh' });
@@ -504,7 +597,7 @@ test('G1 real browser: quote → explicit approval → submit → status → pri
     await cdp.evaluate(`(() => {
       const area = document.querySelector('[data-testid="g1-prompt-input"]');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(area, '海边日落视频，波浪缓缓推进');
+      setter.call(area, '恢复诊断测试：海边日落视频，波浪缓缓推进');
       area.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
     await click(cdp, { selector: '[data-testid="g1-request-quote"]', label: 'request second video quote' });
@@ -518,6 +611,10 @@ test('G1 real browser: quote → explicit approval → submit → status → pri
     assert.match(videoSrc, /^blob:/, `视频产物预览必须是私有 blob 短时链接：${videoSrc.slice(0, 60)}`);
     const videoDrawerText = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-drawer"]').innerText`);
     assert.match(videoDrawerText, /video\/mp4/, '视频产物必须显示视频 MIME');
+    assert.match(videoDrawerText, /历史诊断（已恢复）：G1_WORKER_INTERNAL/, '已恢复的完成作业必须将旧诊断标记为历史诊断');
+    assert.match(videoDrawerText, /实际费用\s*Provider 未返回/, '完成视频未返回结算值时必须明确显示 Provider 未返回');
+    const recoveredDiagnosticState = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-detail-diagnostics"]')?.dataset.diagnosticState`);
+    assert.equal(recoveredDiagnosticState, 'historical', '已完成作业的旧诊断不得标记为当前活动错误');
 
     // ---- 项目切换隔离：B 项目不得出现 A 的作业 ----
     await cdp.evaluate(`(() => {

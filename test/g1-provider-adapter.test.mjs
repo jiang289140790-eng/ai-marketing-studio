@@ -563,6 +563,41 @@ test('轮询：PENDING→RUNNING→SUCCEEDED 推进；FAILED/CANCELED/未知状�
   }
 });
 
+test('轮询成功兼容 output.video_url：保留完整签名 URL、去重且拒绝非 HTTP(S)', async () => {
+  const signedUrl = 'https://provider.example/video.mp4?signature=' + 'a'.repeat(300);
+  const { server, base } = await startFakeProvider(async () => (
+    jsonResponse(200, {
+      output: {
+        task_status: TASK_STATUS_SUCCEEDED,
+        results: [
+          { url: signedUrl },
+          { url: 'file:///tmp/not-allowed.mp4' },
+        ],
+        video_url: signedUrl,
+      },
+      request_id: 'req-video-url-1',
+    })
+  ));
+  try {
+    const result = await pollTask({ apiKey: API_KEY, taskId: 'task-video-url', baseUrl: base });
+    assert.equal(result.status, TASK_STATUS_SUCCEEDED);
+    assert.deepEqual(result.results, [{ url: signedUrl }], '两种 Provider 形状必须去重并完整保留签名 URL');
+    assert.equal(result.request_id, 'req-video-url-1');
+  } finally {
+    await closeServer(server);
+  }
+
+  const { server: directServer, base: directBase } = await startFakeProvider(async () => (
+    jsonResponse(200, { output: { task_status: TASK_STATUS_SUCCEEDED, video_url: signedUrl } })
+  ));
+  try {
+    const direct = await pollTask({ apiKey: API_KEY, taskId: 'task-direct-video-url', baseUrl: directBase });
+    assert.deepEqual(direct.results, [{ url: signedUrl }], '仅有 output.video_url 时仍必须得到可下载产物');
+  } finally {
+    await closeServer(directServer);
+  }
+});
+
 test('下载：有界大小、MIME 捕获、SHA-256 校验（超限即失败）', async () => {
   const content = Buffer.from('fake-image-bytes');
   const { server, base } = await startFakeProvider(async (request) => {

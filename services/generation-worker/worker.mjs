@@ -262,6 +262,109 @@ export async function processClaimedJob(claimed, deps) {
 }
 
 /**
+ * Recover exactly one already-paid provider task whose persisted attempt is
+ * ambiguous. This path has no submit capability: it reads the exact recovery
+ * context, polls the exact existing provider task once, downloads/uploads the
+ * terminal result, then asks SQL to atomically append the artifact and convert
+ * that same attempt to succeeded. An unclear/non-success result is returned
+ * without changing the database and must not be retried automatically.
+ */
+export async function recoverExistingProviderTask(target, deps) {
+  const { db, storage, logger = console } = deps;
+  const jobId = String(target?.jobId || '');
+  const attemptId = String(target?.attemptId || '');
+  const providerTaskId = String(target?.providerTaskId || '');
+  const workerId = String(target?.workerId || G1_WORKER_ID).slice(0, 64);
+  const apiKey = deps.apiKey || apiKeyFromEnv();
+  const fetchImpl = deps.fetchImpl || globalThis.fetch;
+  const pollTaskImpl = deps.pollTaskImpl || pollTask;
+
+  if (!jobId || !attemptId || !providerTaskId) {
+    return { outcome: 'blocked', code: 'G1_RECOVERY_IDENTITY_INVALID' };
+  }
+  if (!apiKey) {
+    return { outcome: 'blocked', code: 'G1_WORKER_API_KEY_MISSING' };
+  }
+
+  const context = await db.getAmbiguousRecoveryContext({ jobId, attemptId, providerTaskId });
+  if (!context
+    || context.job_id !== jobId
+    || context.attempt_id !== attemptId
+    || context.provider_task_id !== providerTaskId) {
+    return { outcome: 'blocked', code: 'G1_RECOVERY_CONTEXT_MISMATCH' };
+  }
+  const mode = context.mode;
+  if (!['video_t2v', 'video_i2v'].includes(mode)) {
+    return { outcome: 'blocked', code: 'G1_RECOVERY_MODE_INVALID' };
+  }
+  const poll = await pollTaskImpl({
+    apiKey,
+    taskId: providerTaskId,
+    baseUrl: PROVIDER_BASE_URL,
+    fetchImpl,
+    timeoutMs: PROVIDER_POLL_TIMEOUT_MS,
+  });
+
+  if (poll.status !== TASK_STATUS_SUCCEEDED) {
+    return {
+      outcome: 'not_recovered',
+      code: poll.status === TASK_STATUS_FAILED
+        ? 'G1_PROVIDER_FAILED'
+        : poll.status === TASK_STATUS_CANCELED
+          ? 'G1_PROVIDER_CANCELED'
+          : 'G1_PROVIDER_RESULT_NOT_TERMINAL',
+      provider_status: poll.status,
+    };
+  }
+
+  const resultUrl = poll.results?.[0]?.url;
+  if (!resultUrl) {
+    return { outcome: 'not_recovered', code: 'G1_PROVIDER_RESULT_MISSING', provider_status: poll.status };
+  }
+
+  const downloaded = await downloadResult({
+    url: resultUrl,
+    maxBytes: maxArtifactBytesForMode(mode),
+    fetchImpl,
+  });
+  const contentSha = sha256Hex(downloaded.buffer);
+  const parsed = parseArtifactDimensions(downloaded.mime, downloaded.buffer.byteLength);
+  const version = Number(context?.next_artifact_version) || 1;
+  const path = await storage.uploadArtifact({
+    user: context.user_id,
+    project: context.project_id,
+    jobId,
+    version,
+    contentSha,
+    mime: downloaded.mime,
+    buffer: downloaded.buffer,
+  });
+
+  const completed = await db.recoverAmbiguousAttempt({
+    jobId,
+    attemptId,
+    providerTaskId,
+    workerId,
+    providerStatus: poll.status,
+    artifact: {
+      schema_version: 'g1_artifact_v1',
+      content_sha256: contentSha,
+      mime_type: parsed.mime,
+      byte_size: parsed.byte_size,
+      width: parsed.width,
+      height: parsed.height,
+      duration_seconds: parsed.duration_seconds,
+      storage_path: path,
+      source_url: resultUrl.length <= 500 ? resultUrl : null,
+      usage: poll.usage || {},
+      cost_cny: null,
+    },
+  });
+  logger.info(`[${jobId}] recovered existing provider task into artifact ${completed?.artifact?.artifact_version}.`);
+  return { outcome: 'completed', artifact: completed?.artifact || null };
+}
+
+/**
  * 有界下载已就绪结果 → SHA-256 → 私有确定性路径上传 → completeAttempt。
  * 图片同步路径与视频轮询成功路径共用；失败（网络/超限/上传/完成 RPC）按
  * fail-closed 冒泡（绝不重试，绝不重新提交付费操作）。
@@ -332,6 +435,7 @@ async function pollUntilTerminal({ jobId, attemptId, workerId, taskId, db, stora
     const poll = await pollTask({
       apiKey: apiKey || apiKeyFromEnv(),
       taskId,
+      baseUrl: PROVIDER_BASE_URL,
       fetchImpl,
       timeoutMs: PROVIDER_POLL_TIMEOUT_MS,
     });

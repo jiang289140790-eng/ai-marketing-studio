@@ -47,11 +47,22 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   // G1 generation execution layer (accepted image-contract repair + video
   // status/artifact preview repair): exact modified paths only.
   'services/generation-worker/bailian-adapter.mjs',
+  'services/generation-worker/db-adapter.mjs',
+  'services/generation-worker/recover-existing-task.mjs',
   'services/generation-worker/worker.mjs',
   'test/g1-provider-adapter.test.mjs',
   'test/g1-worker.test.mjs',
   'test/g1-generation.browser.test.mjs',
+  'src/components/generation-execution/GenerationJobCard.jsx',
   'src/pages/GenerationTasksPage.jsx',
+  'supabase/migrations/20260820071137_g1_existing_provider_task_artifact_recovery.sql',
+  // G1 P19 Evidence quote binding final repair: exact migration and
+  // corresponding database/P19 replay tests authorized for this closure.
+  'supabase/migrations/20260819080000_g1_p19_evidence_quote_binding_v1.sql',
+  'supabase/migrations/20260820050013_g1_p19_evidence_quote_binding_acl_closeout.sql',
+  'supabase/tests/g1_b0_generation_adversarial.test.sql',
+  'test/g1-migration-replay.test.mjs',
+  'test/p19-sql-integration.test.mjs',
   // Legacy union from earlier harness milestones (their tests call `.has()`).
   'services/harness-gateway/compose.yaml',
   'services/harness-gateway/home-lockdown.patch.yml',
@@ -136,11 +147,23 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   // G1 generation execution layer (accepted image-contract repair + video
   // status/artifact preview repair): exact modified paths only.
   'services/generation-worker/bailian-adapter.mjs',
+  'services/generation-worker/db-adapter.mjs',
+  'services/generation-worker/recover-existing-task.mjs',
   'services/generation-worker/worker.mjs',
   'test/g1-provider-adapter.test.mjs',
   'test/g1-worker.test.mjs',
   'test/g1-generation.browser.test.mjs',
+  'src/components/generation-execution/GenerationJobCard.jsx',
   'src/pages/GenerationTasksPage.jsx',
+  'supabase/migrations/20260820071137_g1_existing_provider_task_artifact_recovery.sql',
+  // G1 P19 Evidence quote binding final repair: the same exact paths
+  // mirrored from HARNESS_INTEGRATION_OWNED_PATHS for the strict diff gate,
+  // plus the forward ACL closeout migration (exact path only, no globs).
+  'supabase/migrations/20260819080000_g1_p19_evidence_quote_binding_v1.sql',
+  'supabase/migrations/20260820050013_g1_p19_evidence_quote_binding_acl_closeout.sql',
+  'supabase/tests/g1_b0_generation_adversarial.test.sql',
+  'test/g1-migration-replay.test.mjs',
+  'test/p19-sql-integration.test.mjs',
 ]);
 
 // Environment files the harness itself writes next to the worktree; they are

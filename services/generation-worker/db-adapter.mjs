@@ -70,6 +70,31 @@ export function createDbAdapter({ supabase, logger: _logger = console }) {
         p_retry_eligible: retryEligible,
       });
     },
+    /**
+     * Read the immutable context for one exact ambiguous provider task. This is
+     * read-only and cannot claim, enqueue, or submit provider work.
+     */
+    async getAmbiguousRecoveryContext({ jobId, attemptId, providerTaskId }) {
+      return rpc('g1_get_ambiguous_recovery_context', {
+        p_job_id: jobId,
+        p_attempt_id: attemptId,
+        p_provider_task_id: providerTaskId,
+      });
+    },
+    /**
+     * Atomically attach a downloaded artifact to the same ambiguous attempt.
+     * SQL revalidates state, task identity, lineage, path, hash and uniqueness.
+     */
+    async recoverAmbiguousAttempt({ jobId, attemptId, providerTaskId, workerId, providerStatus, artifact }) {
+      return rpc('g1_recover_ambiguous_attempt', {
+        p_job_id: jobId,
+        p_attempt_id: attemptId,
+        p_provider_task_id: providerTaskId,
+        p_worker_id: workerId,
+        p_provider_status: providerStatus,
+        p_artifact: artifact,
+      });
+    },
   };
 }
 

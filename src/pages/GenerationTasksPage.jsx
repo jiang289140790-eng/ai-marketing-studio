@@ -40,6 +40,17 @@ function boundedCostText(job) {
   return `¥${value.toFixed(2)}`;
 }
 
+/** Provider 实际结算值；Provider 未返回时必须明确显示未知，禁止用报价上限代替。 */
+function boundedActualCostText(artifacts) {
+  const values = (Array.isArray(artifacts) ? artifacts : [])
+    .map((artifact) => artifact?.cost_cny)
+    .filter((raw) => raw !== null && raw !== undefined && raw !== '')
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  if (values.length === 0) return 'Provider 未返回';
+  return `¥${values.reduce((total, value) => total + value, 0).toFixed(2)}`;
+}
+
 /** 有界终态诊断文本：仅显示代码与首条固定文案，绝不回显 raw 载荷/密钥。 */
 function boundedJobDiagnosticsText(job, attempts) {
   const diagnostics = job?.diagnostics && typeof job.diagnostics === 'object' ? job.diagnostics : {};
@@ -290,6 +301,10 @@ export function GenerationTasksPage({
 
   const drawerDiagnosticsText = jobDetail?.job ? boundedJobDiagnosticsText(jobDetail.job, jobDetail.attempts) : '';
   const drawerCostText = jobDetail?.job ? boundedCostText(jobDetail.job) : '—';
+  const drawerActualCostText = boundedActualCostText(jobDetail?.artifacts);
+  const drawerDiagnosticsLabel = jobDetail?.job?.status === 'completed' && drawerDiagnosticsText
+    ? `历史诊断（已恢复）：${drawerDiagnosticsText}`
+    : drawerDiagnosticsText;
 
   return (
     <section className="page-stack generation-tasks-page g1-page">
@@ -442,9 +457,18 @@ export function GenerationTasksPage({
               <div className="detail-card"><span>绑定 Brief</span><div>第 {jobDetail.job.brief_version} 版（{jobDetail.job.brief_id}）</div></div>
               <div className="detail-card"><span>尝试</span><div>{jobDetail.job.attempt_count} / {jobDetail.job.max_attempts}</div></div>
               <div className="detail-card"><span>费用上限（报价）</span><div>{drawerCostText}</div></div>
+              <div className="detail-card"><span>实际费用</span><div data-testid="g1-actual-cost">{drawerActualCostText}</div></div>
               <div className="detail-card"><span>创建时间</span><div>{new Date(jobDetail.job.created_at).toLocaleString('zh-CN', { hour12: false })}</div></div>
             </div>
-            {drawerDiagnosticsText && <p className="quality-warning" data-testid="g1-job-detail-diagnostics">{drawerDiagnosticsText}</p>}
+            {drawerDiagnosticsLabel && (
+              <p
+                className="quality-warning"
+                data-testid="g1-job-detail-diagnostics"
+                data-diagnostic-state={jobDetail.job.status === 'completed' ? 'historical' : 'active'}
+              >
+                {drawerDiagnosticsLabel}
+              </p>
+            )}
             <GenerationArtifactViewer artifacts={jobDetail.artifacts || []} client={client} jobId={selectedJobId} onError={(error) => setJobDetailError(boundedMessage(error))} />
           </div>
         </aside>

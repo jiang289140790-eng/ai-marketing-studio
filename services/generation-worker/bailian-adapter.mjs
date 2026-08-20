@@ -354,13 +354,35 @@ export async function pollTask({ apiKey, taskId, baseUrl, fetchImpl = globalThis
   if (![TASK_STATUS_PENDING, TASK_STATUS_RUNNING, TASK_STATUS_SUCCEEDED, TASK_STATUS_FAILED, TASK_STATUS_CANCELED].includes(status)) {
     throw Object.assign(new Error(`Provider returned an unknown task status "${sanitizeDiagnostics(status, 40)}".`), { code: 'PROVIDER_RESPONSE_INVALID', ambiguous: true });
   }
-  const results = Array.isArray(parsed?.output?.results) ? parsed.output.results : [];
+  const output = parsed?.output && typeof parsed.output === 'object' && !Array.isArray(parsed.output)
+    ? parsed.output
+    : {};
+  const rawResults = Array.isArray(output.results) ? output.results : [];
+  // DashScope video models currently return either output.results[].url or the
+  // direct output.video_url shape. Preserve the full URL for the bounded
+  // downloader; never truncate a signed URL into a different, unusable URL.
+  const candidates = [
+    ...rawResults.map((entry) => entry?.url),
+    output.video_url,
+  ];
+  const seen = new Set();
+  const results = candidates.flatMap((value) => {
+    if (typeof value !== 'string') return [];
+    const raw = value.trim();
+    if (!raw || raw.length > 4096 || seen.has(raw)) return [];
+    try {
+      const parsedUrl = new URL(raw);
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) return [];
+    } catch {
+      return [];
+    }
+    seen.add(raw);
+    return [{ url: raw }];
+  });
   const terminal = extractTerminalDiagnostics(parsed, status);
   return {
     status,
-    results: results.slice(0, 10).map((entry) => ({
-      url: typeof entry?.url === 'string' ? entry.url.slice(0, 500) : null,
-    })).filter((entry) => entry.url),
+    results: results.slice(0, 10),
     request_id: typeof parsed?.request_id === 'string' ? parsed.request_id.slice(0, 200) : null,
     ...terminal,
   };

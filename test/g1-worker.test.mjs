@@ -28,7 +28,7 @@ const { Response } = globalThis;
 process.env.G1_POLL_INTERVAL_MS = '20';
 process.env.G1_OVERALL_JOB_TIMEOUT_MS = '30000';
 
-const { processClaimedJob } = await import('../services/generation-worker/worker.mjs');
+const { processClaimedJob, recoverExistingProviderTask } = await import('../services/generation-worker/worker.mjs');
 
 const USER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PROJECT = 'prj-111111111111111111111111';
@@ -701,4 +701,122 @@ test('12. 视频终态失败：有界 provider 诊断持久化，needs_attention
   assert.equal(provider2.submissions.length, 1);
   assert.equal([...db2.attempts.values()].length, 1, '取消后绝不调度第二次尝试');
   assert.equal(storage.uploads.length, 0);
+});
+
+test('13. 已有 ambiguous Provider task 成功回收：零 submit、一次 poll、一个视频 Artifact', async () => {
+  const providerTaskId = '3a56ec84-1586-4011-bc45-b26c7902df2a';
+  const videoUrl = 'https://provider.example/result.mp4?signature=' + 'b'.repeat(80);
+  const recoveryCalls = [];
+  const contextCalls = [];
+  const db = {
+    async getAmbiguousRecoveryContext(input) {
+      contextCalls.push(input);
+      return {
+        job_id: JOB,
+        attempt_id: ATTEMPT,
+        provider_task_id: providerTaskId,
+        next_artifact_version: 1,
+        mode: 'video_t2v',
+        user_id: USER,
+        project_id: PROJECT,
+      };
+    },
+    async recoverAmbiguousAttempt(input) {
+      recoveryCalls.push(input);
+      return { ok: true, artifact: { id: 'g1x-111111111111111111111111', artifact_version: 1 } };
+    },
+  };
+  const storage = new FakeStorage();
+  const pollCalls = [];
+  let paidSubmitCalls = 0;
+  const outcome = await recoverExistingProviderTask(
+    { jobId: JOB, attemptId: ATTEMPT, providerTaskId, workerId: 'recovery-test' },
+    {
+      db,
+      storage,
+      apiKey: 'sk-test-worker-key',
+      pollTaskImpl: async (input) => {
+        pollCalls.push(input);
+        return { status: 'SUCCEEDED', results: [{ url: videoUrl }], request_id: 'req-existing-video' };
+      },
+      // The recovery API deliberately has no submit dependency. Keep an
+      // explicit sentinel so this test proves the paid path stayed untouched.
+      submitProviderTask: async () => { paidSubmitCalls += 1; },
+      fetchImpl: async (url) => {
+        assert.equal(url, videoUrl);
+        return new Response(Buffer.from('bounded-video-bytes'), {
+          status: 200,
+          headers: { 'content-type': 'video/mp4' },
+        });
+      },
+      logger: { info() {}, warn() {}, error() {} },
+    },
+  );
+
+  assert.equal(outcome.outcome, 'completed');
+  assert.equal(paidSubmitCalls, 0, '回收路径不得具备或调用再次付费 submit');
+  assert.deepEqual(contextCalls, [{ jobId: JOB, attemptId: ATTEMPT, providerTaskId }]);
+  assert.equal(pollCalls.length, 1, '必须只查询一次准确的既有 Provider task');
+  assert.equal(pollCalls[0].taskId, providerTaskId);
+  assert.equal(storage.uploads.length, 1, '必须只写入一个视频 Artifact');
+  assert.equal(storage.uploads[0].mime, 'video/mp4');
+  assert.equal(recoveryCalls.length, 1, '数据库恢复事务只能调用一次');
+  assert.equal(recoveryCalls[0].jobId, JOB);
+  assert.equal(recoveryCalls[0].attemptId, ATTEMPT);
+  assert.equal(recoveryCalls[0].providerTaskId, providerTaskId);
+  assert.equal(recoveryCalls[0].providerStatus, 'SUCCEEDED');
+  assert.equal(recoveryCalls[0].artifact.cost_cny, null, 'Provider 未返回实际结算值时必须保持 null');
+  assert.equal(recoveryCalls[0].artifact.source_url, videoUrl);
+});
+
+test('14. 回收失败关闭：上下文错绑或非终态时零上传、零写入、零 submit', async () => {
+  const providerTaskId = 'existing-task-1';
+  const storage = new FakeStorage();
+  let pollCalls = 0;
+  let recoverCalls = 0;
+  let paidSubmitCalls = 0;
+  const mismatched = await recoverExistingProviderTask(
+    { jobId: JOB, attemptId: ATTEMPT, providerTaskId },
+    {
+      db: {
+        async getAmbiguousRecoveryContext() {
+          return { job_id: JOB, attempt_id: ATTEMPT, provider_task_id: 'other-task', mode: 'video_t2v' };
+        },
+        async recoverAmbiguousAttempt() { recoverCalls += 1; },
+      },
+      storage,
+      apiKey: 'sk-test-worker-key',
+      pollTaskImpl: async () => { pollCalls += 1; },
+      submitProviderTask: async () => { paidSubmitCalls += 1; },
+      logger: { info() {}, warn() {}, error() {} },
+    },
+  );
+  assert.deepEqual(mismatched, { outcome: 'blocked', code: 'G1_RECOVERY_CONTEXT_MISMATCH' });
+  assert.equal(pollCalls, 0, '错绑必须在 Provider 查询前失败关闭');
+
+  const pending = await recoverExistingProviderTask(
+    { jobId: JOB, attemptId: ATTEMPT, providerTaskId },
+    {
+      db: {
+        async getAmbiguousRecoveryContext() {
+          return { job_id: JOB, attempt_id: ATTEMPT, provider_task_id: providerTaskId, mode: 'video_t2v' };
+        },
+        async recoverAmbiguousAttempt() { recoverCalls += 1; },
+      },
+      storage,
+      apiKey: 'sk-test-worker-key',
+      pollTaskImpl: async () => { pollCalls += 1; return { status: 'RUNNING', results: [] }; },
+      submitProviderTask: async () => { paidSubmitCalls += 1; },
+      logger: { info() {}, warn() {}, error() {} },
+    },
+  );
+  assert.deepEqual(pending, {
+    outcome: 'not_recovered',
+    code: 'G1_PROVIDER_RESULT_NOT_TERMINAL',
+    provider_status: 'RUNNING',
+  });
+  assert.equal(pollCalls, 1);
+  assert.equal(storage.uploads.length, 0);
+  assert.equal(recoverCalls, 0);
+  assert.equal(paidSubmitCalls, 0, '任一失败关闭路径都不得 submit');
 });

@@ -1,6 +1,6 @@
 // G1 验收 #1 + #2（并发部分）：真实 PostgreSQL 17 / Supabase-local。
 //
-// - 全新数据库 A：bootstrap（复刻已验收环境）→ 回放全部 48 个迁移 →
+// - 全新数据库 A：bootstrap（复刻已验收环境）→ 回放全部 50 个迁移 →
 //   运行 g1_b0 对抗 SQL → 并发同 key 提交（6 个并行 psql 会话 → 恰好 1
 //   applied + 5 replayed + 1 行作业）→ 丢弃；
 // - 全新数据库 B：第二次干净回放全部迁移 → 冒烟（注册表/ACL/quote 往返）→
@@ -68,7 +68,7 @@ function replayAllMigrations(dbName) {
   const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
     .filter((name) => name.endsWith('.sql'))
     .sort();
-  assert.equal(migrations.length, 48, '迁移集必须包含 G1 生成执行层，共 48 项');
+  assert.equal(migrations.length, 51, '迁移集必须包含 G1 生成执行层、P19 证据报价绑定、ACL 收尾与既有 Provider task 恢复，共 51 项');
   for (const name of migrations) {
     if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
       // P22 迁移需要 legacy 预留行前置（与 p19-sql-integration 同源）。
@@ -129,10 +129,21 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
       (select to_regprocedure('api.g1_approve_submit(uuid,text,jsonb,jsonb,integer)') is not null),
       has_function_privilege('anon','api.g1_quote_request(uuid,jsonb)','execute'),
       has_function_privilege('service_role','api.g1_quote_request(uuid,jsonb)','execute'),
-      (select public from storage.buckets where id = 'g1-generation-artifacts');`);
+      (select public from storage.buckets where id = 'g1-generation-artifacts'),
+      has_function_privilege('public','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('anon','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('authenticated','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('service_role','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('public','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
+      has_function_privilege('anon','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
+      has_function_privilege('authenticated','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
+      has_function_privilege('service_role','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
+      (select prosecdef and proconfig @> array['search_path=ams_private, public'] from pg_proc p where p.oid='ams_private.g1_normalize_request(uuid,jsonb)'::regprocedure),
+      (select prosecdef and proconfig @> array['search_path=ams_private, public'] from pg_proc p where p.oid='ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)'::regprocedure);`);
     assert.equal(smoke.status, 0, smoke.stderr || smoke.stdout);
-    assert.deepEqual(smoke.stdout.trim().split('|'), ['3', 't', 't', 't', 'f', 't', 'f'],
-      '第一次回放后注册表/表/函数/ACL/私有 bucket 必须精确');
+    assert.deepEqual(smoke.stdout.trim().split('|'),
+      ['3', 't', 't', 't', 'f', 't', 'f', 'f', 'f', 'f', 't', 'f', 'f', 'f', 't', 't', 't'],
+      '第一次回放后注册表/表/函数/ACL（含内部 helper 权限收窄）/私有 bucket 必须精确');
 
     // ---- 并发同 key 提交：恰好 1 applied + 5 replayed + 1 行作业 ----
     const seed = `
@@ -143,7 +154,7 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
       select api.p19_apply_entity_write('cccccccc-cccc-4ccc-8ccc-cccccccccccc','g1c-ev','evidence.create','evidence','ev-cccccccccccccccccccccccc','{}'::jsonb,
         'p19_evidence_records_v1', jsonb_build_object('id','ev-cccccccccccccccccccccccc','project_id','prj-cccccccccccccccccccccccc','schema_version','p19_evidence_record_v1','source_url','https://example.com/conc','label','并发','platform','manual','content_text','并发','recorded_at','2026-08-16T00:00:00Z','provenance',jsonb_build_object('manual',true),'media_metadata','null'::jsonb,'version',1,'fingerprint','${'c'.repeat(64)}','created_at','2026-08-16T00:00:00Z','updated_at','2026-08-16T00:00:00Z'), null, null);
       select api.p19_apply_entity_write('cccccccc-cccc-4ccc-8ccc-cccccccccccc','g1c-kc','card.create','card','kc-cccccccccccccccccccccccc','{}'::jsonb,
-        'p19_knowledge_cards_v1', jsonb_build_object('id','kc-cccccccccccccccccccccccc','project_id','prj-cccccccccccccccccccccccc','schema_version','content_knowledge_card_v1','version',1,'source_observations',jsonb_build_object('post_text','并发卡'),'evidence_links',jsonb_build_array(jsonb_build_object('claim','c','evidence_type','post_text')),'trust_status','verified_local','validation_status','bound_exact','fingerprint','${'c'.repeat(64)}','created_at','2026-08-16T00:00:00Z','updated_at','2026-08-16T00:00:00Z'), null, null);
+        'p19_knowledge_cards_v1', jsonb_build_object('id','kc-cccccccccccccccccccccccc','project_id','prj-cccccccccccccccccccccccc','schema_version','content_knowledge_card_v1','version',1,'source_observations',jsonb_build_object('post_text','并发卡'),'evidence_links',jsonb_build_array(jsonb_build_object('claim','c','evidence_type','post_text','source_ref','ev-cccccccccccccccccccccccc')),'trust_status','verified_local','validation_status','bound_exact','fingerprint','${'c'.repeat(64)}','created_at','2026-08-16T00:00:00Z','updated_at','2026-08-16T00:00:00Z'), null, null);
       select api.p19_apply_entity_write('cccccccc-cccc-4ccc-8ccc-cccccccccccc','g1c-brief','brief.assemble','brief','brief-cccccccccccccccccccccccc','{}'::jsonb,
         'p19_briefs_v1', jsonb_build_object('id','brief-cccccccccccccccccccccccc','project_id','prj-cccccccccccccccccccccccc','schema_version','ams_content_brief_v1','version',1,'status','pending_review','topic','并发 Brief','objective','o','audience','a','channel','c','constraints','[]'::jsonb,'knowledge_citation_ids',jsonb_build_array('kc-cccccccccccccccccccccccc'),'structural_guidance','[]'::jsonb,'evidence_provenance',jsonb_build_object('local_only',true,'evidence_ids',jsonb_build_array('ev-cccccccccccccccccccccccc')),'review',jsonb_build_object('schema_version','ams_brief_review_v1','brief_id','brief-cccccccccccccccccccccccc','decision','null'::jsonb,'comments','[]'::jsonb),'fingerprint','${'c'.repeat(64)}','created_at','2026-08-16T00:00:00Z','updated_at','2026-08-16T00:00:00Z'), null, null);
       ;`;
@@ -181,6 +192,38 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
     assert.equal(countsAfterConflict.status, 0, countsAfterConflict.stderr || countsAfterConflict.stdout);
     assert.deepEqual(countsAfterConflict.stdout.trim().split('|'), ['1', '1'], '冲突拒绝后必须仍只有 1 行作业 + 1 行尝试');
 
+    // ---- P19 证据报价绑定：历史 Brief（evidence_provenance 无 evidence_ids）在
+    // 干净回放上必须从被引卡 evidence_links[].source_ref 派生权威证据集并成功报价 ----
+    const historicalSeed = `
+      select api.p19_apply_entity_write('cccccccc-cccc-4ccc-8ccc-cccccccccccc','g1c-brief-hist','brief.assemble','brief','brief-ccccccccccccccccccccccdd','{}'::jsonb,
+        'p19_briefs_v1', jsonb_build_object('id','brief-ccccccccccccccccccccccdd','project_id','prj-cccccccccccccccccccccccc','schema_version','ams_content_brief_v1','version',1,'status','pending_review','topic','历史 Brief','objective','o','audience','a','channel','c','constraints','[]'::jsonb,'knowledge_citation_ids',jsonb_build_array('kc-cccccccccccccccccccccccc'),'structural_guidance','[]'::jsonb,'evidence_provenance',jsonb_build_object('created_from','selected_knowledge_cards','local_only',true,'statement','历史 Brief 无显式证据身份。','store','p19_workspace_v1'),'review',jsonb_build_object('schema_version','ams_brief_review_v1','brief_id','brief-ccccccccccccccccccccccdd','decision','null'::jsonb,'comments','[]'::jsonb),'fingerprint','${'d'.repeat(64)}','created_at','2026-08-16T00:00:00Z','updated_at','2026-08-16T00:00:00Z'), null, null);
+      ;`;
+    const historicalSeeded = psql(dbA, null, { stdin: historicalSeed });
+    assert.equal(historicalSeeded.status, 0, historicalSeeded.stderr || historicalSeeded.stdout);
+    const historicalQuote = psql(dbA, `select api.g1_quote_request('cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      jsonb_build_object('schema_version','g1_generation_request_v1','project_id','prj-cccccccccccccccccccccccc','brief_id','brief-ccccccccccccccccccccccdd','mode','image','prompt','历史绑定图片','aspect_ratio','1:1'))::text;`);
+    assert.equal(historicalQuote.status, 0, historicalQuote.stderr || historicalQuote.stdout);
+    const historicalQuoteJson = JSON.parse(historicalQuote.stdout.trim());
+    assert.equal(historicalQuoteJson.ok, true, '历史 Brief（无 evidence_ids）必须成功报价');
+    assert.deepEqual(historicalQuoteJson.quote.evidence_ids, ['ev-cccccccccccccccccccccccc'],
+      '历史 Brief 报价必须从卡片 evidence_links 派生权威证据集（绝不视为空集）');
+    assert.deepEqual(historicalQuoteJson.quote.knowledge_card_ids, ['kc-cccccccccccccccccccccccc'],
+      '历史 Brief 报价必须绑定规范知识卡集合');
+    // 显式请求证据与权威集一致 → 复用同一不可变 quote（刷新恢复）。
+    const historicalQuoteExact = psql(dbA, `select api.g1_quote_request('cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      jsonb_build_object('schema_version','g1_generation_request_v1','project_id','prj-cccccccccccccccccccccccc','brief_id','brief-ccccccccccccccccccccccdd','mode','image','prompt','历史绑定图片','aspect_ratio','1:1','knowledge_card_ids',jsonb_build_array('kc-cccccccccccccccccccccccc'),'evidence_ids',jsonb_build_array('ev-cccccccccccccccccccccccc')))::text;`);
+    assert.equal(historicalQuoteExact.status, 0, historicalQuoteExact.stderr || historicalQuoteExact.stdout);
+    assert.equal(JSON.parse(historicalQuoteExact.stdout.trim()).quote.quote_fingerprint,
+      historicalQuoteJson.quote.quote_fingerprint, '显式精确请求必须复用同一 quote 指纹');
+    // 请求证据与权威集不一致 → 报价前 fail closed，零作业。
+    const historicalMismatch = psql(dbA, `select api.g1_quote_request('cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      jsonb_build_object('schema_version','g1_generation_request_v1','project_id','prj-cccccccccccccccccccccccc','brief_id','brief-ccccccccccccccccccccccdd','mode','image','prompt','历史绑定图片','aspect_ratio','1:1','evidence_ids',jsonb_build_array('ev-111111111111111111111111')))::text;`);
+    assert.notEqual(historicalMismatch.status, 0, `不匹配证据请求必须失败：${historicalMismatch.stdout || historicalMismatch.stderr}`);
+    assert.match(historicalMismatch.stderr, /G1_BINDING_MISMATCH/, `必须 G1_BINDING_MISMATCH，实际 ${historicalMismatch.stderr}`);
+    const jobsAfterBinding = psql(dbA, `select count(*) from ams_private.g1_generation_jobs_v1 where user_id='cccccccc-cccc-4ccc-8ccc-cccccccccccc';`);
+    assert.equal(jobsAfterBinding.status, 0, jobsAfterBinding.stderr || jobsAfterBinding.stdout);
+    assert.equal(jobsAfterBinding.stdout.trim(), '1', '绑定失败后必须仍只有 1 行作业（零新 submit）');
+
     // ---- 第二次干净回放 ----
     execFileSync('docker', ['exec', CONTAINER, 'createdb', '-U', 'postgres', dbB], { encoding: 'utf8' });
     bootstrap(dbB);
@@ -190,10 +233,16 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
       (select count(*) from ams_private.g1_generation_jobs_v1),
       (select to_regclass('ams_private.g1_generation_events_v1') is not null),
       has_function_privilege('authenticated','api.g1_complete_attempt(text,text,text,jsonb)','execute'),
-      has_function_privilege('service_role','api.g1_complete_attempt(text,text,text,jsonb)','execute');`);
+      has_function_privilege('service_role','api.g1_complete_attempt(text,text,text,jsonb)','execute'),
+      has_function_privilege('public','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('authenticated','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('service_role','ams_private.g1_normalize_request(uuid,jsonb)','execute'),
+      has_function_privilege('public','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
+      has_function_privilege('authenticated','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
+      has_function_privilege('service_role','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute');`);
     assert.equal(smokeB.status, 0, smokeB.stderr || smokeB.stdout);
-    assert.deepEqual(smokeB.stdout.trim().split('|'), ['3', '0', 't', 'f', 't'],
-      '第二次干净回放后注册表/空作业表/事件表/ACL 必须精确');
+    assert.deepEqual(smokeB.stdout.trim().split('|'), ['3', '0', 't', 'f', 't', 'f', 'f', 't', 'f', 'f', 't'],
+      '第二次干净回放后注册表/空作业表/事件表/ACL（含内部 helper 权限收窄）必须精确');
   } finally {
     execFileSync('docker', ['exec', CONTAINER, 'dropdb', '-U', 'postgres', '--if-exists', dbA], { encoding: 'utf8', stdio: 'ignore' });
     execFileSync('docker', ['exec', CONTAINER, 'dropdb', '-U', 'postgres', '--if-exists', dbB], { encoding: 'utf8', stdio: 'ignore' });

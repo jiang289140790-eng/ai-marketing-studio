@@ -116,6 +116,11 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/package-lock.json',
   'services/harness-gateway/init-profile.mjs',
   'services/harness-gateway/profile/cordis.patch.yml',
+  // ams-harness-rc8-isolated-upgrade: exact rc.8 paths only (no directory
+  // wildcard expansion).
+  'services/harness-gateway/compose.yaml',
+  'services/harness-gateway/home-lockdown.patch.yml',
+  'services/harness-gateway/plugins/ams-tools/package.json',
   'services/harness-gateway/vendor/**',
   'services/harness-gateway/presentation/**',
   'services/harness-gateway/gateway-core.mjs',

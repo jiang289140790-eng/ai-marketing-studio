@@ -46,6 +46,11 @@ test('AMS profile exposes its single business plugin and disables general execut
     assert.match(blockFor(dumped.stdout, 'genui'), /name: ['"]@omdsh-dev\/dsh-genui['"]/);
     assert.match(blockFor(dumped.stdout, 'dsh-visualize'), /name: ['"]@dsh-external\/dsh-visualize['"]/);
     for (const id of denied) assert.match(blockFor(dumped.stdout, id), /disabled: true/, `${id} must stay disabled`);
+    // rc.8 composes no persistent-pwsh row from the AMS bundles (dsh-base +
+    // dsh-headless), so the deny-list proves it by absence: the dump carries
+    // no such row, and the stderr assertion above guarantees no
+    // patch-not-found diagnostic either.
+    assert.doesNotMatch(dumped.stdout, /- id: tool-pwsh-persistent\r?\n/, 'rc.8 must not compose a persistent-pwsh row');
   } finally {
     await rm(home, { recursive: true, force: true });
   }

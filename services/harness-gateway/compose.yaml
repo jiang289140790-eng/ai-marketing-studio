@@ -28,6 +28,9 @@ services:
       - ams_tool_bridge_secret
     volumes:
       - harness_gateway_data:/data
+      # rc.8 changed its SQLite storage format. Keep gateway events on the
+      # existing audit volume while giving the Harness runtime a fresh home.
+      - harness_runtime_rc8:/data/harness
       - harness_workspace:/workspace:ro
     tmpfs:
       - /tmp:size=128m,mode=1777
@@ -60,6 +63,7 @@ services:
 
 volumes:
   harness_gateway_data:
+  harness_runtime_rc8:
   harness_workspace:
 
 networks:

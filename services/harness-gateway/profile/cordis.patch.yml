@@ -15,6 +15,9 @@
   disabled: true
 - id: tool-pwsh
   disabled: true
+# rc.8 composes no persistent-pwsh row from the AMS bundles (dsh-base +
+# dsh-headless); patching the absent id would warn "patch: entry ... not
+# found" on every boot. Absence is the lockdown: the row never composes.
 - id: tool-jobs
   disabled: true
 - id: subprocess

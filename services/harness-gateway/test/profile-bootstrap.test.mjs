@@ -14,9 +14,14 @@ async function text(relative) {
 test('gateway installs the AMS tool plugin at the loader resolution root', async () => {
   const manifest = JSON.parse(await text('package.json'));
   const lock = JSON.parse(await text('package-lock.json'));
+  const pluginManifest = JSON.parse(await text('plugins/ams-tools/package.json'));
   assert.equal(manifest.dependencies['@ams/harness-tools'], 'file:plugins/ams-tools');
+  assert.equal(manifest.dependencies['@deepseek-ai/dsh'], '0.1.0-rc.8');
   assert.equal(lock.packages[''].dependencies['@ams/harness-tools'], 'file:plugins/ams-tools');
+  assert.equal(lock.packages[''].dependencies['@deepseek-ai/dsh'], '0.1.0-rc.8');
   assert.equal(lock.packages['node_modules/@ams/harness-tools'].resolved, 'plugins/ams-tools');
+  assert.equal(pluginManifest.peerDependencies['@deepseek-ai/dsh-system-prompt'], '0.1.0-rc.8');
+  assert.equal(pluginManifest.peerDependencies['@deepseek-ai/dsh-tools'], '0.1.0-rc.8');
 
   const plugin = await import('@ams/harness-tools');
   assert.equal(plugin.name, 'ams-harness-tools');
@@ -53,11 +58,24 @@ test('both profile layers fail closed before importing subprocess/node-pty', asy
     for (const forbidden of ['tool-bash', 'tool-pwsh', 'tool-fs', 'web', 'tool-subagent', 'tool-workflow', 'code-runtime']) {
       assert.match(patch, new RegExp(`- id: ${forbidden}\\r?\\n\\s+disabled: true`));
     }
+    // rc.8 composes no persistent-pwsh row from the AMS bundles, so neither
+    // layer may reference the absent id: patching it would warn
+    // "patch: entry ... not found" on every boot, and absence is the
+    // lockdown — there is no row for any persisted override to re-enable.
+    assert.doesNotMatch(patch, /tool-pwsh-persistent/);
   }
 });
 
 test('persistent profile version advances for the corrected loader tree', async () => {
-  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v8';/);
+  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v10';/);
+});
+
+test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {
+  const compose = await text('compose.yaml');
+  assert.match(compose, /- harness_gateway_data:\/data/);
+  assert.match(compose, /- harness_runtime_rc8:\/data\/harness/);
+  assert.match(compose, /HARNESS_EVENT_FILE: \/data\/gateway\/events\.jsonl/);
+  assert.match(compose, /\n\s+harness_runtime_rc8:\s*(?:\r?\n|$)/);
 });
 
 test('only the pinned dsh-genui 0.8.3 and dsh-visualize 0.1.2 are promoted into the profile', async () => {

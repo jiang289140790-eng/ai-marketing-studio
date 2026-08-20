@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@ams/harness-tools": "file:plugins/ams-tools",
-    "@deepseek-ai/dsh": "0.1.0-rc.6",
+    "@deepseek-ai/dsh": "0.1.0-rc.8",
     "@supabase/supabase-js": "2.110.7"
   }
 }

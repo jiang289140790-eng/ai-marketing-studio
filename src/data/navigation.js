@@ -24,7 +24,7 @@ export const navigationSections = [
       { id: 'accounts', label: '账号矩阵', icon: '●' },
       { id: 'characters', label: '角色库', icon: '✦' },
       { id: 'assets', label: '素材库', icon: '■' },
-      { id: 'generation', label: '生成任务', icon: '◫' },
+      { id: 'generation', label: '生成工作台', icon: '◫' },
       { id: 'prompts', label: '提示词库', icon: '✎' },
     ],
   },

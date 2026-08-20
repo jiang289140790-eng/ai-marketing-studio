@@ -28,6 +28,10 @@ export function GenerationArtifactViewer({ artifacts = [], client, jobId, onErro
   }, [client, jobId, onError]);
 
   useEffect(() => {
+    setSelected(null);
+  }, [jobId]);
+
+  useEffect(() => {
     if (artifacts.length > 0 && !selected) openArtifact(artifacts[0].id);
   }, [artifacts, openArtifact, selected]);
 

@@ -39,7 +39,7 @@ const pageTitles = {
   accounts: '账号矩阵',
   assets: '素材库',
   characters: '角色库',
-  generation: '生成任务',
+  generation: '生成工作台',
   'data-analytics': '数据分析',
   analytics: 'AI 复盘',
   dailyreport: '运营日报',
@@ -63,7 +63,7 @@ const auxiliaryPageDescriptions = {
   analytics: '解释当前运营活动为什么出现这些结果，并给出待审核建议。',
   dailyreport: '汇总昨天完成、今天待办、执行异常与下一步行动。',
   knowledge: '沉淀当前账号、内容、策略与复盘知识，供后续智能体复用。',
-  generation: '跟踪图片、视频和工作流的执行进度；生成完成的真实文件会进入素材库。',
+  generation: '用一句话生成图片或视频，确认报价后查看实时进度、成品和版本历史。',
 };
 
 export default function App() {

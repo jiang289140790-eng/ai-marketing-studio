@@ -243,413 +243,10 @@ const FAKE_EDGE_SCRIPT = `
           const key = body.idempotency_key;
           for (const job of jobs.values()) {
             if (job.idempotency_key === key) {
-              return new Response(JSON.stringify(ok({ action: 'approve_submit', data: { job: summarize(job) }, entity: { type: 'generation_job', id: job.id } })), { status: 200, headers: { 'content-type': 'application/json' } });
-            }
-          }
-          const job = {
-            id: 'g1j-' + key.slice(0, 24),
-            user_id: user,
-            project_id: body.project_id,
-            idempotency_key: key,
-            status: 'queued',
-            mode: body.mode,
-            model_name: quote.model_name,
-            model_version: 1,
-            brief_id: body.brief_id,
-            brief_version: quote.brief_version,
-            request: body,
-            quote,
-            approval: { source: 'browser', quote_fingerprint: body.quote_fingerprint },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            artifact_count: 0,
-            pollCount: 0,
-            // ç»ˆæ€è¯Šæ–­å±•ç¤ºè·¯å¾„ï¼šåŒ…å«ã€Œå¤±è´¥æµ‹è¯•ã€çš„æç¤ºè¯ä½œä¸šåœ¨é¦–æ¬¡çŠ¶æ€è¯»å–æ—¶
-            // ç»ˆæ€å¤±è´¥å¹¶æºå¸¦æœ‰ç•Œ provider è¯Šæ–­ï¼ˆä¸ staging å®æµ‹å½¢æ€ä¸€è‡´ï¼‰ã€‚
-            failAfterRunning: String(body.prompt || '').includes('å¤±è´¥æµ‹è¯•'),
-          };
-          jobs.set(job.id, job);
-          submissionCount += 1;
-          save();
-          // æ¨¡æ‹Ÿ workerï¼šæäº¤åè¿›å…¥ runningï¼›ä¸‹ä¸€æ¬¡ status å®Œæˆæˆ–ç»ˆæ€å¤±è´¥ã€‚
-          job.status = 'running';
-          return new Response(JSON.stringify(ok({ action: 'approve_submit', data: { job: summarize(job) }, entity: { type: 'generation_job', id: job.id } })), { status: 200, headers: { 'content-type': 'application/json' } });
-        }
-        if (body.action === 'status') {
-          const job = jobs.get(body.job_id);
-          if (!job) {
-            return new Response(JSON.stringify(fail('G1_JOB_NOT_FOUND', 'ä½œä¸šä¸å­˜åœ¨ã€‚')), { status: 404, headers: { 'content-type': 'application/json' } });
-          }
-          if (job.status === 'running') {
-            if (job.failAfterRunning) {
-              job.status = 'failed';
-              job.diagnostics = {
-                code: 'G1_PROVIDER_FAILED',
-                issues: ["Provider task reached FAILED: InvalidParameter â€” Input should be '1080P' or '720P': parameters.resolution"],
-                provider_code: 'InvalidParameter',
-                provider_message: "Input should be '1080P' or '720P': parameters.resolution",
-              };
-              save();
-            } else {
-              job.pollCount += 1;
-              if (job.pollCount >= 1) {
-                job.status = 'completed';
-                job.artifact_count = 1;
-                const artifactId = 'g1x-' + job.id.slice(4, 28);
-                if (!artifacts.has(artifactId)) {
-                  const isVideo = String(job.mode || '').startsWith('video');
-                  artifacts.set(artifactId, {
-                    id: artifactId,
-                    job_id: job.id,
-                    artifact_version: 1,
-                    content_sha256: 'd'.repeat(64),
-                    mime_type: isVideo ? 'video/mp4' : 'image/png',
-                    byte_size: isVideo ? 128 : 70,
-                    width: isVideo ? 16 : 1,
-                    height: isVideo ? 9 : 1,
-                    storage_path: job.user_id + '/' + job.project_id + '/' + job.id + '/v1/dddddddddddd.' + (isVideo ? 'mp4' : 'png'),
-                    model_name: job.model_name,
-                    model_version: 1,
-                    brief_id: job.brief_id,
-                    brief_version: job.brief_version,
-                    knowledge_card_ids: (job.request.knowledge_card_ids || []),
-                    evidence_ids: (job.request.evidence_ids || []),
-                    cost_cny: null,
-                    created_at: new Date().toISOString(),
-                  });
-                  if (String(job.request.prompt || '').includes('æ¢å¤è¯Šæ–­æµ‹è¯•')) {
-                    job.diagnostics = {
-                      code: 'G1_WORKER_INTERNAL',
-                      issues: ['æ¢å¤å‰çš„å†å²è¯Šæ–­ã€‚'],
-                    };
-                  }
-                  save();
-                }
-              }
-            }
-          }
-          const artifactsList = [...artifacts.values()].filter((a) => a.job_id === job.id);
-          return new Response(JSON.stringify(ok({
-            action: 'status',
-            data: {
-              job: summarize(job),
-              attempts: [{ id: 'g1a-' + job.id.slice(4, 28), attempt_no: 1, state: job.status === 'completed' ? 'succeeded' : job.status === 'failed' ? 'failed' : 'running', diagnostics: job.diagnostics || {} }],
-              artifacts: artifactsList,
-              events: [],
-            },
-            entity: { type: 'generation_job', id: job.id },
-          })), { status: 200, headers: { 'content-type': 'application/json' } });
-        }
-        if (body.action === 'list') {
-          const list = [...jobs.values()]
-            .filter((job) => job.project_id === body.project_id)
-            .sort((a, b) => b.created_at.localeCompare(a.created_at))
-            .map((job) => summarize(job));
-          return new Response(JSON.stringify(ok({ action: 'list', data: { jobs: list } })), { status: 200, headers: { 'content-type': 'application/json' } });
-        }
-        if (body.action === 'artifact') {
-          const artifact = artifacts.get(body.artifact_id);
-          if (!artifact) {
-            return new Response(JSON.stringify(fail('ARTIFACT_NOT_FOUND', 'äº§ç‰©ä¸å­˜åœ¨ã€‚')), { status: 404, headers: { 'content-type': 'application/json' } });
-          }
-          const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
-          const video = Uint8Array.from(atob('AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAAAAAAAAAAAAAAAAAAAA='), (c) => c.charCodeAt(0));
-          const url = URL.createObjectURL(new Blob([String(artifact.mime_type || '').startsWith('video/') ? video : png], { type: artifact.mime_type || 'image/png' }));
-          return new Response(JSON.stringify(ok({
-            action: 'artifact',
-            data: { artifact, signed_url: url, expires_in_seconds: 900 },
-            entity: { type: 'generation_artifact', id: artifact.id },
-          })), { status: 200, headers: { 'content-type': 'application/json' } });
-        }
-        return new Response(JSON.stringify(fail('ACTION_DENIED', 'åŠ¨ä½œæœªå®ç°ã€‚')), { status: 400, headers: { 'content-type': 'application/json' } });
-      })();
-    },
-  });
-})();`;
-
-const SEED_SCRIPT = `
-(async () => {
-  localStorage.clear();
-  const service = await import('/ai-marketing-studio/src/services/p19-workspace-service.js');
-  const contracts = await import('/ai-marketing-studio/src/services/p19-contracts.js');
-  const stores = await import('/ai-marketing-studio/src/services/p19-store.js');
-  const fixedNow = () => '2026-08-16T08:00:00.000Z';
-  const digest = async (text) => {
-    const bytes = new TextEncoder().encode(text);
-    const value = await crypto.subtle.digest('SHA-256', bytes);
-    return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  };
-  const makeInput = async (index) => {
-    const text = 'G1 æµè§ˆå™¨çœŸå®å¸–å­ ' + index + 'ï¼šéªŒè¯ç”Ÿæˆæ‰§è¡Œå±‚ã€‚';
-    const contentSha = await digest(text);
-    const externalId = String(1800000000000000000n + BigInt(index));
-    const sourceUrl = 'https://x.com/g1browser/status/' + externalId;
-    return {
-      source_url: sourceUrl,
-      label: 'G1 æµè§ˆå™¨å¸–å­ ' + index,
-      platform: 'X Â· Apify',
-      content_text: text,
-      recorded_at: '2026-08-15T07:00:00.000Z',
-      provenance: {
-        schema_version: 'p22_apify_evidence_provenance_v1', manual: false,
-        method: 'apify_public_collection', provider: 'apify:xquik/x-tweet-scraper',
-        source_platform: 'x', source_id: 'g1-browser-' + index,
-        external_id: externalId, source_url: sourceUrl, run_id: 'run-g1-browser',
-        collected_at: '2026-08-15T07:00:00.000Z', usage_total_usd: 0.01,
-        budget_reservation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-        content_sha256: contentSha, collection_proof: '1999999999.' + 'c'.repeat(64),
-        statement: 'G1 browser evidence.'
-      },
-      media_metadata: {
-        filename: 'g1-' + index + '.txt', mime_type: 'text/plain; charset=utf-8',
-        byte_size: new TextEncoder().encode(text).byteLength,
-        last_modified: '2026-08-15T07:00:00.000Z', sha256: contentSha
-      },
-      source_metadata: {
-        author: { name: 'G1 æµè§ˆå™¨ä½œè€…', handle: 'g1browser' + index, user_id: externalId },
-        published_at: '2026-08-15T06:00:00.000Z',
-        engagement: { likes: index * 100, retweets: index * 20, replies: index * 5, views: index * 30000 }
-      },
-      media_assets: []
-    };
-  };
-  const store = stores.createP19Store();
-  const projectIds = [];
-  for (let projectIndex = 1; projectIndex <= 2; projectIndex += 1) {
-    let project = await service.createProject({
-      topic: projectIndex === 1 ? 'G1 æµè§ˆå™¨ç”Ÿæˆé¡¹ç›®' : 'G1 æµè§ˆå™¨éš”ç¦»é¡¹ç›®',
-      objective: 'éªŒè¯çœŸå®æµè§ˆå™¨é—­ç¯', audience: 'æµ‹è¯•ç”¨æˆ·', channel: 'X', constraints: ['åªè¯»æ¥æº'], now: fixedNow
-    });
-    // é¡¹ç›® A ä¸‰å¡/ä¸‰è¯æ®ï¼ˆå†å² Brief æ— æ˜¾å¼ evidence_ids çš„æµè§ˆå™¨åˆåŒï¼‰ï¼Œé¡¹ç›® B å•å¡ã€‚
-    const cardCount = projectIndex === 1 ? 3 : 1;
-    for (let cardIndex = 1; cardIndex <= cardCount; cardIndex += 1) {
-      const input = await makeInput(projectIndex * 10 + cardIndex);
-      project = await service.addEvidence(project, input, { now: fixedNow, hasher: contracts.fingerprintOf });
-      const evidence = project.evidence[project.evidence.length - 1];
-      project = await service.runAnalysis(project, evidence.id, { now: fixedNow, hasher: contracts.fingerprintOf });
-      const analysis = project.analyses[project.analyses.length - 1];
-      project = await service.buildKnowledgeCard(project, analysis.id, { now: fixedNow, hasher: contracts.fingerprintOf });
-    }
-    project = await service.assembleBrief(project, { now: fixedNow, hasher: contracts.fingerprintOf });
-    const saved = store.putProject(project);
-    if (!saved.ok) throw new Error(saved.code + ': ' + saved.message);
-    projectIds.push(project.id);
-  }
-  localStorage.setItem('p19_active_project_v1', projectIds[0]);
-  localStorage.setItem('g1_demo_user_v1', '11111111-1111-4111-8111-111111111111');
-  return { projectIds };
-})()`;
-
-test('G1 browser harness: ä¸´æ—¶ profile æ¸…ç†æ‹’ç»ä¼ªé€ è·¯å¾„ä¸æ— å…³ profileï¼ˆé›¶å¤–éƒ¨åˆ é™¤ï¼‰', async () => {
-  const root = resolve(tmpdir());
-  // ä¼ªé€ è·¯å¾„ï¼šæ­£ç¡®å‰ç¼€å½¢çŠ¶ä½†éæœ¬æµ‹è¯•åˆ›å»ºï¼ˆæ‰€æœ‰æƒ/èº«ä»½æ ¡éªŒï¼‰ã€‚
-  await assert.rejects(removeTempProfile(join(root, 'ams-g1-browser-fake123')), /æ‹’ç»åˆ é™¤/);
-  // æ— å…³ profileï¼šå…¶ä»–æµ‹è¯•ï¼ˆp20/p30 ç­‰ï¼‰çš„ profile ä¸å¾—è¢«åˆ é™¤ã€‚
-  await assert.rejects(removeTempProfile(join(root, 'ams-p20-browser-abc123')), /æ‹’ç»åˆ é™¤/);
-  // è·¯å¾„ç©¿è¶Šï¼š.. ä¸ . æ®µä¸€å¾‹æ‹’ç»ï¼ˆè§£æå‰ååŒé‡é˜²çº¿ï¼‰ã€‚
-  await assert.rejects(removeTempProfile(join(root, '..', 'Windows', 'System32')), /æ‹’ç»åˆ é™¤/);
-  await assert.rejects(removeTempProfile(join(root, 'sub', '..', 'ams-g1-browser-abc123')), /æ‹’ç»åˆ é™¤/);
-  // ç©º/éå­—ç¬¦ä¸²è¾“å…¥ã€‚
-  await assert.rejects(removeTempProfile(null), /æ‹’ç»åˆ é™¤/);
-  await assert.rejects(removeTempProfile(''), /æ‹’ç»åˆ é™¤/);
-  // çœŸå®åˆ›å»º â†’ å¯åˆ é™¤ï¼›åˆ é™¤åä¸å†å¯åˆ ï¼ˆåªåˆ æœ¬æ¬¡åˆ›å»ºä¸”åªåˆ ä¸€æ¬¡ï¼‰ã€‚
-  const real = await makeTempProfile('ams-g1-browser-');
-  assert.equal(existsSync(real), true, 'makeTempProfile å¿…é¡»çœŸå®åˆ›å»ºç›®å½•');
-  await removeTempProfile(real);
-  assert.equal(existsSync(real), false, 'æœ¬æµ‹è¯•åˆ›å»ºçš„ profile å¿…é¡»è¢«åˆ é™¤');
-  await assert.rejects(removeTempProfile(real), /æ‹’ç»åˆ é™¤/);
-});
-
-test('G1 real browser: quote â†’ explicit approval â†’ submit â†’ status â†’ private image/video preview â†’ terminal diagnostics â†’ refresh recovery â†’ project isolation', { timeout: 240_000 }, async () => {
-  assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required');
-  const vitePort = await freePort();
-  const debugPort = await freePort();
-  const profile = await makeTempProfile('ams-g1-browser-');
-  const vite = spawn('cmd.exe', ['/d', '/s', '/c', `npm run dev -- --host 127.0.0.1 --port ${vitePort}`], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      VITE_SUPABASE_URL: '',
-      VITE_SUPABASE_ANON_KEY: '',
-      VITE_G1_EDGE_BASE_URL: `http://127.0.0.1:${vitePort}/g1-fake`,
-      VITE_G1_POLL_INTERVAL_MS: '500',
-    },
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  const edge = spawn(EDGE, [
-    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, 'about:blank',
-  ], { stdio: 'ignore', windowsHide: true });
-  let cdp;
-  let tracker;
-  try {
-    const baseUrl = `http://127.0.0.1:${vitePort}/ai-marketing-studio/`;
-    await waitFor(async () => (await fetch(baseUrl)).ok, { label: 'G1 Vite route' });
-    const target = await waitForPageTarget(debugPort);
-    cdp = new CdpClient(target.webSocketDebuggerUrl);
-    await cdp.open();
-    tracker = createPageTracker(cdp);
-    await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
-    // åœ¨é¡µé¢è„šæœ¬ä¹‹å‰æ³¨å…¥ fake edgeï¼ˆæ‹¦æˆª /g1-fake å‰ç¼€ï¼‰ã€‚
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: FAKE_EDGE_SCRIPT });
-    await navigateAndWait(cdp, tracker, baseUrl, { label: 'base page' });
-    const seeded = await cdp.evaluate(SEED_SCRIPT);
-    assert.equal(seeded.projectIds.length, 2, 'å¿…é¡»é¢„ç½®ä¸¤ä¸ªç‹¬ç«‹é¡¹ç›®');
-    const projectIds = seeded.projectIds;
-
-    // ç§å­å†™å…¥åæ¢å¤å·¥ä½œåŒºï¼šé¡µé¢æ¨¡å—åœ¨ç§å­å†™å…¥å‰å·²åˆå§‹åŒ–ï¼Œä»…é  hash å¯¼èˆªä¸ä¼š
-    // é‡æ–°è¯»å– localStorageï¼›å…ˆç¡®å®šæ€§ä¸»æ–‡æ¡£é‡è½½ï¼ˆç­‰å¾…å¯¼èˆªæäº¤ + readyState=
-    // completeï¼‰è®©åº”ç”¨å…¨æ–°å¯åŠ¨å¹¶è¯»å–ç§å­å·¥ä½œåŒºï¼Œå†è¿›å…¥ #/generationï¼ˆé¡µé¢å†…
-    // location.href èµ‹å€¼ï¼Œhash å˜åŒ–å¿…ç„¶è§¦å‘è·¯ç”±ï¼‰ã€‚
-    await reloadAndWait(cdp, tracker, { label: 'seed workspace reload' });
-    await cdp.evaluate(`location.href = ${JSON.stringify(`${baseUrl}#/generation`)}`);
-    // DOM å°±ç»ªï¼ˆæœ‰ç•Œè½®è¯¢ï¼Œæ— å›ºå®š sleepï¼‰ï¼šåˆ›å»ºé¢æ¿çœŸå®æŒ‚è½½ã€‚
-    await waitForSelector(cdp, '[data-testid="g1-create-panel"]', { label: 'G1 create panel', timeout: 30_000 });
-    // æ´»åŠ¨é¡¹ç›®å°±ç»ªï¼šåˆ›å»ºé¢æ¿å¿…é¡»ç»‘å®šç§å­é¡¹ç›® A çš„ Brief æ ‡é¢˜ã€‚
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('G1 æµè§ˆå™¨ç”Ÿæˆé¡¹ç›®')`), { label: 'seeded project brief' });
-
-    // ---- è¡¨å•ï¼šimage æ¨¡å¼ + prompt â†’ è¯·æ±‚æŠ¥ä»· ----
-    await cdp.evaluate(`(() => {
-      const area = document.querySelector('[data-testid="g1-prompt-input"]');
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(area, 'ä¸€åªåœ¨æ£®æ—é‡Œçš„æ©˜çŒ«ï¼Œé˜³å…‰ä¸‹');
-      area.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`);
-    await click(cdp, { selector: '[data-testid="g1-request-quote"]', label: 'request quote' });
-    await waitForSelector(cdp, '[data-testid="g1-quote-panel"]', { label: 'quote panel', timeout: 15_000 });
-    const quoteText = await cdp.evaluate(`document.querySelector('[data-testid="g1-quote-panel"]').innerText`);
-    assert.match(quoteText, /qwen-image-2\.0/, `quote å¿…é¡»æ˜¾ç¤ºå›ºå®šæ¨¡å‹ï¼š${quoteText.slice(0, 200)}`);
-    assert.match(quoteText, /Â¥0\.02 â€“ Â¥0\.30/, `quote å¿…é¡»æ˜¾ç¤ºæœ‰ç•Œè´¹ç”¨åŒºé—´ï¼š${quoteText.slice(0, 200)}`);
-    assert.match(quoteText, /ä»˜è´¹ç”Ÿæˆ \+ ç§æœ‰å­˜å‚¨å†™å…¥/, `quote å¿…é¡»å£°æ˜ä»˜è´¹æ‰§è¡Œä¸å­˜å‚¨å†™å…¥`);
-    assert.match(quoteText, /ç¬¬ 1 ç‰ˆ/, `quote å¿…é¡»ç»‘å®š Brief ç‰ˆæœ¬`);
-    // ç§å­ Brief æ˜¯å†å²å½¢æ€ï¼ˆevidence_provenance æ—  evidence_idsï¼‰ï¼šfake edge å¿…é¡»
-    // ä»è¢«å¼•çŸ¥è¯†å¡ evidence_links[].source_ref æ´¾ç”Ÿæƒå¨è¯æ®é›†å¹¶ç»‘å®šï¼ˆä¸‰å¡/ä¸‰è¯æ®ï¼‰ã€‚
-    assert.match(quoteText, /3 \/ 3/, `quote å¿…é¡»ç»‘å®šä¸‰å¡/ä¸‰è¯æ®ï¼ˆå†å² Brief æ´¾ç”Ÿæƒå¨é›†ï¼‰ï¼š${quoteText.slice(0, 200)}`);
-    const maxCost = await cdp.evaluate(`document.querySelector('[data-testid="g1-quote-max"]').textContent`);
-    assert.match(maxCost, /Â¥0\.30/, `é¢„ä¼°æœ€å¤§è´¹ç”¨å¿…é¡»æ˜¾ç¤ºï¼š${maxCost}`);
-
-    // ---- æ˜¾å¼æ‰¹å‡†ï¼šæœªå‹¾é€‰ä¸å¯æäº¤ï¼›å‹¾é€‰åæäº¤ ----
-    const disabledBefore = await cdp.evaluate(`document.querySelector('[data-testid="g1-approve-submit"]').disabled`);
-    assert.equal(disabledBefore, true, 'æœªå‹¾é€‰æ‰¹å‡†æ—¶æäº¤æŒ‰é’®å¿…é¡»ç¦ç”¨');
-    await click(cdp, { selector: '[data-testid="g1-approval-check"]', label: 'approval checkbox' });
-    await click(cdp, { selector: '[data-testid="g1-approve-submit"]', label: 'approve and submit' });
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('ä½œä¸šå·²åˆ›å»º')`), { label: 'job created message', timeout: 15_000 });
-    await waitForSelector(cdp, '[data-testid="g1-job-card"]', { label: 'job card', timeout: 15_000 });
-
-    // ---- çŠ¶æ€æ¨è¿›ï¼šqueued/running â†’ completedï¼ˆfake worker çŠ¶æ€æœºï¼‰----
-    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="g1-job-status"]')?.textContent.includes('å·²å®Œæˆ')`), { label: 'job completed', timeout: 20_000 });
-    const statusText = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-status"]').textContent`);
-    assert.equal(statusText, 'å·²å®Œæˆ');
-
-    // ---- ç§æœ‰äº§ç‰©é¢„è§ˆ + ç‰ˆæœ¬å†å² + ä¸‹è½½é“¾æ¥ ----
-    await click(cdp, { selector: '.g1-job-card', label: 'open job drawer' });
-    await waitForSelector(cdp, '[data-testid="g1-job-drawer"]', { label: 'job drawer' });
-    await waitForSelector(cdp, '[data-testid="g1-artifact-stage"] img', { label: 'artifact image preview', timeout: 15_000 });
-    const imgSrc = await cdp.evaluate(`document.querySelector('[data-testid="g1-artifact-stage"] img').src`);
-    assert.match(imgSrc, /^blob:/, `äº§ç‰©é¢„è§ˆå¿…é¡»æ˜¯ç§æœ‰ blob çŸ­æ—¶é“¾æ¥ï¼š${imgSrc.slice(0, 60)}`);
-    const versionHistory = await cdp.evaluate(`document.querySelector('[data-testid="g1-version-history"]').innerText`);
-    assert.match(versionHistory, /v1/, `ç‰ˆæœ¬å†å²å¿…é¡»æ˜¾ç¤ºç¬¬ 1 ç‰ˆï¼š${versionHistory}`);
-    const downloadHref = await cdp.evaluate(`document.querySelector('[data-testid="g1-artifact-download"]').getAttribute('href')`);
-    assert.match(downloadHref, /^blob:/, `ä¸‹è½½å¿…é¡»æ˜¯çŸ­æ—¶ç§æœ‰é“¾æ¥ï¼š${String(downloadHref).slice(0, 60)}`);
-    const drawerText = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-drawer"]').innerText`);
-    assert.match(drawerText, /ç¬¬ 1 ç‰ˆ/, `ä½œä¸šè¯¦æƒ…å¿…é¡»ç»‘å®š Brief ç‰ˆæœ¬`);
-    assert.match(drawerText, /3 å¼ /, `ä½œä¸šè¯¦æƒ…å¿…é¡»æ˜¾ç¤ºä¸‰å¼ çŸ¥è¯†å¡è¡€ç¼˜`);
-    assert.match(drawerText, /3 æ¡/, `ä½œä¸šè¯¦æƒ…å¿…é¡»æ˜¾ç¤ºä¸‰æ¡è¯æ®è¡€ç¼˜`);
-    const actualCost = await cdp.evaluate(`document.querySelector('[data-testid="g1-actual-cost"]').textContent`);
-    assert.equal(actualCost, 'Provider æœªè¿”å›', 'Provider æœªè¿”å›å®é™…ç»“ç®—å€¼æ—¶ä¸å¾—ç”¨æŠ¥ä»·ä¸Šé™ä»£æ›¿');
-
-    // ---- ç¡¬åˆ·æ–°æ¢å¤ï¼šä½œä¸šä¸äº§ç‰©ä»åœ¨ ----
-    await reloadAndWait(cdp, tracker, { label: 'hard refresh' });
-    await waitForSelector(cdp, '[data-testid="g1-job-card"]', { label: 'job card after refresh', timeout: 30_000 });
-    const statusAfterRefresh = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-status"]')?.textContent`);
-    assert.equal(statusAfterRefresh, 'å·²å®Œæˆ', 'åˆ·æ–°åä½œä¸šå¿…é¡»ä¿æŒå·²å®Œæˆ');
-
-    // ---- ç»ˆæ€è¯Šæ–­å±•ç¤ºï¼šå¤±è´¥è§†é¢‘ä½œä¸šå¿…é¡»åœ¨å¡ç‰‡ä¸æŠ½å±‰æ˜¾ç¤ºæœ‰ç•Œè¯Šæ–­ ----
-    await cdp.evaluate(`(() => {
-      const select = document.querySelector('[data-testid="g1-mode-select"]');
-      const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-      selectSetter.call(select, 'video_t2v');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      const area = document.querySelector('[data-testid="g1-prompt-input"]');
-      const areaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-      areaSetter.call(area, 'å¤±è´¥æµ‹è¯•è§†é¢‘ï¼šæµ·è¾¹æ—¥è½');
-      area.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`);
-    await click(cdp, { selector: '[data-testid="g1-request-quote"]', label: 'request video quote' });
-    await waitForSelector(cdp, '[data-testid="g1-quote-panel"]', { label: 'video quote panel', timeout: 15_000 });
-    await click(cdp, { selector: '[data-testid="g1-approval-check"]', label: 'video approval checkbox' });
-    await click(cdp, { selector: '[data-testid="g1-approve-submit"]', label: 'approve video submit' });
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('ä½œä¸šå·²åˆ›å»º')`), { label: 'video job created', timeout: 15_000 });
-    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="g1-job-status"]')?.textContent === 'å¤±è´¥'`), { label: 'failed job status', timeout: 20_000 });
-    const failedDiagnostics = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-diagnostics"]').textContent`);
-    assert.match(failedDiagnostics, /InvalidParameter/, `å¤±è´¥ä½œä¸šå¡ç‰‡å¿…é¡»æ˜¾ç¤ºæœ‰ç•Œ provider è¯Šæ–­ï¼š${failedDiagnostics.slice(0, 200)}`);
-    assert.match(failedDiagnostics, /1080P|720P/, 'è¯Šæ–­å¿…é¡»ä¿ç•™ provider æ¶ˆæ¯');
-    assert.doesNotMatch(failedDiagnostics, /sk-|Bearer |AKLT/, 'è¯Šæ–­ç»ä¸æ³„éœ²å¯†é’¥å½¢æ€');
-    // æŠ½å±‰ä¸­çš„ä½œä¸šè¯Šæ–­ä¸å°è¯•è¯Šæ–­åŒæ ·æœ‰ç•Œæ˜¾ç¤ºã€‚
-    await click(cdp, { selector: '.g1-job-card', label: 'open failed job drawer' });
-    await waitForSelector(cdp, '[data-testid="g1-job-drawer"]', { label: 'failed job drawer', timeout: 15_000 });
-    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="g1-job-detail-diagnostics"]')?.textContent.includes('InvalidParameter')`), { label: 'drawer terminal diagnostics', timeout: 15_000 });
-    await cdp.evaluate(`document.querySelector('[data-testid="g1-job-drawer"] .ghost-button')?.click()`);
-
-    // ---- è§†é¢‘äº§ç‰©é¢„è§ˆï¼šå®Œæˆè§†é¢‘ä½œä¸šçš„ç§æœ‰ blob é¢„è§ˆ ----
-    await cdp.evaluate(`(() => {
-      const area = document.querySelector('[data-testid="g1-prompt-input"]');
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(area, 'æ¢å¤è¯Šæ–­æµ‹è¯•ï¼šæµ·è¾¹æ—¥è½è§†é¢‘ï¼Œæ³¢æµªç¼“ç¼“æ¨è¿›');
-      area.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`);
-    await click(cdp, { selector: '[data-testid="g1-request-quote"]', label: 'request second video quote' });
-    await waitForSelector(cdp, '[data-testid="g1-quote-panel"]', { label: 'second video quote panel', timeout: 15_000 });
-    await click(cdp, { selector: '[data-testid="g1-approval-check"]', label: 'second video approval checkbox' });
-    await click(cdp, { selector: '[data-testid="g1-approve-submit"]', label: 'approve second video submit' });
-    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('[data-testid="g1-job-card"]')].some((card) => card.dataset.status === 'completed' && card.innerText.includes('video_t2v'))`), { label: 'completed video job', timeout: 20_000 });
-    await cdp.evaluate(`[...document.querySelectorAll('[data-testid="g1-job-card"]')].find((card) => card.dataset.status === 'completed' && card.innerText.includes('video_t2v')).click()`);
-    await waitForSelector(cdp, '[data-testid="g1-artifact-stage"] video', { label: 'artifact video preview', timeout: 15_000 });
-    const videoSrc = await cdp.evaluate(`document.querySelector('[data-testid="g1-artifact-stage"] video').src`);
-    assert.match(videoSrc, /^blob:/, `è§†é¢‘äº§ç‰©é¢„è§ˆå¿…é¡»æ˜¯ç§æœ‰ blob çŸ­æ—¶é“¾æ¥ï¼š${videoSrc.slice(0, 60)}`);
-    const videoDrawerText = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-drawer"]').innerText`);
-    assert.match(videoDrawerText, /video\/mp4/, 'è§†é¢‘äº§ç‰©å¿…é¡»æ˜¾ç¤ºè§†é¢‘ MIME');
-    assert.match(videoDrawerText, /å†å²è¯Šæ–­ï¼ˆå·²æ¢å¤ï¼‰ï¼šG1_WORKER_INTERNAL/, 'å·²æ¢å¤çš„å®Œæˆä½œä¸šå¿…é¡»å°†æ—§è¯Šæ–­æ ‡è®°ä¸ºå†å²è¯Šæ–­');
-    assert.match(videoDrawerText, /å®é™…è´¹ç”¨\s*Provider æœªè¿”å›/, 'å®Œæˆè§†é¢‘æœªè¿”å›ç»“ç®—å€¼æ—¶å¿…é¡»æ˜ç¡®æ˜¾ç¤º Provider æœªè¿”å›');
-    const recoveredDiagnosticState = await cdp.evaluate(`document.querySelector('[data-testid="g1-job-detail-diagnostics"]')?.dataset.diagnosticState`);
-    assert.equal(recoveredDiagnosticState, 'historical', 'å·²å®Œæˆä½œä¸šçš„æ—§è¯Šæ–­ä¸å¾—æ ‡è®°ä¸ºå½“å‰æ´»åŠ¨é”™è¯¯');
-
-    // ---- é¡¹ç›®åˆ‡æ¢éš”ç¦»ï¼šB é¡¹ç›®ä¸å¾—å‡ºç° A çš„ä½œä¸š ----
-    await cdp.evaluate(`(() => {
-      localStorage.setItem('p19_active_project_v1', ${JSON.stringify(projectIds[1])});
-      location.reload();
-    })()`);
-    await waitFor(() => cdp.evaluate(`document.body.innerText.includes('G1 æµè§ˆå™¨éš”ç¦»é¡¹ç›®')`), { label: 'project B loaded', timeout: 30_000 });
-    await waitFor(() => cdp.evaluate(`document.querySelectorAll('[data-testid="g1-job-card"]').length === 0`), { label: 'project B has no jobs', timeout: 20_000 });
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('è¿˜æ²¡æœ‰ç”Ÿæˆä½œä¸š')`), true, 'B é¡¹ç›®å¿…é¡»æ˜¾ç¤ºç©ºä½œä¸šçŠ¶æ€');
-
-    // åˆ‡å› Aï¼šä½œä¸šä»åœ¨ï¼ˆéš”ç¦»æ¢å¤ï¼‰ã€‚
-    await cdp.evaluate(`(() => {
-      localStorage.setItem('p19_active_project_v1', ${JSON.stringify(projectIds[0])});
-      location.reload();
-    })()`);
-    await waitForSelector(cdp, '[data-testid="g1-job-card"]', { label: 'job card back in project A', timeout: 30_000 });
-
-    // ç§»åŠ¨ç«¯æ— æ¨ªå‘æº¢å‡ºã€‚
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-    await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'mobile layout settle' });
-    assert.equal(await cdp.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth'), false, 'mobile page has no horizontal overflow');
-
-    // å…¨ç¨‹é›¶çœŸå® provider è°ƒç”¨ï¼ˆfake edge å†…éƒ¨è®¡æ•°ï¼›è‹¥ä¸ºçœŸå®ç½‘ç»œä¼šå¤±è´¥ï¼‰ã€‚
-    const fakeSubmissions = await cdp.evaluate(`globalThis.__g1FakeState?.submissions?.() || 0`);
-    assert.equal(fakeSubmissions, 3, 'å…¨ç¨‹å¿…é¡»æ°å¥½ 3 æ¬¡ï¼ˆfakeï¼‰provider æäº¤ï¼ˆå›¾ç‰‡ + å¤±è´¥è§†é¢‘ + å®Œæˆè§†é¢‘ï¼‰');
-  } catch (error) {
-    if (cdp) {
-      const extra = await captureDiagnostics(cdp, { tracker });
-      if (!String(error.message).includes('è¯Šæ–­å¿«ç…§')) error.message += `\n${extra}`;
-    }
-    throw error;
-  } finally {
-    if (cdp) cdp.close();
-    await shutdownEdge(edge, profile);
-    await killProcessTree(vite);
-    await removeTempProfile(profile);
-  }
-});
+              return new Response(JSON.stringify(ok({ action: 'approve_submit', data: { job: summarize(job) }, entity: { type: 'generation_job', id: job.id ã¹¶‰ËkºwµçRkšr³’æ/–&7šÎ£–”™…­”•‘—¾ò#š.›š"¨€½œÄµ™…­”ƒ–&7ò¾ò'4(€€€…İ…¥Ğ‘À¹Í•¹ A…”¹…‘‘MÉ¥ÁÑQ½Ù…±Õ…Ñ•=¹9•İ½Õµ•¹Ğœ°ìÍ½ÕÉ”è-}}MI%APô¤ì4(€€€…İ…¥Ğ¹…Ù¥…Ñ•¹‘]…¥Ğ¡‘À°ÑÉ…­•È°‰…Í•UÉ°°ì±…‰•°è€‰…Í”Á…”œô¤ì4(€€€½¹ÍĞÍ••‘•€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡M}MI%AP¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡Í••‘•¹ÁÉ½©•Ñ%‘Ì¹±•¹Ñ °€È°€Ÿ–ş¦†ï¦Šö»’â“’â«.³®/¦†çn¸œ¤ì4(€€€½¹ÍĞÁÉ½©•Ñ%‘Ì€ôÍ••‘•¹ÁÉ½©•Ñ%‘Ìì4(4(€€€€¼¼ƒ7–¶C–g–—–B;š‹–’7–Ş—’ös–2ë¾òk¦†×¦v‹š¢‡–v_–r£7–¶C–g–—–&7–ŞË–"w–/–2[¾ò3’î¦v€¡…Í ƒ–¾ó¢"«’â7’òh4(€€€€¼¼ƒ¦7šZÃ¢¾ï–>X±½…±MÑ½É…—¾òo–#†»–ºkšŸ’âïšZš†¦7¢ö÷¾ò#¶'–ú–¾ó¢"«š>C’ê€¬É•…‘åMÑ…Ñ”ô4(€€€€¼¼½µÁ±•Ñ—¾ò'¢º§–êSR£–£šZÃ–B¿–*£–æÛ¢¾ï–>[7–¶C–Ş—’ös–2ë¾ò3–7¢şo–”€Œ½•¹•É…Ñ¥½»¾ò#¦†×¦v‹–4(€€€€¼¼±½…Ñ¥½¸¹¡É•˜ƒ¢Ö/–ó¾ò1¡…Í ƒ–>c–2[–şÛ¢›–>G¢Ş¿RÇ¾ò'4(€€€…İ…¥ĞÉ•±½…‘¹‘]…¥Ğ¡‘À°ÑÉ…­•È°ì±…‰•°è€Í••İ½É­ÍÁ…”É•±½…œô¤ì4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡±½…Ñ¥½¸¹¡É•˜€ô€‘í)M=8¹ÍÑÉ¥¹¥™ä¡€‘í‰…Í•UÉ±ôŒ½•¹•É…Ñ¥½¹€¥õ€¤ì4(€€€€¼¼=4ƒ–ÂÇî«¾ò#šr'V3¢ö»¢¾‹¾ò3š^ƒ–në–ºhÍ±••Ã¾ò'¾òk–"o–îë¦v‹švÿr–º{š2¢ö÷4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÉ•…Ñ”µÁ…¹•°‰tœ°ì±…‰•°è€ÄÉ•…Ñ”Á…¹•°œ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÈµİ½É­ÍÁ…”‰tœ°ì±…‰•°è€ÈÍ¥µÁ±¥™¥•İ½É­ÍÁ…”œ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÈµ™±½Ü‰tœ°ì±…‰•°è€ÈÕ¥‘•™±½Üœ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì(€€€€¼¼ƒšÒï–*£¦†çn»–ÂÇî«¾òk–"o–îë¦v‹švÿ–ş¦†ïîG–ºk7–¶C¦†çn¸ƒj	É¥•˜ƒš‚¦Šc(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹‰½‘ä¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì ÄƒšÖ?¢#–f£Rš"C¦†çn¸œ¥€¤°ì±…‰•°è€Í••‘•ÁÉ½©•Ğ‰É¥•˜œô¤ì(€€€½¹ÍĞÍ½ÕÉ•MÕµµ…Éä€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÈµÍ½ÕÉ”µÍÕµµ…Éä‰tœ¤¹¥¹¹•ÉQ•áÑ€¤ì(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡Í½ÕÉ•MÕµµ…Éä°€¼Ìƒ–òƒ~—¢¾–6„ƒ
+Ü€Ìƒšv‡¢¾š6¸¼°Èƒ–ş¦†ï¢«–*£îG–ºk–öO–&4	É¥•˜ƒj’â'–6‡’â'¢¾š6»¾òh‘íÍ½ÕÉ•MÕµµ…Éåõ€¤ì((€€€€¼¼ƒºšÒš¢‡–ò?–ò–Ï–ş¦†ï–†»š:Ÿ–"Û–:|Äƒš¢‡–ò?–B#–B3¾ò3’âS’â7¢›–>G’îï’öW¢¾ßšÆ(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÈµµ½‘”µ¥µ…”‰tœ¤¹•ÑÑÑÉ¥‰ÕÑ” …É¥„µÁÉ•ÍÍ•œ¥€¤°€ÑÉÕ”œ¤ì(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÈµµ½‘”µÙ¥‘•¼‰tœ°±…‰•°è€ÈÙ¥‘•¼µ½‘”œô¤ì(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµµ½‘”µÍ•±•Ğ‰tœ¤¹Ù…±Õ•€¤°€Ù¥‘•½}ĞÉØœ¤ì(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÈµµ½‘”µ¥µ…”‰tœ°±…‰•°è€È¥µ…”µ½‘”œô¤ì(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµµ½‘”µÍ•±•Ğ‰tœ¤¹Ù…±Õ•€¤°€¥µ…”œ¤ì(4(€€€€¼¼€´´´´ƒ¢†£–6W¾òi¥µ…”ƒš¢‡–ò<€¬ÁÉ½µÁĞƒŠHƒ¢¾ßšÆš*—’îÜ€´´´´4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡€  ¤€ôøì4(€€€€€½¹ÍĞ…É•„€ô‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÁÉ½µÁĞµ¥¹ÁÕĞ‰tœ¤ì4(€€€€€½¹ÍĞÍ•ÑÑ•È€ô=‰©•Ğ¹•Ñ=İ¹AÉ½Á•ÉÑå•ÍÉ¥ÁÑ½È¡İ¥¹‘½Ü¹!Q51Q•áÑÉ•…±•µ•¹Ğ¹ÁÉ½Ñ½ÑåÁ”°€Ù…±Õ”œ¤¹Í•Ğì4(€€€€€Í•ÑÑ•È¹…±°¡…É•„°€Ÿ’â–>«–r£š»šz_¦3jš¦c2¯¾ò3¦bÏ–'’â,œ¤ì4(€€€€€…É•„¹‘¥ÍÁ…Ñ¡Ù•¹Ğ¡¹•ÜÙ•¹Ğ ¥¹ÁÕĞœ°ì‰Õ‰‰±•ÌèÑÉÕ”ô¤¤ì4(€€€ô¤ ¥€¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÉ•ÅÕ•ÍĞµÅÕ½Ñ”‰tœ°±…‰•°è€É•ÅÕ•ÍĞÅÕ½Ñ”œô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÅÕ½Ñ”µÁ…¹•°‰tœ°ì±…‰•°è€ÅÕ½Ñ”Á…¹•°œ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€½¹ÍĞÅÕ½Ñ•Q•áĞ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÅÕ½Ñ”µÁ…¹•°‰tœ¤¹¥¹¹•ÉQ•áÑ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡ÅÕ½Ñ•Q•áĞ°€½Åİ•¸µ¥µ…”´Ép¸À¼°ÅÕ½Ñ”ƒ–ş¦†ïšbû’ë–në–ºkš¢‡–z/¾òh‘íÅÕ½Ñ•Q•áĞ¹Í±¥” À°€ÈÀÀ¥õ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡ÅÕ½Ñ•Q•áĞ°€¿
+”Áp¸ÀÈƒŠLƒ
+”Áp¸ÌÀ¼°ÅÕ½Ñ”ƒ–ş¦†ïšbû’ëšr'V3¢ÒçR£–2ë¦^Ó¾òh‘íÅÕ½Ñ•Q•áĞ¹Í±¥” À°€ÈÀÀ¥õ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡ÅÕ½Ñ•Q•áĞ°€¿’îc¢ÒçRš"@p¬ƒšr'–¶c–
+£–g–”¼°ÅÕ½Ñ”ƒ–ş¦†ï–Ãšb;’îc¢Òçš&Ÿ¢†3’â;–¶c–
+£–g–•€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡ÅÕ½Ñ•Q•áĞ°€¿²°€Äƒ& ¼°ÅÕ½Ñ”ƒ–ş¦†ïîG–ºh	É¥•˜ƒ&#šr±€¤ì4(€€€€¼¼ƒ7–¶@	É¥•˜ƒšb¿–:–>Ë–ö‹š¾ò!•Ù¥‘•¹•}ÁÉ½Ù•¹…¹”ƒš^€•Ù¥‘•¹•}¥‘Ï¾ò'¾òi™…­”•‘”ƒ–ş¦†ì4(€€€€¼¼ƒ’î;¢Š¯–òW~—¢¾–6„•Ù¥‘•¹•}±¥¹­Ímt¹Í½ÕÉ•}É•˜ƒšÒûRšv–¢¢¾š6»¦n–æÛîG–ºk¾ò#’â'–6„¿’â'¢¾š6»¾ò'4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡ÅÕ½Ñ•Q•áĞ°€¼Ìp¼€Ì¼°ÅÕ½Ñ”ƒ–ş¦†ïîG–ºk’â'–6„¿’â'¢¾š6»¾ò#–:–>È	É¥•˜ƒšÒûRšv–¢¦n¾ò'¾òh‘íÅÕ½Ñ•Q•áĞ¹Í±¥” À°€ÈÀÀ¥õ€¤ì4(€€€½¹ÍĞµ…á½ÍĞ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÅÕ½Ñ”µµ…à‰tœ¤¹Ñ•áÑ½¹Ñ•¹Ñ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡µ…á½ÍĞ°€¿
+”Áp¸ÌÀ¼°ƒ¦Š’òÃšr–’Ÿ¢ÒçR£–ş¦†ïšbû’ë¾òh‘íµ…á½ÍÑõ€¤ì4(4(€€€€¼¼€´´´´ƒšbû–ò?š&ç–¾òkšr«–.û¦'’â7–>¿š>C’ê“¾òo–.û¦'–B;š>C’ê€´´´´4(€€€½¹ÍĞ‘¥Í…‰±•‘	•™½É”€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù”µÍÕ‰µ¥Ğ‰tœ¤¹‘¥Í…‰±•‘€¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡‘¥Í…‰±•‘	•™½É”°ÑÉÕ”°€Ÿšr«–.û¦'š&ç–š^Ûš>C’ê“š2'¦J»–ş¦†ïšR œ¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù…°µ¡•¬‰tœ°±…‰•°è€…ÁÁÉ½Ù…°¡•­‰½àœô¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù”µÍÕ‰µ¥Ğ‰tœ°±…‰•°è€…ÁÁÉ½Ù”…¹ÍÕ‰µ¥Ğœô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹‰½‘ä¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì Ÿ’ös’âk–ŞË–"o–îèœ¥€¤°ì±…‰•°è€©½ˆÉ•…Ñ•µ•ÍÍ…”œ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ…É‰tœ°ì±…‰•°è€©½ˆ…Éœ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(4(€€€€¼¼€´´´´ƒ*Ûšš:£¢şo¾òiÅÕ•Õ•½ÉÕ¹¹¥¹œƒŠH½µÁ±•Ñ•“¾ò!™…­”İ½É­•Èƒ*Ûššrë¾ò$´´´´4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµÍÑ…ÑÕÌ‰tœ¤ü¹Ñ•áÑ½¹Ñ•¹Ğ¹¥¹±Õ‘•Ì Ÿ–ŞË–º3š"@œ¥€¤°ì±…‰•°è€©½ˆ½µÁ±•Ñ•œ°Ñ¥µ•½ÕĞè€ÈÁ|ÀÀÀô¤ì4(€€€½¹ÍĞÍÑ…ÑÕÍQ•áĞ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµÍÑ…ÑÕÌ‰tœ¤¹Ñ•áÑ½¹Ñ•¹Ñ€¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡ÍÑ…ÑÕÍQ•áĞ°€Ÿ–ŞË–º3š"@œ¤ì4(4(€€€€¼¼€´´´´ƒšr'’êŸ&§¦Š¢ €¬ƒ&#šr³–:–>È€¬ƒ’â/¢ö÷¦Nûš:”€´´´´4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€œ¹œÄµ©½ˆµ…Éœ°±…‰•°è€½Á•¸©½ˆ‘É…İ•Èœô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘É…İ•È‰tœ°ì±…‰•°è€©½ˆ‘É…İ•Èœô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÉÑ¥™…ĞµÍÑ…”‰t¥µœœ°ì±…‰•°è€…ÉÑ¥™…Ğ¥µ…”ÁÉ•Ù¥•Üœ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€½¹ÍĞ¥µMÉŒ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÉÑ¥™…ĞµÍÑ…”‰t¥µœœ¤¹ÍÉ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡¥µMÉŒ°€½y‰±½ˆè¼°ƒ’êŸ&§¦Š¢#–ş¦†ïšb¿šr$‰±½ˆƒ~·š^Û¦Nûš:—¾òh‘í¥µMÉŒ¹Í±¥” À°€ØÀ¥õ€¤ì4(€€€½¹ÍĞÙ•ÉÍ¥½¹!¥ÍÑ½Éä€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÙ•ÉÍ¥½¸µ¡¥ÍÑ½Éä‰tœ¤¹¥¹¹•ÉQ•áÑ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡Ù•ÉÍ¥½¹!¥ÍÑ½Éä°€½ØÄ¼°ƒ&#šr³–:–>Ë–ş¦†ïšbû’ë²°€Äƒ&#¾òh‘íÙ•ÉÍ¥½¹!¥ÍÑ½Éåõ€¤ì4(€€€½¹ÍĞ‘½İ¹±½…‘!É•˜€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÉÑ¥™…Ğµ‘½İ¹±½…‰tœ¤¹•ÑÑÑÉ¥‰ÕÑ” ¡É•˜œ¥€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡‘½İ¹±½…‘!É•˜°€½y‰±½ˆè¼°ƒ’â/¢ö÷–ş¦†ïšb¿~·š^Ûšr'¦Nûš:—¾òh‘íMÑÉ¥¹œ¡‘½İ¹±½…‘!É•˜¤¹Í±¥” À°€ØÀ¥õ€¤ì4(€€€½¹ÍĞ‘É…İ•ÉQ•áĞ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘É…İ•È‰tœ¤¹¥¹¹•ÉQ•áÑ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡‘É…İ•ÉQ•áĞ°€¿²°€Äƒ& ¼°ƒ’ös’âk¢¾›š–ş¦†ïîG–ºh	É¥•˜ƒ&#šr±€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡‘É…İ•ÉQ•áĞ°€¼Ìƒ–ò€¼°ƒ’ös’âk¢¾›š–ş¦†ïšbû’ë’â'–òƒ~—¢¾–6‡¢†òa€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡‘É…İ•ÉQ•áĞ°€¼Ìƒšv„¼°ƒ’ös’âk¢¾›š–ş¦†ïšbû’ë’â'šv‡¢¾š6»¢†òa€¤ì4(€€€½¹ÍĞ…ÑÕ…±½ÍĞ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÑÕ…°µ½ÍĞ‰tœ¤¹Ñ•áÑ½¹Ñ•¹Ñ€¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡…ÑÕ…±½ÍĞ°€AÉ½Ù¥‘•Èƒšr«¢şS–nxœ°€AÉ½Ù¥‘•Èƒšr«¢şS–n{–º{¦fîOº_–óš^Û’â7–ú_R£š*—’îß’â+¦fC’îšnüœ¤ì4(4(€€€€¼¼€´´´´ƒ†³–"ßšZÃš‹–’7¾òk’ös’âk’â;’êŸ&§’î7–r €´´´´4(€€€…İ…¥ĞÉ•±½…‘¹‘]…¥Ğ¡‘À°ÑÉ…­•È°ì±…‰•°è€¡…ÉÉ•™É•Í œô¤ì(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ…É‰tœ°ì±…‰•°è€©½ˆ…É…™Ñ•ÈÉ•™É•Í œ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì(€€€½¹ÍĞÍÑ…ÑÕÍ™Ñ•ÉI•™É•Í €ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµÍÑ…ÑÕÌ‰tœ¤ü¹Ñ•áÑ½¹Ñ•¹Ñ€¤ì(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡ÍÑ…ÑÕÍ™Ñ•ÉI•™É•Í °€Ÿ–ŞË–º3š"@œ°€Ÿ–"ßšZÃ–B;’ös’âk–ş¦†ï’şwš2–ŞË–º3š"@œ¤ì(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘É…İ•È‰tœ°ì±…‰•°è€È…ÕÑ½µ…Ñ¥Œ±…Ñ•ÍĞÉ•ÍÕ±ĞÉ•½Ù•Éäœ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì(4(€€€€¼¼€´´´´ƒî#š¢¾+šZ·–ÆW’ë¾òk–’Ç¢Ò—¢¦ŠG’ös’âk–ş¦†ï–r£–6‡&’â;š*÷–Æ'šbû’ëšr'V3¢¾+šZ´€´´´´4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡€  ¤€ôøì4(€€€€€½¹ÍĞÍ•±•Ğ€ô‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµµ½‘”µÍ•±•Ğ‰tœ¤ì4(€€€€€½¹ÍĞÍ•±•ÑM•ÑÑ•È€ô=‰©•Ğ¹•Ñ=İ¹AÉ½Á•ÉÑå•ÍÉ¥ÁÑ½È¡İ¥¹‘½Ü¹!Q51M•±•Ñ±•µ•¹Ğ¹ÁÉ½Ñ½ÑåÁ”°€Ù…±Õ”œ¤¹Í•Ğì4(€€€€€Í•±•ÑM•ÑÑ•È¹…±°¡Í•±•Ğ°€Ù¥‘•½}ĞÉØœ¤ì4(€€€€€Í•±•Ğ¹‘¥ÍÁ…Ñ¡Ù•¹Ğ¡¹•ÜÙ•¹Ğ ¡…¹”œ°ì‰Õ‰‰±•ÌèÑÉÕ”ô¤¤ì4(€€€€€½¹ÍĞ…É•„€ô‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÁÉ½µÁĞµ¥¹ÁÕĞ‰tœ¤ì4(€€€€€½¹ÍĞ…É•…M•ÑÑ•È€ô=‰©•Ğ¹•Ñ=İ¹AÉ½Á•ÉÑå•ÍÉ¥ÁÑ½È¡İ¥¹‘½Ü¹!Q51Q•áÑÉ•…±•µ•¹Ğ¹ÁÉ½Ñ½ÑåÁ”°€Ù…±Õ”œ¤¹Í•Ğì4(€€€€€…É•…M•ÑÑ•È¹…±°¡…É•„°€Ÿ–’Ç¢Ò—šÖ/¢¾W¢¦ŠG¾òkšÖß¢úçš^—¢Bôœ¤ì4(€€€€€…É•„¹‘¥ÍÁ…Ñ¡Ù•¹Ğ¡¹•ÜÙ•¹Ğ ¥¹ÁÕĞœ°ì‰Õ‰‰±•ÌèÑÉÕ”ô¤¤ì4(€€€ô¤ ¥€¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÉ•ÅÕ•ÍĞµÅÕ½Ñ”‰tœ°±…‰•°è€É•ÅÕ•ÍĞÙ¥‘•¼ÅÕ½Ñ”œô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÅÕ½Ñ”µÁ…¹•°‰tœ°ì±…‰•°è€Ù¥‘•¼ÅÕ½Ñ”Á…¹•°œ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù…°µ¡•¬‰tœ°±…‰•°è€Ù¥‘•¼…ÁÁÉ½Ù…°¡•­‰½àœô¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù”µÍÕ‰µ¥Ğ‰tœ°±…‰•°è€…ÁÁÉ½Ù”Ù¥‘•¼ÍÕ‰µ¥Ğœô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹‰½‘ä¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì Ÿ’ös’âk–ŞË–"o–îèœ¥€¤°ì±…‰•°è€Ù¥‘•¼©½ˆÉ•…Ñ•œ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµÍÑ…ÑÕÌ‰tœ¤ü¹Ñ•áÑ½¹Ñ•¹Ğ€ôôô€Ÿ–’Ç¢Ò”€¤°ì±…‰•°è€™…¥±•©½ˆÍÑ…ÑÕÌœ°Ñ¥µ•½ÕĞè€ÈÁ|ÀÀÀô¤ì4(€€€½¹ÍĞ™…¥±•‘¥…¹½ÍÑ¥Ì€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘¥…¹½ÍÑ¥Ì‰tœ¤¹Ñ•áÑ½¹Ñ•¹Ñ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡™…¥±•‘¥…¹½ÍÑ¥Ì°€½%¹Ù…±¥‘A…É…µ•Ñ•È¼°ƒ–’Ç¢Ò—’ös’âk–6‡&–ş¦†ïšbû’ëšr'V0ÁÉ½Ù¥‘•Èƒ¢¾+šZ·¾òh‘í™…¥±•‘¥…¹½ÍÑ¥Ì¹Í±¥” À°€ÈÀÀ¥õ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡™…¥±•‘¥…¹½ÍÑ¥Ì°€¼ÄÀàÁAğÜÈÁ@¼°€Ÿ¢¾+šZ·–ş¦†ï’şwVdÁÉ½Ù¥‘•ÈƒšÚ#š¼œ¤ì4(€€€…ÍÍ•ÉĞ¹‘½•Í9½Ñ5…Ñ ¡™…¥±•‘¥…¹½ÍÑ¥Ì°€½Í¬µñ	•…É•Èñ-1P¼°€Ÿ¢¾+šZ·îw’â7šÎ¦rË–¾¦J—–ö‹šœ¤ì4(€€€€¼¼ƒš*÷–Æ'’â·j’ös’âk¢¾+šZ·’â;–Âw¢¾W¢¾+šZ·–B3š‚ßšr'V3šbû’ë4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€œ¹œÄµ©½ˆµ…Éœ°±…‰•°è€½Á•¸™…¥±•©½ˆ‘É…İ•Èœô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘É…İ•È‰tœ°ì±…‰•°è€™…¥±•©½ˆ‘É…İ•Èœ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘•Ñ…¥°µ‘¥…¹½ÍÑ¥Ì‰tœ¤ü¹Ñ•áÑ½¹Ñ•¹Ğ¹¥¹±Õ‘•Ì %¹Ù…±¥‘A…É…µ•Ñ•Èœ¥€¤°ì±…‰•°è€‘É…İ•ÈÑ•Éµ¥¹…°‘¥…¹½ÍÑ¥Ìœ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘É…İ•È‰t€¹¡½ÍĞµ‰ÕÑÑ½¸œ¤ü¹±¥¬ ¥€¤ì4(4(€€€€¼¼€´´´´ƒ¢¦ŠG’êŸ&§¦Š¢#¾òk–º3š"C¢¦ŠG’ös’âkjšr$‰±½ˆƒ¦Š¢ €´´´´4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡€  ¤€ôøì4(€€€€€½¹ÍĞ…É•„€ô‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÁÉ½µÁĞµ¥¹ÁÕĞ‰tœ¤ì4(€€€€€½¹ÍĞÍ•ÑÑ•È€ô=‰©•Ğ¹•Ñ=İ¹AÉ½Á•ÉÑå•ÍÉ¥ÁÑ½È¡İ¥¹‘½Ü¹!Q51Q•áÑÉ•…±•µ•¹Ğ¹ÁÉ½Ñ½ÑåÁ”°€Ù…±Õ”œ¤¹Í•Ğì4(€€€€€Í•ÑÑ•È¹…±°¡…É•„°€Ÿš‹–’7¢¾+šZ·šÖ/¢¾W¾òkšÖß¢úçš^—¢B÷¢¦ŠG¾ò3šÎ‹šÖ«òOòOš:£¢şlœ¤ì4(€€€€€…É•„¹‘¥ÍÁ…Ñ¡Ù•¹Ğ¡¹•ÜÙ•¹Ğ ¥¹ÁÕĞœ°ì‰Õ‰‰±•ÌèÑÉÕ”ô¤¤ì4(€€€ô¤ ¥€¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÉ•ÅÕ•ÍĞµÅÕ½Ñ”‰tœ°±…‰•°è€É•ÅÕ•ÍĞÍ•½¹Ù¥‘•¼ÅÕ½Ñ”œô¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµÅÕ½Ñ”µÁ…¹•°‰tœ°ì±…‰•°è€Í•½¹Ù¥‘•¼ÅÕ½Ñ”Á…¹•°œ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù…°µ¡•¬‰tœ°±…‰•°è€Í•½¹Ù¥‘•¼…ÁÁÉ½Ù…°¡•­‰½àœô¤ì4(€€€…İ…¥Ğ±¥¬¡‘À°ìÍ•±•Ñ½Èè€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÁÁÉ½Ù”µÍÕ‰µ¥Ğ‰tœ°±…‰•°è€…ÁÁÉ½Ù”Í•½¹Ù¥‘•¼ÍÕ‰µ¥Ğœô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡l¸¸¹‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½É±° m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ…É‰tœ¥t¹Í½µ” ¡…É¤€ôø…É¹‘…Ñ…Í•Ğ¹ÍÑ…ÑÕÌ€ôôô€½µÁ±•Ñ•œ€˜˜…É¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì Ù¥‘•½}ĞÉØœ¤¥€¤°ì±…‰•°è€½µÁ±•Ñ•Ù¥‘•¼©½ˆœ°Ñ¥µ•½ÕĞè€ÈÁ|ÀÀÀô¤ì4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡l¸¸¹‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½É±° m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ…É‰tœ¥t¹™¥¹ ¡…É¤€ôø…É¹‘…Ñ…Í•Ğ¹ÍÑ…ÑÕÌ€ôôô€½µÁ±•Ñ•œ€˜˜…É¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì Ù¥‘•½}ĞÉØœ¤¤¹±¥¬ ¥€¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÉÑ¥™…ĞµÍÑ…”‰tÙ¥‘•¼œ°ì±…‰•°è€…ÉÑ¥™…ĞÙ¥‘•¼ÁÉ•Ù¥•Üœ°Ñ¥µ•½ÕĞè€ÄÕ|ÀÀÀô¤ì4(€€€½¹ÍĞÙ¥‘•½MÉŒ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ…ÉÑ¥™…ĞµÍÑ…”‰tÙ¥‘•¼œ¤¹ÍÉ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡Ù¥‘•½MÉŒ°€½y‰±½ˆè¼°ƒ¢¦ŠG’êŸ&§¦Š¢#–ş¦†ïšb¿šr$‰±½ˆƒ~·š^Û¦Nûš:—¾òh‘íÙ¥‘•½MÉŒ¹Í±¥” À°€ØÀ¥õ€¤ì4(€€€½¹ÍĞÙ¥‘•½É…İ•ÉQ•áĞ€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘É…İ•È‰tœ¤¹¥¹¹•ÉQ•áÑ€¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡Ù¥‘•½É…İ•ÉQ•áĞ°€½Ù¥‘•½p½µÀĞ¼°€Ÿ¢¦ŠG’êŸ&§–ş¦†ïšbû’ë¢¦ŠD5%5œ¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡Ù¥‘•½É…İ•ÉQ•áĞ°€¿–:–>Ë¢¾+šZ·¾ò#–ŞËš‹–’7¾ò'¾òiÅ}]=I-I}%9QI90¼°€Ÿ–ŞËš‹–’7j–º3š"C’ös’âk–ş¦†ï–Âš^Ÿ¢¾+šZ·š‚¢ºÃ’âë–:–>Ë¢¾+šZ´œ¤ì4(€€€…ÍÍ•ÉĞ¹µ…Ñ ¡Ù¥‘•½É…İ•ÉQ•áĞ°€¿–º{¦f¢ÒçR¡qÌ©AÉ½Ù¥‘•Èƒšr«¢şS–nx¼°€Ÿ–º3š"C¢¦ŠGšr«¢şS–n{îOº_–óš^Û–ş¦†ïšb;†»šbû’èAÉ½Ù¥‘•Èƒšr«¢şS–nxœ¤ì4(€€€½¹ÍĞÉ•½Ù•É•‘¥…¹½ÍÑ¥MÑ…Ñ”€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½È m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ‘•Ñ…¥°µ‘¥…¹½ÍÑ¥Ì‰tœ¤ü¹‘…Ñ…Í•Ğ¹‘¥…¹½ÍÑ¥MÑ…Ñ•€¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡É•½Ù•É•‘¥…¹½ÍÑ¥MÑ…Ñ”°€¡¥ÍÑ½É¥…°œ°€Ÿ–ŞË–º3š"C’ös’âkjš^Ÿ¢¾+šZ·’â7–ú_š‚¢ºÃ’âë–öO–&7šÒï–*£¦Rg¢¾¼œ¤ì4(4(€€€€¼¼€´´´´ƒ¦†çn»–"š6‹¦jSšï¾òiƒ¦†çn»’â7–ú_–ë:Àƒj’ös’âh€´´´´4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡€  ¤€ôøì4(€€€€€±½…±MÑ½É…”¹Í•Ñ%Ñ•´ ÀÄå}…Ñ¥Ù•}ÁÉ½©•Ñ}ØÄœ°€‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÁÉ½©•Ñ%‘ÍlÅt¥ô¤ì4(€€€€€±½…Ñ¥½¸¹É•±½… ¤ì4(€€€ô¤ ¥€¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹‰½‘ä¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì ÄƒšÖ?¢#–f£¦jSšï¦†çn¸œ¥€¤°ì±…‰•°è€ÁÉ½©•Ğ±½…‘•œ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹ÅÕ•ÉåM•±•Ñ½É±° m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ…É‰tœ¤¹±•¹Ñ €ôôô€Á€¤°ì±…‰•°è€ÁÉ½©•Ğ¡…Ì¹¼©½‰Ìœ°Ñ¥µ•½ÕĞè€ÈÁ|ÀÀÀô¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹‰½‘ä¹¥¹¹•ÉQ•áĞ¹¥¹±Õ‘•Ì Ÿ¢şcšÊ‡šr'Rš"C¢ºÃ–öTœ¥€¤°ÑÉÕ”°€ƒ¦†çn»–ş¦†ïšbû’ë¦ë’ös’âk*Ûšœ¤ì(4(€€€€¼¼ƒ–"–nx¾òk’ös’âk’î7–r£¾ò#¦jSšïš‹–’7¾ò'4(€€€…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡€  ¤€ôøì4(€€€€€±½…±MÑ½É…”¹Í•Ñ%Ñ•´ ÀÄå}…Ñ¥Ù•}ÁÉ½©•Ñ}ØÄœ°€‘í)M=8¹ÍÑÉ¥¹¥™ä¡ÁÉ½©•Ñ%‘ÍlÁt¥ô¤ì4(€€€€€±½…Ñ¥½¸¹É•±½… ¤ì4(€€€ô¤ ¥€¤ì4(€€€…İ…¥Ğİ…¥Ñ½ÉM•±•Ñ½È¡‘À°€m‘…Ñ„µÑ•ÍÑ¥ô‰œÄµ©½ˆµ…É‰tœ°ì±…‰•°è€©½ˆ…É‰…¬¥¸ÁÉ½©•Ğœ°Ñ¥µ•½ÕĞè€ÌÁ|ÀÀÀô¤ì4(4(€€€€¼¼ƒï–*£®¿š^ƒš¢«–BGšê‹–ë4(€€€…İ…¥Ğ‘À¹Í•¹ µÕ±…Ñ¥½¸¹Í•Ñ•Ù¥•5•ÑÉ¥Í=Ù•ÉÉ¥‘”œ°ìİ¥‘Ñ è€ÌäÀ°¡•¥¡Ğè€àĞĞ°‘•Ù¥•M…±•…Ñ½Èè€Ä°µ½‰¥±”èÑÉÕ”ô¤ì4(€€€…İ…¥Ğİ…¥Ñ½È  ¤€ôø‘À¹•Ù…±Õ…Ñ”¡‘½Õµ•¹Ğ¹‘½Õµ•¹Ñ±•µ•¹Ğ¹ÍÉ½±±]¥‘Ñ €ğô‘½Õµ•¹Ğ¹‘½Õµ•¹Ñ±•µ•¹Ğ¹±¥•¹Ñ]¥‘Ñ¡€¤°ì±…‰•°è€µ½‰¥±”±…å½ÕĞÍ•ÑÑ±”œô¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡…İ…¥Ğ‘À¹•Ù…±Õ…Ñ” ‘½Õµ•¹Ğ¹‘½Õµ•¹Ñ±•µ•¹Ğ¹ÍÉ½±±]¥‘Ñ €ø‘½Õµ•¹Ğ¹‘½Õµ•¹Ñ±•µ•¹Ğ¹±¥•¹Ñ]¥‘Ñ œ¤°™…±Í”°€µ½‰¥±”Á…”¡…Ì¹¼¡½É¥é½¹Ñ…°½Ù•É™±½Üœ¤ì4(4(€€€€¼¼ƒ–£¢/¦nÛr–ºxÁÉ½Ù¥‘•Èƒ¢ÂR£¾ò!™…­”•‘”ƒ–¦£¢º‡šVÃ¾òo¢.—’âër–º{öGîs’òk–’Ç¢Ò—¾ò'4(€€€½¹ÍĞ™…­•MÕ‰µ¥ÍÍ¥½¹Ì€ô…İ…¥Ğ‘À¹•Ù…±Õ…Ñ”¡±½‰…±Q¡¥Ì¹}}œÅ…­•MÑ…Ñ”ü¹ÍÕ‰µ¥ÍÍ¥½¹Ìü¸ ¤ñğ€Á€¤ì4(€€€…ÍÍ•ÉĞ¹•ÅÕ…°¡™…­•MÕ‰µ¥ÍÍ¥½¹Ì°€Ì°€Ÿ–£¢/–ş¦†ïšÃ––ô€Ìƒš²‡¾ò!™…­—¾ò%ÁÉ½Ù¥‘•Èƒš>C’ê“¾ò#–nû&€¬ƒ–’Ç¢Ò—¢¦ŠD€¬ƒ–º3š"C¢¦ŠG¾ò$œ¤ì4(€ô…Ñ €¡•ÉÉ½È¤ì4(€€€¥˜€¡‘À¤ì4(€€€€€½¹ÍĞ•áÑÉ„€ô…İ…¥Ğ…ÁÑÕÉ•¥…¹½ÍÑ¥Ì¡‘À°ìÑÉ…­•Èô¤ì4(€€€€€¥˜€ …MÑÉ¥¹œ¡•ÉÉ½È¹µ•ÍÍ…”¤¹¥¹±Õ‘•Ì Ÿ¢¾+šZ·–ş¯œœ¤¤•ÉÉ½È¹µ•ÍÍ…”€¬ôq¸‘í•áÑÉ…õ€ì4(€€€ô4(€€€Ñ¡É½Ü•ÉÉ½Èì4(€ô™¥¹…±±äì4(€€€¥˜€¡‘À¤‘À¹±½Í” ¤ì4(€€€…İ…¥ĞÍ¡ÕÑ‘½İ¹‘”¡•‘”°ÁÉ½™¥±”¤ì4(€€€…İ…¥Ğ­¥±±AÉ½•ÍÍQÉ•”¡Ù¥Ñ”¤ì4(€€€…İ…¥ĞÉ•µ½Ù•Q•µÁAÉ½™¥±”¡ÁÉ½™¥±”¤ì4(€ô4)ô¤ì4(

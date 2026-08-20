@@ -146,3 +146,275 @@
   word-break: break-all;
   font-size: 12px;
 }
+
+/* G2 keeps the verified G1 contracts and turns them into one guided workspace. */
+.g2-page {
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+.g2-page .g2-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 4px 0 20px;
+}
+
+.g2-page .g2-flow-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--muted);
+}
+
+.g2-page .g2-flow-step > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+  font-weight: 800;
+}
+
+.g2-page .g2-flow-step div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.g2-page .g2-flow-step strong {
+  color: var(--text);
+}
+
+.g2-page .g2-flow-step small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g2-page .g2-flow-step.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.g2-page .g2-flow-step.current > span,
+.g2-page .g2-flow-step.done > span {
+  background: var(--accent);
+  color: white;
+}
+
+.g2-page .g2-flow-step.done {
+  color: var(--success);
+}
+
+.g2-page .g1-create-panel {
+  padding: 24px;
+}
+
+.g2-page .g2-source-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.g2-page .g2-source-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.g2-page .g2-source-summary small {
+  color: var(--muted);
+}
+
+.g2-page .g2-source-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g2-page .g2-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.g2-page .g2-mode-switch button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.g2-page .g2-mode-switch button > span {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.g2-page .g2-mode-switch button small {
+  color: var(--muted);
+}
+
+.g2-page .g2-mode-switch button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.g2-page .g2-prompt-field {
+  gap: 9px;
+}
+
+.g2-page .g2-prompt-field > span {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.g2-page .g2-prompt-field textarea {
+  min-height: 132px;
+  padding: 14px 16px;
+  font-size: 16px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.g2-page .g2-prompt-field small {
+  color: var(--muted);
+  text-align: right;
+}
+
+.g2-page .g2-advanced {
+  margin: 14px 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+}
+
+.g2-page .g2-advanced summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.g2-page .g2-advanced summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.g2-page .g2-advanced[open] .g1-form-grid {
+  padding: 4px 14px 14px;
+}
+
+.g2-page .g2-results-section {
+  margin-top: 4px;
+}
+
+.g2-page .g2-results-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.28fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.g2-page .g1-jobs-section {
+  margin-top: 0;
+}
+
+.g2-page .generation-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.g2-page .g1-job-card {
+  margin: 0;
+}
+
+.g2-page .g1-job-card .generation-task-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.g2-page .g2-result-detail {
+  min-width: 0;
+}
+
+.g2-page .g1-job-drawer {
+  position: static;
+  width: auto;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
+
+.g2-page .g1-job-drawer .drawer-body {
+  max-height: none;
+  overflow: visible;
+}
+
+@media (max-width: 980px) {
+  .g2-page .g2-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .g2-page .g2-results-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .g2-page .g2-flow,
+  .g2-page .g2-mode-switch,
+  .g2-page .g2-source-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .g2-page .g2-source-summary .ghost-button {
+    justify-self: start;
+  }
+
+  .g2-page .g2-flow-step small,
+  .g2-page .g2-source-summary strong {
+    white-space: normal;
+  }
+
+  .g2-page .g1-create-panel {
+    padding: 16px;
+  }
+}

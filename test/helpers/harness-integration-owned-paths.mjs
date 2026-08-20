@@ -53,8 +53,13 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/g1-provider-adapter.test.mjs',
   'test/g1-worker.test.mjs',
   'test/g1-generation.browser.test.mjs',
+  'test/g2-simplified-generation-workspace.test.mjs',
   'src/components/generation-execution/GenerationJobCard.jsx',
+  'src/components/generation-execution/GenerationArtifactViewer.jsx',
   'src/pages/GenerationTasksPage.jsx',
+  'src/pages/GenerationTasksPage.css',
+  'src/App.jsx',
+  'src/data/navigation.js',
   'supabase/migrations/20260820071137_g1_existing_provider_task_artifact_recovery.sql',
   // G1 P19 Evidence quote binding final repair: exact migration and
   // corresponding database/P19 replay tests authorized for this closure.
@@ -158,8 +163,14 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'test/g1-provider-adapter.test.mjs',
   'test/g1-worker.test.mjs',
   'test/g1-generation.browser.test.mjs',
+  'test/g2-simplified-generation-workspace.test.mjs',
   'src/components/generation-execution/GenerationJobCard.jsx',
+  'src/components/generation-execution/GenerationArtifactViewer.jsx',
   'src/pages/GenerationTasksPage.jsx',
+  'src/pages/GenerationTasksPage.css',
+  'src/App.jsx',
+  'src/data/navigation.js',
+  'test/navigation-contract.test.mjs',
   'supabase/migrations/20260820071137_g1_existing_provider_task_artifact_recovery.sql',
   // G1 P19 Evidence quote binding final repair: the same exact paths
   // mirrored from HARNESS_INTEGRATION_OWNED_PATHS for the strict diff gate,

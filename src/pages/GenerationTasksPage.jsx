@@ -108,6 +108,7 @@ export function GenerationTasksPage({
   const [jobsLoading, setJobsLoading] = useState(true);
 
   const pollRef = useRef(null);
+  const hasAutoSelectedRef = useRef(Boolean(detailId));
 
   const draftHandoff = useMemo(() => {
     const draftId = String(routeParams?.draftId || '').trim();
@@ -194,6 +195,13 @@ export function GenerationTasksPage({
   }, [client, selectedJobId]);
 
   useEffect(() => { refreshJobs(); }, [refreshJobs]);
+
+  useEffect(() => {
+    if (!selectedJobId && jobs.length > 0 && !hasAutoSelectedRef.current) {
+      hasAutoSelectedRef.current = true;
+      setSelectedJobId(jobs[0].id);
+    }
+  }, [jobs, selectedJobId]);
 
   useEffect(() => {
     const hasActive = jobs.some((job) => ACTIVE_STATUSES.has(job.status));
@@ -299,6 +307,13 @@ export function GenerationTasksPage({
 
   const canRequestQuote = Boolean(brief && requestPayload?.prompt?.trim() && resolvedUserId);
 
+  const latestJob = useMemo(
+    () => (selectedJobId ? jobs.find((job) => job.id === selectedJobId) : null) || jobs[0] || null,
+    [jobs, selectedJobId],
+  );
+  const flowStage = quote ? 3 : prompt.trim() ? 2 : latestJob ? 4 : 1;
+  const simpleMode = mode === 'image' ? 'image' : 'video';
+
   const drawerDiagnosticsText = jobDetail?.job ? boundedJobDiagnosticsText(jobDetail.job, jobDetail.attempts) : '';
   const drawerCostText = jobDetail?.job ? boundedCostText(jobDetail.job) : '—';
   const drawerActualCostText = boundedActualCostText(jobDetail?.artifacts);
@@ -307,18 +322,36 @@ export function GenerationTasksPage({
     : drawerDiagnosticsText;
 
   return (
-    <section className="page-stack generation-tasks-page g1-page">
+    <section className="page-stack generation-tasks-page g1-page g2-page" data-testid="g2-workspace">
       <div className="section-head">
         <div>
-          <p className="eyebrow">执行过程</p>
-          <h2>生成任务</h2>
-          <p>选择 Brief → 预览不可变报价 → 显式批准 → 提交幂等生成作业 → 私有产物预览与版本历史。</p>
+          <p className="eyebrow">G2 · 简洁生成工作台</p>
+          <h2>把想法变成图片或视频</h2>
+          <p>描述你想要的成品。系统自动关联当前项目资料，先给出报价，只有你确认后才会开始生成。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => onNavigate?.('research')}>在研究工作台准备 Brief</button>
+        <button className="ghost-button" type="button" onClick={() => onNavigate?.('research')}>查看研究资料</button>
       </div>
 
       {projectError && <div className="notice error">{projectError}</div>}
       {submitMessage && <div className={/失败|过期|冲突|无效|拒绝/.test(submitMessage) ? 'notice error' : 'notice'} data-testid="g1-submit-message">{submitMessage}</div>}
+
+      <nav className="g2-flow" aria-label="生成流程" data-testid="g2-flow">
+        {[
+          ['1', '描述', '说清楚想生成什么'],
+          ['2', '报价', '查看模型和费用上限'],
+          ['3', '确认', '人工批准付费生成'],
+          ['4', '成品', '进度、预览与下载'],
+        ].map(([number, title, description], index) => {
+          const step = index + 1;
+          const state = step < flowStage ? 'done' : step === flowStage ? 'current' : 'pending';
+          return (
+            <div className={`g2-flow-step ${state}`} data-step={step} data-state={state} key={number}>
+              <span>{step < flowStage ? '✓' : number}</span>
+              <div><strong>{title}</strong><small>{description}</small></div>
+            </div>
+          );
+        })}
+      </nav>
 
       {draftHandoff && (
         <section className="draft-handoff-panel" aria-label="图片生成准备">
@@ -345,67 +378,99 @@ export function GenerationTasksPage({
           <section className="g1-create-panel" data-testid="g1-create-panel" role="region" aria-label="创建生成作业">
             <div className="g1-panel-head">
               <div>
-                <p className="eyebrow">来源 Brief</p>
-                <h3>{brief.topic || '未命名 Brief'}（第 {brief.version} 版）</h3>
+                <p className="eyebrow">自动关联当前项目</p>
+                <h3>创作说明</h3>
               </div>
               <span className={`status-badge ${brief.status === 'approved' ? 'approved' : 'review'}`}>{brief.status === 'approved' ? '已批准' : '待审核'}</span>
             </div>
-            <div className="g1-form-grid">
-              <label className="g1-field">
-                <span>生成模式</span>
-                <select value={mode} onChange={(event) => { setMode(event.target.value); setQuote(null); }} data-testid="g1-mode-select">
-                  {G1_MODES.map((value) => <option value={value} key={value}>{MODE_LABELS[value]}</option>)}
-                </select>
-              </label>
-              <label className="g1-field g1-field-wide">
-                <span>提示词（1–2000 字符）</span>
-                <textarea rows={3} value={prompt} maxLength={2000} onChange={(event) => { setPrompt(event.target.value); setQuote(null); }} placeholder="描述要生成的图片或视频画面" data-testid="g1-prompt-input" />
-              </label>
-              <label className="g1-field g1-field-wide">
-                <span>负面提示词（可选，0–500 字符）</span>
-                <input type="text" value={negativePrompt} maxLength={500} onChange={(event) => { setNegativePrompt(event.target.value); setQuote(null); }} data-testid="g1-negative-input" />
-              </label>
-              <label className="g1-field">
-                <span>画幅</span>
-                <select value={aspectRatio} onChange={(event) => { setAspectRatio(event.target.value); setQuote(null); }} data-testid="g1-aspect-select">
-                  <option value="">{mode === 'image' ? '默认 1:1' : '默认 16:9'}</option>
-                  {G1_ASPECT_RATIOS.map((value) => <option value={value} key={value}>{value}</option>)}
-                </select>
-              </label>
-              {mode.startsWith('video') && (
-                <>
-                  <label className="g1-field">
-                    <span>时长（秒）</span>
-                    <select value={durationSeconds} onChange={(event) => { setDurationSeconds(event.target.value); setQuote(null); }} data-testid="g1-duration-select">
-                      <option value="">默认 5 秒</option>
-                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <option value={value} key={value}>{value} 秒</option>)}
-                    </select>
-                  </label>
-                  <label className="g1-field">
-                    <span>分辨率</span>
-                    <select value={resolution} onChange={(event) => { setResolution(event.target.value); setQuote(null); }} data-testid="g1-resolution-select">
-                      <option value="">默认 720p</option>
-                      {G1_RESOLUTIONS.map((value) => <option value={value} key={value}>{value}</option>)}
-                    </select>
-                  </label>
-                </>
-              )}
-              {mode === 'video_i2v' && (
-                <label className="g1-field g1-field-wide">
-                  <span>已批准引用素材（i2v 必需）</span>
-                  <select value={referenceAssetId} onChange={(event) => { setReferenceAssetId(event.target.value); setQuote(null); }} data-testid="g1-reference-select">
-                    <option value="">选择引用素材…</option>
-                    {referenceAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name || asset.id}</option>)}
-                  </select>
-                  {!referenceAssets.length && <small className="form-hint">没有已批准的图片引用素材；请在素材库先批准一张图片（asset_context.approval = approved）。</small>}
-                </label>
-              )}
+            <div className="g2-source-summary" data-testid="g2-source-summary">
+              <div>
+                <small>来源 Brief</small>
+                <strong>{brief.topic || '未命名 Brief'} · 第 {brief.version} 版</strong>
+              </div>
+              <div><small>自动引用</small><strong>{briefCardIds.length} 张知识卡 · {briefEvidenceIds.length} 条证据</strong></div>
+              <button className="ghost-button compact" type="button" onClick={() => onNavigate?.('research')}>查看来源</button>
             </div>
+            <div className="g2-mode-switch" role="group" aria-label="选择生成类型">
+              <button
+                type="button"
+                className={simpleMode === 'image' ? 'active' : ''}
+                aria-pressed={simpleMode === 'image'}
+                data-testid="g2-mode-image"
+                onClick={() => { setMode('image'); setQuote(null); }}
+              >
+                <span>▣</span><strong>生成图片</strong><small>海报、社媒图、视觉素材</small>
+              </button>
+              <button
+                type="button"
+                className={simpleMode === 'video' ? 'active' : ''}
+                aria-pressed={simpleMode === 'video'}
+                data-testid="g2-mode-video"
+                onClick={() => { setMode(mode === 'video_i2v' ? 'video_i2v' : 'video_t2v'); setQuote(null); }}
+              >
+                <span>▶</span><strong>生成视频</strong><small>短视频、动态画面、图生视频</small>
+              </button>
+            </div>
+            <label className="g1-field g2-prompt-field">
+              <span>你想生成什么？</span>
+              <textarea rows={5} value={prompt} maxLength={2000} onChange={(event) => { setPrompt(event.target.value); setQuote(null); }} placeholder={simpleMode === 'image' ? '例如：一张适合小红书发布的夏日新品海报，明亮自然，留出标题区域' : '例如：海边日落的 5 秒电影感短视频，镜头缓慢推进，暖色调'} data-testid="g1-prompt-input" />
+              <small>{prompt.length}/2000 · 系统不会仅因输入文字而产生费用</small>
+            </label>
+            <details className="g2-advanced" data-testid="g2-advanced-settings">
+              <summary>更多设置 <span>画幅、负面提示词与视频参数</span></summary>
+              <div className="g1-form-grid">
+                <label className="g1-field">
+                  <span>生成模式</span>
+                  <select value={mode} onChange={(event) => { setMode(event.target.value); setQuote(null); }} data-testid="g1-mode-select">
+                    {G1_MODES.map((value) => <option value={value} key={value}>{MODE_LABELS[value]}</option>)}
+                  </select>
+                </label>
+                <label className="g1-field">
+                  <span>画幅</span>
+                  <select value={aspectRatio} onChange={(event) => { setAspectRatio(event.target.value); setQuote(null); }} data-testid="g1-aspect-select">
+                    <option value="">{mode === 'image' ? '默认 1:1' : '默认 16:9'}</option>
+                    {G1_ASPECT_RATIOS.map((value) => <option value={value} key={value}>{value}</option>)}
+                  </select>
+                </label>
+                <label className="g1-field g1-field-wide">
+                  <span>不希望出现的内容（可选）</span>
+                  <input type="text" value={negativePrompt} maxLength={500} onChange={(event) => { setNegativePrompt(event.target.value); setQuote(null); }} data-testid="g1-negative-input" />
+                </label>
+                {mode.startsWith('video') && (
+                  <>
+                    <label className="g1-field">
+                      <span>时长（秒）</span>
+                      <select value={durationSeconds} onChange={(event) => { setDurationSeconds(event.target.value); setQuote(null); }} data-testid="g1-duration-select">
+                        <option value="">默认 5 秒</option>
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <option value={value} key={value}>{value} 秒</option>)}
+                      </select>
+                    </label>
+                    <label className="g1-field">
+                      <span>分辨率</span>
+                      <select value={resolution} onChange={(event) => { setResolution(event.target.value); setQuote(null); }} data-testid="g1-resolution-select">
+                        <option value="">默认 720p</option>
+                        {G1_RESOLUTIONS.map((value) => <option value={value} key={value}>{value}</option>)}
+                      </select>
+                    </label>
+                  </>
+                )}
+                {mode === 'video_i2v' && (
+                  <label className="g1-field g1-field-wide">
+                    <span>已批准引用素材（图生视频必需）</span>
+                    <select value={referenceAssetId} onChange={(event) => { setReferenceAssetId(event.target.value); setQuote(null); }} data-testid="g1-reference-select">
+                      <option value="">选择引用素材…</option>
+                      {referenceAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name || asset.id}</option>)}
+                    </select>
+                    {!referenceAssets.length && <small className="form-hint">素材库中暂无已批准图片；选择文生视频，或先批准一张引用图片。</small>}
+                  </label>
+                )}
+              </div>
+            </details>
             <div className="button-row">
               <button className="primary-button" type="button" disabled={!canRequestQuote || quoting} onClick={requestQuote} data-testid="g1-request-quote">
-                {quoting ? '正在获取报价…' : '预览不可变报价'}
+                {quoting ? '正在计算报价…' : '下一步：查看报价'}
               </button>
-              <span className="form-hint">引用 {briefCardIds.length} 张知识卡与 {briefEvidenceIds.length} 条证据；quote 只读、零费用。</span>
+              <span className="form-hint">查看报价不会调用生成模型，也不会产生费用。</span>
             </div>
             {quoteError && <div className="notice error">{quoteError}</div>}
           </section>
@@ -421,35 +486,42 @@ export function GenerationTasksPage({
         </>
       )}
 
-      <div className="g1-jobs-section">
+      <section className="g2-results-section" data-testid="g2-results-section">
         <div className="section-head">
           <div>
-            <p className="eyebrow">执行进度</p>
-            <h3>当前项目作业</h3>
-            <p>状态自动刷新（有界轮询）；任何时刻都不会在未显式批准时发起付费调用。</p>
+            <p className="eyebrow">进度与成品</p>
+            <h3>生成记录</h3>
+            <p>重新打开页面后，系统会恢复最近作业、成品和版本历史。</p>
           </div>
         </div>
-        {jobsLoading ? <div className="skeleton skeleton-card" /> : jobs.length === 0 ? (
-          <EmptyState title="还没有生成作业" description="完成上述报价与批准流程后，作业会出现在这里。" />
-        ) : (
-          <div className="generation-task-list">
-            {jobs.map((job) => (
-              <GenerationJobCard key={job.id} job={job} selected={selectedJobId === job.id} onSelect={setSelectedJobId} />
-            ))}
+        <div className="g2-results-layout">
+          <div className="g1-jobs-section">
+            {jobsLoading ? <div className="skeleton skeleton-card" /> : jobs.length === 0 ? (
+              <EmptyState title="还没有生成记录" description="填写创作说明并确认报价后，进度会显示在这里。" />
+            ) : (
+              <div className="generation-task-list">
+                {jobs.map((job) => (
+                  <GenerationJobCard key={job.id} job={job} selected={selectedJobId === job.id} onSelect={setSelectedJobId} />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {jobDetailError && <div className="notice error">{jobDetailError}</div>}
-      {selectedJobId && jobDetail?.job && (
-        <aside className="detail-drawer generation-task-drawer g1-job-drawer" data-testid="g1-job-drawer">
+          <div className="g2-result-detail">
+            {jobDetailError && <div className="notice error">{jobDetailError}</div>}
+            {!selectedJobId && !jobsLoading && jobs.length > 0 && <p className="form-hint">选择一条生成记录查看成品。</p>}
+            {selectedJobId && jobDetail?.job && (
+              <aside className="detail-drawer generation-task-drawer g1-job-drawer" data-testid="g1-job-drawer">
           <div className="detail-drawer-header">
             <div>
-              <p className="eyebrow">生成作业详情</p>
-              <h3>{jobDetail.job.model_name || jobDetail.job.id}</h3>
+              <p className="eyebrow">当前结果</p>
+              <h3>{jobDetail.job.status === 'completed' ? '成品已就绪' : jobDetail.job.model_name || '生成进行中'}</h3>
               <p>{jobDetail.job.id} · {jobDetail.job.status}</p>
             </div>
-            <button className="ghost-button" type="button" onClick={() => setSelectedJobId('')}>关闭</button>
+            <div className="button-row">
+              <button className="ghost-button compact" type="button" onClick={() => setSelectedJobId('')}>关闭</button>
+              <button className="ghost-button compact" type="button" onClick={() => refreshSelectedJob()}>刷新状态</button>
+            </div>
           </div>
           <div className="drawer-body">
             <div className="drawer-section-grid">
@@ -471,8 +543,11 @@ export function GenerationTasksPage({
             )}
             <GenerationArtifactViewer artifacts={jobDetail.artifacts || []} client={client} jobId={selectedJobId} onError={(error) => setJobDetailError(boundedMessage(error))} />
           </div>
-        </aside>
-      )}
+              </aside>
+            )}
+          </div>
+        </div>
+      </section>
     </section>
   );
 }

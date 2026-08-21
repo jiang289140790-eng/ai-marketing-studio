@@ -12,6 +12,7 @@ import {
   normalizeAnalyticsRow,
 } from '../utils/analytics-review-model';
 import { compactNumber, formatDate } from '../utils/formatters';
+import { buildHarnessContextParams } from '../utils/app-route';
 
 const EMPTY = { contentMetrics: [], publishMetrics: [], publishTasks: [] };
 
@@ -87,7 +88,15 @@ export function DataAnalyticsPage({
           <h2>回答发生了什么</h2>
           <p>只展示平台真实返回的数据。平台未提供的指标显示“平台暂不提供”，不会用 0 代替。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => onNavigate('analytics')}>进入 AI 复盘</button>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={() => onNavigate('ai', '', buildHarnessContextParams({
+            source: 'data-analytics',
+            entity: 'analytics-summary',
+            campaignId: activeCampaignId,
+            intent: activeCampaignId ? `查看运营表现摘要 campaign_id=${activeCampaignId}` : '查看运营表现摘要',
+          }))}>交给 AI 汇总</button>
+          <button className="primary-button" type="button" onClick={() => onNavigate('analytics')}>进入 AI 复盘</button>
+        </div>
       </div>
 
       <section className="analytics-dimension-bar">

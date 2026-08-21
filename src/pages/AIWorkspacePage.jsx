@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createHarnessClient, newHarnessRequestId, readHarnessActiveProject } from '../services/harness-client.js';
 import { resolvePresentationBlocks } from '../services/harness-presentation.js';
 import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
+import { parseHarnessContextParams } from '../utils/app-route.js';
 import './AIWorkspacePage.css';
 
 // Every visible preset must be a valid authoritative plan request exactly as
@@ -42,7 +43,7 @@ function taskFromResponse(value) {
   return value?.task && typeof value.task === 'object' ? value.task : null;
 }
 
-export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClient }) {
+export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: providedHarnessClient }) {
   const harnessClient = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
   const [intent, setIntent] = useState('');
   const [allowPaid, setAllowPaid] = useState(false);
@@ -55,6 +56,12 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
   const pollGeneration = useRef(0);
   const pollInFlight = useRef(false);
   const pendingSubmission = useRef(null);
+  const routeContext = useMemo(() => parseHarnessContextParams(routeParams), [routeParams]);
+  const routeContextKey = JSON.stringify(routeContext);
+
+  useEffect(() => {
+    setIntent(routeContext.intent || '');
+  }, [routeContext.intent, routeContextKey]);
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -198,6 +205,16 @@ export function AIWorkspacePage({ onNavigate, harnessClient: providedHarnessClie
       </section>
 
       <section className="ai-command-card">
+        {routeContext.source && (
+          <div className="ai-route-context" data-testid="harness-route-context">
+            <div>
+              <strong>已带入业务上下文</strong>
+              <span>{routeContext.source} · {routeContext.entity}</span>
+            </div>
+            {routeContext.entity_id && <code>{routeContext.entity_id}</code>}
+            {routeContext.campaign_id && <code>{routeContext.campaign_id}</code>}
+          </div>
+        )}
         <form onSubmit={createPlan}>
           <label htmlFor="ai-intent">任务目标</label>
           <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="例如：分析这个 X 帖子 https://x.com/user/status/1234567890123456789，保存证据和多模态分析，然后生成待审核 Brief" maxLength={12000} rows={5} />

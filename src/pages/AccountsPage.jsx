@@ -21,6 +21,7 @@ import {
 } from '../utils/account-matrix';
 import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
 import { formatDate, statusLabel } from '../utils/formatters';
+import { buildHarnessContextParams } from '../utils/app-route';
 
 const ACCOUNT_TABS = [
   { id: 'owned', label: '自有账号' },
@@ -178,7 +179,19 @@ export function AccountsPage({
           <h2>账号矩阵</h2>
           <p>管理账号身份、账号大脑和运营用途。OAuth、权限和发布能力统一到“平台连接”管理。</p>
         </div>
-        <button className="primary-button" type="button" onClick={() => setCreating(true)}>添加账号</button>
+        <div className="button-row">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onNavigate?.('ai', '', buildHarnessContextParams({
+              source: 'accounts',
+              entity: selected ? 'account' : 'account-list',
+              entityId: selected?.id,
+              intent: selected ? `查看账号详情 account_id=${selected.id}` : '查看账号矩阵',
+            }))}
+          >交给 AI 查看</button>
+          <button className="primary-button" type="button" onClick={() => setCreating(true)}>添加账号</button>
+        </div>
       </div>
 
       {(creating || editing) && (

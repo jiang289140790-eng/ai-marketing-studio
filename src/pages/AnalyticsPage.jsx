@@ -7,6 +7,7 @@ import { isSupabaseConfigured } from '../services/supabase-client';
 import { filterRecordsForAuxiliaryScope } from '../utils/auxiliary-page-scope';
 import { buildReviewSuggestions } from '../utils/analytics-review-model';
 import { formatDate } from '../utils/formatters';
+import { buildHarnessContextParams } from '../utils/app-route';
 
 const EMPTY = {
   contentMetrics: [],
@@ -97,6 +98,12 @@ export function AnalyticsPage({
           <p>这里只解释真实数据和证据，不重复展示数据分析表，也不会用一条内容自动改写正式策略。</p>
         </div>
         <div className="button-row">
+          <button className="ghost-button" type="button" onClick={() => onNavigate('ai', '', buildHarnessContextParams({
+            source: 'analytics',
+            entity: 'analytics-summary',
+            campaignId,
+            intent: campaignId ? `查看运营表现摘要 campaign_id=${campaignId}` : '查看运营表现摘要',
+          }))}>在 AI 工作台查看</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('data-analytics')}>查看数据分析</button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('knowledge')}>打开知识库</button>
         </div>

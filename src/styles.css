@@ -11261,3 +11261,9 @@ textarea {
   background: rgba(148, 163, 184, 0.12);
   color: var(--muted);
 }
+
+/* O1: bounded business context shown when an operations page hands off to AI. */
+.ai-route-context { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid rgba(71, 214, 196, .35); border-radius: 12px; background: rgba(23, 58, 62, .35); }
+.ai-route-context > div { display: grid; gap: 3px; margin-right: auto; }
+.ai-route-context span { color: #9eb0c9; font-size: 12px; }
+.ai-route-context code { color: #9ef2e6; font-size: 11px; overflow-wrap: anywhere; }

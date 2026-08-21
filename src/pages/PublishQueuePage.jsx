@@ -30,6 +30,7 @@ import {
   summarizePublishCenter,
 } from '../utils/publish-center-model';
 import { connectionIsActive } from '../utils/platform-connection-summary';
+import { buildHarnessContextParams } from '../utils/app-route';
 
 const EMPTY = {
   publishTasks: [],
@@ -118,9 +119,18 @@ export function PublishQueuePage({ userId, onNavigate, activeCampaignId, campaig
           <h2>处理批准、排期、发布和指标回收</h2>
           <p>正式任务默认由内容工作台终审创建。这里不重复编辑内容，也不会绕过人工确认自动发布。</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => setManualOpen(true)}>
-          手动创建发布任务
-        </button>
+        <div className="button-row">
+          <button className="secondary-button" type="button" onClick={() => onNavigate('ai', '', buildHarnessContextParams({
+            source: 'publish',
+            entity: detailId ? 'publish-task' : 'publish-queue',
+            entityId: detailId,
+            campaignId: activeCampaignId,
+            intent: detailId ? `查看发布任务详情 publish_task_id=${detailId}` : activeCampaignId ? `查看发布队列 campaign_id=${activeCampaignId}` : '查看发布队列',
+          }))}>交给 AI 查看</button>
+          <button className="secondary-button" type="button" onClick={() => setManualOpen(true)}>
+            手动创建发布任务
+          </button>
+        </div>
       </header>
 
       <section className="publish-page-context" aria-label="发布上下文">

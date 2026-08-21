@@ -4,6 +4,13 @@ import { PROJECT_ID_PATTERN } from './p19-contracts.js';
 export const HARNESS_EDGE_SCHEMA_VERSION = 'ams_harness_edge_v1';
 export const HARNESS_ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
 
+const CAPABILITY_QUERY_PATTERN = /^(?:你)?(?:现在|目前|当前)?(?:能|可以|能够)?(?:做|干|处理|完成)(?:哪些|什么|啥)(?:事情|任务|工作|功能)?[？?。!！]*$/u;
+
+export function normalizeHarnessIntent(intent) {
+  const value = String(intent ?? '').trim();
+  return CAPABILITY_QUERY_PATTERN.test(value) ? `能力：${value}` : value;
+}
+
 export function readHarnessActiveProject(storage = globalThis.localStorage) {
   try {
     const value = storage?.getItem?.(HARNESS_ACTIVE_PROJECT_KEY);
@@ -33,8 +40,14 @@ export function createHarnessClient({ client = supabase } = {}) {
       body: { schema_version: HARNESS_EDGE_SCHEMA_VERSION, ...body },
     });
     if (error) {
-      const context = typeof error.context?.json === 'function' ? await error.context.json().catch(() => null) : null;
-      throw boundedError(context?.code || 'HARNESS_EDGE_UNAVAILABLE', context?.message || 'AI 任务入口暂时不可用。');
+      const context = typeof error.context?.json === 'function'
+        ? await error.context.json().catch(() => null)
+        : (error.context && typeof error.context === 'object' ? error.context : null);
+      const code = context?.code || 'HARNESS_EDGE_UNAVAILABLE';
+      const message = context?.message || context?.error || (context?.code
+        ? `AI 任务未被接受（${context.code}）。`
+        : 'AI 任务入口暂时不可用。');
+      throw boundedError(code, message);
     }
     if (!data || data.ok !== true) throw boundedError(data?.code || 'HARNESS_RESPONSE_INVALID', data?.message || 'AI 任务未被接受。');
     return data;

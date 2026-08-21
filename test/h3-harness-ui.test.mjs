@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createHarnessClient, HARNESS_ACTIVE_PROJECT_KEY, HARNESS_EDGE_SCHEMA_VERSION, readHarnessActiveProject } from '../src/services/harness-client.js';
+import { createHarnessClient, HARNESS_ACTIVE_PROJECT_KEY, HARNESS_EDGE_SCHEMA_VERSION, normalizeHarnessIntent, readHarnessActiveProject } from '../src/services/harness-client.js';
 
 const taskId = 'ht-11111111-1111-4111-8111-111111111111';
 const fingerprint = 'a'.repeat(64);
@@ -43,6 +43,41 @@ test('browser Harness client plans, confirms and retries only through the authen
 test('browser Harness client fails closed without a signed-in session', async () => {
   const harness = createHarnessClient({ client: { auth: { getSession: async () => ({ data: { session: null }, error: null }) }, functions: { invoke: async () => assert.fail('Edge must not be called without auth') } } });
   await assert.rejects(() => harness.list(), (error) => error.code === 'AUTH_REQUIRED');
+});
+
+test('natural Chinese capability questions map to the fixed read-only capability workflow intent', async () => {
+  assert.equal(normalizeHarnessIntent('你现在能做哪些事情'), '能力：你现在能做哪些事情');
+  assert.equal(normalizeHarnessIntent('目前可以完成什么任务？'), '能力：目前可以完成什么任务？');
+  assert.equal(normalizeHarnessIntent('分析这个 X 帖子'), '分析这个 X 帖子');
+  const { createPlanner } = await import('../services/harness-gateway/planner.mjs');
+  const verdict = await createPlanner().plan({
+    taskId,
+    request: {
+      user_id: 'user-a',
+      project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+      intent: normalizeHarnessIntent('你现在能做哪些事情'),
+      request_fingerprint: 'a'.repeat(64),
+    },
+  });
+  assert.equal(verdict.ok, true, verdict.code);
+  assert.equal(verdict.value.workflow, 'read_capability');
+  assert.equal(verdict.value.cost_indicators.paid_calls, 0);
+  assert.equal(verdict.value.cost_indicators.online_writes, 0);
+});
+
+test('browser Harness client preserves bounded Edge diagnostics instead of masking a rejected plan as unavailable', async () => {
+  const client = {
+    auth: { refreshSession: async () => ({ data: { session: { access_token: 'user-jwt-value' } }, error: null }) },
+    functions: { invoke: async () => ({
+      data: null,
+      error: { context: { code: 'PLANNER_UNRECOGNIZED', message: '无法识别该任务目标。' } },
+    }) },
+  };
+  const harness = createHarnessClient({ client });
+  await assert.rejects(
+    () => harness.plan({ requestId: 'diagnostic-1', intent: 'unsupported' }),
+    (error) => error.code === 'PLANNER_UNRECOGNIZED' && error.message === '无法识别该任务目标。',
+  );
 });
 
 test('Harness plan/confirm/retry refresh delegated sessions but read-only polling does not', async () => {
@@ -96,7 +131,8 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /snapshot\?\.error\?\.retry_unsafe !== true/);
   assert.match(page, /partial: '部分完成'/);
   assert.match(app, /default:\s*return <AIWorkspacePage/);
-  assert.match(sidebar, /new Set\(\['ai', 'research', 'knowledge', 'connections'\]\)/);
+  assert.doesNotMatch(sidebar, /PREVIEW_NAV_IDS/);
+  assert.match(sidebar, /navigationSections\.map/);
 });
 
 test('AI workspace exposes structured terminal tool results', async () => {

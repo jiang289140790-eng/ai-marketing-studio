@@ -1,18 +1,10 @@
 import { useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
-const PREVIEW_NAV_IDS = new Set(['ai', 'research', 'knowledge', 'connections']);
-
 export function Sidebar({ activePage, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
   const activeNavigationId = activePage === 'dashboard' ? 'ai' : activePage;
-  const previewNavigationSections = navigationSections
-    .map((section) => ({
-      ...section,
-      items: section.items.filter((item) => PREVIEW_NAV_IDS.has(item.id)),
-    }))
-    .filter((section) => section.items.length > 0);
 
   function navigate(pageId) {
     onNavigate(pageId);
@@ -37,7 +29,7 @@ export function Sidebar({ activePage, onNavigate }) {
       </div>
 
       <nav className="nav-list" aria-label="主导航">
-        {previewNavigationSections.map((section) => (
+        {navigationSections.map((section) => (
           <div className="nav-section" key={section.label}>
             <span className="nav-section-title">{section.label}</span>
             {section.items.map((item) => (

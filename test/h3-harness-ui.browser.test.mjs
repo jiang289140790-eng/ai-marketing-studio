@@ -9,6 +9,7 @@ import {
   waitForSelector, click, captureDiagnostics,
   makeTempProfile, removeTempProfile, shutdownEdge, killProcessTree,
 } from './helpers/cdp-browser-harness.mjs';
+import { navigationItems } from '../src/data/navigation.js';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -41,7 +42,18 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await waitFor(() => cdp.evaluate(`location.href === ${JSON.stringify(`${baseUrl}#/dashboard`)} && document.readyState === 'complete'`), { label: 'AI workspace exact route and DOM readiness' });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace' });
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('告诉我你想完成什么')`), true);
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 4, 'simple navigation exposes four primary destinations');
+    assert.equal(
+      await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
+      navigationItems.length,
+      'navigation exposes every integrated destination',
+    );
+    for (const pageId of ['publish', 'accounts', 'generation', 'analytics']) {
+      assert.equal(
+        await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item')).some((item) => item.textContent?.includes(${JSON.stringify(navigationItems.find((item) => item.id === pageId)?.label)}))`),
+        true,
+        `navigation exposes ${pageId}`,
+      );
+    }
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
 

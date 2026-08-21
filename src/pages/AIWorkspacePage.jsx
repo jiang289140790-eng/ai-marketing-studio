@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createHarnessClient, newHarnessRequestId, readHarnessActiveProject } from '../services/harness-client.js';
+import { createHarnessClient, newHarnessRequestId, normalizeHarnessIntent, readHarnessActiveProject } from '../services/harness-client.js';
 import { resolvePresentationBlocks } from '../services/harness-presentation.js';
 import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
 import { parseHarnessContextParams } from '../utils/app-route.js';
@@ -125,7 +125,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     setSubmitting(true);
     setError('');
     try {
-      const normalizedIntent = intent.trim();
+      const normalizedIntent = normalizeHarnessIntent(intent);
       const projectId = readHarnessActiveProject();
       const submissionKey = JSON.stringify([projectId, normalizedIntent]);
       if (pendingSubmission.current?.key !== submissionKey) {

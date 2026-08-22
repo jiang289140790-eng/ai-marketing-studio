@@ -190,6 +190,9 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'test/online-integrated-preview.test.mjs',
   'test/p17c-staging-preview.test.mjs',
   'test/p18-integrated-product-chain.test.mjs',
+  'test/p36-research-ux-redesign.test.mjs',
+  'test/research-live-data.test.mjs',
+  'test/research-workspace.test.mjs',
   'supabase/migrations/20260820071137_g1_existing_provider_task_artifact_recovery.sql',
   // G1 P19 Evidence quote binding final repair: the same exact paths
   // mirrored from HARNESS_INTEGRATION_OWNED_PATHS for the strict diff gate,
@@ -229,6 +232,19 @@ function globMatches(pattern, normalized) {
 export function isPathOwned(path) {
   const normalized = String(path).replace(/\\/g, '/');
   return HARNESS_INTEGRATION_OWNED_GLOBS.some((pattern) => globMatches(pattern, normalized));
+}
+
+/**
+ * Glob-aware membership on the legacy Set: entries ending in `/**` match a
+ * directory and everything below it (the Set predates glob support, so plain
+ * `.has()` never matched them — e.g. the acceptance-evidence directory of the
+ * AI three-page milestone). Exact entries keep exact-match semantics, so
+ * scope outside the declared ownership is still rejected.
+ */
+export function isHarnessOwnedPath(path) {
+  const normalized = String(path).replace(/\\/g, '/');
+  return HARNESS_INTEGRATION_OWNED_PATHS.has(normalized)
+    || [...HARNESS_INTEGRATION_OWNED_PATHS].some((pattern) => globMatches(pattern, normalized));
 }
 
 export function isEnvironmentPath(path) {

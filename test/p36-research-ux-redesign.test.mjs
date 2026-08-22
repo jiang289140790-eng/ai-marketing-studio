@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { HARNESS_INTEGRATION_OWNED_PATHS } from './helpers/harness-integration-owned-paths.mjs';
+import { isHarnessOwnedPath } from './helpers/harness-integration-owned-paths.mjs';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
 const DIST = join(REPO_ROOT, 'dist');
@@ -253,7 +253,7 @@ test('P36 所有权与删除防护：仅授权路径发生受跟踪修改', () =
       assert.fail(`P36 不允许删除文件: ${paths.join(', ')}`);
     }
     for (const path of paths) {
-      assert.ok(OWNED_PATHS.has(path) || HARNESS_INTEGRATION_OWNED_PATHS.has(path), `受跟踪修改超出授权路径: ${path}`);
+      assert.ok(OWNED_PATHS.has(path) || isHarnessOwnedPath(path), `受跟踪修改超出授权路径: ${path}`);
     }
   }
 });

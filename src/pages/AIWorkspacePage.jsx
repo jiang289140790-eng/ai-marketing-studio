@@ -246,12 +246,16 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
               <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '正在生成计划…' : '生成安全计划 →'}</button>
             </div>
           </form>
-          <aside className="ai-capability-panel">
-            <div className="ai-command-title"><span>常用能力</span><h2>从一个明确动作开始</h2></div>
+          <details className="ai-capability-panel">
+            <summary>
+              <span className="ai-capability-icon">+</span>
+              <span><b>快捷能力</b><small>按需展开 5 个常用模板</small></span>
+              <i>展开</i>
+            </summary>
             <div className="ai-suggestions" aria-label="常用任务">
               {suggestions.map((text, index) => <button key={text} type="button" onClick={() => setIntent(text)}><b>{['研究', '洞察', '比较', '分析', '交接'][index]}</b><span>{text}</span></button>)}
             </div>
-          </aside>
+          </details>
         </div>
       </section>
 
@@ -319,10 +323,16 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         </section>
       )}
 
-      <section className="ai-history">
-        <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2><p>默认只显示最近 6 条，减少页面噪音。</p></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
-        {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
-      </section>
+      <details className="ai-history">
+        <summary className="ai-history-summary">
+          <span><b>最近任务与成果</b><small>{history.length > 0 ? `${history.length} 条记录 · 默认收起` : '暂无记录'}</small></span>
+          <i>查看</i>
+        </summary>
+        <div className="ai-history-body">
+          <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2><p>展开后先显示最近 6 条，需要时再查看全部。</p></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
+          {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
+        </div>
+      </details>
     </main>
   );
 }

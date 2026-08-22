@@ -122,7 +122,9 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /打开研究工作台/);
   assert.match(page, /此步骤只生成计划，不调用付费工具，也不写入数据/);
   assert.match(page, /data-testid="ai-command-center"/);
-  assert.match(page, /默认只显示最近 6 条/);
+  assert.match(page, /按需展开 5 个常用模板/);
+  assert.match(page, /最近任务与成果/);
+  assert.match(page, /默认收起/);
   assert.match(page, /history\.slice\(0, 6\)/);
   assert.match(page, /data-testid="harness-authoritative-plan"/);
   assert.match(page, /authoritativePlan\.fingerprint/);

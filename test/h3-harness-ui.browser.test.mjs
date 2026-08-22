@@ -42,6 +42,8 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('一句话，启动整个营销流程')`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-overview > div').length`), 4, 'AI workspace exposes a compact operational overview');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-command-center"]') !== null`), true, 'the primary natural-language command center is visible');
+    assert.equal(await cdp.evaluate(`document.querySelector('.ai-capability-panel')?.open === false`), true, 'secondary capabilities remain collapsed until requested');
+    assert.equal(await cdp.evaluate(`document.querySelector('.ai-history')?.open === false`), true, 'task history remains collapsed until requested');
     assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
       20,
@@ -57,6 +59,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
 
+    await click(cdp, { selector: '.ai-capability-panel > summary', label: 'expand suggested tasks' });
     await click(cdp, { selector: '.ai-suggestions button', index: 0, label: 'first suggested task' });
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-authoritative-plan"]') === null`), true, 'selecting a suggestion must not invent a client-side plan');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), false, 'a bounded intent can request the server plan without pre-approving execution');

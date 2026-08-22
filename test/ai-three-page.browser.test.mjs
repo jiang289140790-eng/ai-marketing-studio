@@ -14,7 +14,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import {
   EDGE, freePort, waitFor, waitForPageTarget, CdpClient, createPageTracker,
@@ -23,7 +25,10 @@ import {
 } from './helpers/cdp-browser-harness.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
+// 仓库验收证据目录（tracked）。默认回归只写临时目录，绝不触碰仓库；
+// 仅显式 A3P_CAPTURE=1 的确定性捕获模式才重新生成仓库证据。
 const EVIDENCE_DIR = join(ROOT, 'acceptance-evidence', 'ai-three-page-architecture-2026-08-23');
+const CAPTURE = process.env.A3P_CAPTURE === '1';
 
 // 页面内 fake edge：镜像真实 harness-command 契约（有界校验 + 幂等 + 状态
 // 推进）。任务持久化在 localStorage，硬刷新后状态保持（与真实 staging 一致）。
@@ -32,6 +37,28 @@ const EVIDENCE_DIR = join(ROOT, 'acceptance-evidence', 'ai-three-page-architectu
 // succeeded（带结果与产物身份）。零 provider/网络调用。
 const FAKE_EDGE_SCRIPT = `
 (() => {
+  // 确定性固定时钟：页面渲染的时间文本与 fake edge 数据完全可复现，
+  // 连续两次运行产出逐字节一致（截图/README 不随运行时刻漂移）。
+  const FIXED_NOW_MS = Date.parse('2026-08-23T02:00:00.000Z');
+  const RealDate = globalThis.Date;
+  const FixedDate = class extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(FIXED_NOW_MS);
+      else super(...args);
+    }
+    static now() { return FIXED_NOW_MS; }
+  };
+  FixedDate.parse = RealDate.parse;
+  FixedDate.UTC = RealDate.UTC;
+  globalThis.Date = FixedDate;
+
+  // 确定性任务编号：第 1 次 plan 固定得到 ht-…001（成功任务），
+  // 第 2 次 plan 固定得到 ht-…002（失败任务）。
+  const FIXED_TASK_IDS = [
+    'ht-00000000-0000-4000-8000-000000000001',
+    'ht-00000000-0000-4000-8000-000000000002',
+  ];
+
   const EDGE_SCHEMA = 'ams_harness_edge_v1';
   const TASK_ID_RE = /^ht-[0-9a-f-]{36}$/;
   const readMap = (key) => {
@@ -131,7 +158,7 @@ const FAKE_EDGE_SCRIPT = `
           save();
           const now = nowIso();
           const task = {
-            id: 'ht-' + (globalThis.crypto.randomUUID ? globalThis.crypto.randomUUID() : '00000000-0000-4000-8000-000000000099'),
+            id: FIXED_TASK_IDS[planCount - 1] || 'ht-00000000-0000-4000-8000-000000000099',
             state: 'planned',
             created_at: now,
             updated_at: now,
@@ -207,11 +234,11 @@ const SEED_SCRIPT = `
   return true;
 })()`;
 
-async function captureScreenshot(cdp, { width, height, label }) {
+async function captureScreenshot(cdp, { width, height, label, dir }) {
   await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
   await delay(700);
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-  const file = join(EVIDENCE_DIR, `${label}-${width}.png`);
+  const file = join(dir, `${label}-${width}.png`);
   writeFileSync(file, Uint8Array.from(globalThis.atob(shot.data), (character) => character.charCodeAt(0)));
   return file;
 }
@@ -234,9 +261,14 @@ function checkBox(cdp, selector) {
 
 test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审核 → 刷新恢复 → 失败状态 → 响应式 + 五尺寸截图', { timeout: 360_000 }, async () => {
   assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required');
-  // 证据目录：只清理本里程碑自己的目录（精确路径，绝不触碰其他证据）。
-  rmSync(EVIDENCE_DIR, { recursive: true, force: true });
-  mkdirSync(EVIDENCE_DIR, { recursive: true });
+  // 证据目录：默认回归输出到临时目录（绝不修改仓库 tracked 证据，`npm test`
+  // 不会弄脏 worktree）；仅 A3P_CAPTURE=1 的确定性捕获才写仓库验收证据目录
+  // （精确路径，绝不触碰其他证据）。
+  const evidenceDir = CAPTURE
+    ? EVIDENCE_DIR
+    : await mkdtemp(join(tmpdir(), 'ams-a3p-evidence-'));
+  rmSync(evidenceDir, { recursive: true, force: true });
+  mkdirSync(evidenceDir, { recursive: true });
 
   const vitePort = await freePort();
   const debugPort = await freePort();
@@ -326,7 +358,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"] .status-badge')?.textContent === '已完成'`), { label: '任务终态', timeout: 40_000 });
     const heroText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"]').innerText`);
     assert.match(heroText, new RegExp(taskId), '执行详情必须显示任务编号');
-    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'execution-detail' });
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'execution-detail', dir: evidenceDir });
 
     // ---- 任务结果与审核页：#/ai-results/<taskId>（同一 taskId 再跳转）----
     await cdp.evaluate(`document.querySelector('[data-testid="ai-task-open-results"]').click()`);
@@ -356,7 +388,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
 
     // ---- 五尺寸截图（结果页，最完整页面）----
     for (const width of [1440, 1366, 1024, 768, 390]) {
-      const file = await captureScreenshot(cdp, { width, height: 1000, label: 'results' });
+      const file = await captureScreenshot(cdp, { width, height: 1000, label: 'results', dir: evidenceDir });
       assert.equal(existsSync(file), true, `截图必须生成：${file}`);
     }
     // 390px 无横向溢出。
@@ -365,7 +397,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
     // 首页截图需要回到 #/ai（结果页恢复后）。
     await cdp.send('Page.navigate', { url: `${baseUrl}#/ai` });
     await waitForSelector(cdp, '[data-testid="ai-task-flow"]', { label: '首页恢复' });
-    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'home' });
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'home', dir: evidenceDir });
 
     // ---- 失败状态：含「失败测试」的任务在执行详情展示真实失败 ----
     await cdp.evaluate(`document.querySelector('.ai-new-session')?.click()`);
@@ -394,7 +426,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
     assert.match(failedText, /已尝试 2 次/, '失败步骤必须展示真实尝试次数（failed_count）');
     const failedErrorText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-error"]')?.innerText || ''`);
     assert.match(failedErrorText, /save_evidence|HARNESS_FAILED/, '任务级错误诊断必须展示');
-    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'execution-failed' });
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'execution-failed', dir: evidenceDir });
 
     // ---- 非法任务编号：诚实错误态（不猜测、不伪造）----
     await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-execution/ht-not-a-valid-task` });
@@ -421,7 +453,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
       '',
       `- 日期：2026-08-23；本地 dev server（vite）+ headless Edge（CDP）。`,
       `- 浏览器测试数据源/契约模拟（fake edge，非真实服务端）：`,
-      `  1. 浏览器 → ${baseUrl}#/ai（新任务首页）：harnessClient.plan/confirm → fake edge（镜像 harness-command 契约，仅本测试进程注入）→ 任务创建与人工确认；`,
+      `  1. 浏览器 → #/ai（新任务首页，本地 vite dev server）：harnessClient.plan/confirm → fake edge（镜像 harness-command 契约，仅本测试进程注入）→ 任务创建与人工确认；`,
       `  2. #/ai-execution/<taskId>（任务执行详情页）：harnessClient.read(<taskId>) → 任务/计划/step_states（进度、失败、attempts=failed_count）；`,
       `  3. #/ai-results/<taskId>（任务结果与审核页）：harnessClient.read(<taskId>) → result.final_response / artifact_refs（来源链）/ confirmation（审核范围）。`,
       `- 证明范围：UI、精确 taskId 路由、硬刷新恢复、失败态、非法/不存在编号错误态与响应式（390px 无横向溢出）。`,
@@ -433,7 +465,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
       `- 无新增 mock 进入产品运行时：fake edge 仅在本浏览器测试进程注入，产品代码只走真实 harness-command 读取适配。`,
       '',
     ].join('\n');
-    writeFileSync(join(EVIDENCE_DIR, 'README.md'), evidence, 'utf8');
+    writeFileSync(join(evidenceDir, 'README.md'), evidence, 'utf8');
   } catch (error) {
     if (cdp) {
       const extra = await captureDiagnostics(cdp, { tracker });
@@ -445,5 +477,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
     await shutdownEdge(edge, profile);
     await killProcessTree(vite);
     await removeTempProfile(profile);
+    // 非捕获模式：清理本次临时证据目录（只删除本测试 mkdtemp 创建的路径）。
+    if (!CAPTURE) rmSync(evidenceDir, { recursive: true, force: true });
   }
 });

@@ -123,6 +123,10 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/ai-three-page-route.test.mjs',
   'test/ai-three-page.browser.test.mjs',
   'acceptance-evidence/ai-three-page-architecture-2026-08-23/**',
+  // REVIEW repair 2（三页任务架构）：P30 内容创建模式浏览器测试的确定性修复
+  // （Brief gate 契约对齐 p19-workspace-command + 固定时钟/编号/证据临时目录），
+  // 仅该测试文件本身，无通配；业务代码零改动。
+  'test/content-creation-modes.browser.test.mjs',
 ]);
 
 // Strict revision-2 contract with glob support (`/**` matches a directory and
@@ -211,6 +215,8 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'test/ai-three-page-route.test.mjs',
   'test/ai-three-page.browser.test.mjs',
   'acceptance-evidence/ai-three-page-architecture-2026-08-23/**',
+  // REVIEW repair 2：P30 内容创建模式浏览器测试确定性修复（严格门禁镜像）。
+  'test/content-creation-modes.browser.test.mjs',
 ]);
 
 // Environment files the harness itself writes next to the worktree; they are

@@ -217,6 +217,22 @@ async function withCdpPage(run, { authenticated = false } = {}) {
         visual_description: 'Soft natural-light portrait, minimal composition.',
         platform: 'x', content_format: 'image_caption', cta: null, hashtags: [], aspect_ratio: '4:5', candidates: [],
       };
+      // 工作台页面经 P19 命令边界读取 Brief（project.list → project.read），
+      // 镜像真实 p19-workspace-command 契约（ok/schema_version/data/diagnostics）。
+      const p19Schema = 'p19_command_contract_v1';
+      const projectId = 'prj-000000000000000000000001';
+      const briefRow = {
+        brief_id: 'brief-e2e', brief_version: 1, brief_schema_version: 'ams_content_brief_v1',
+        brief_status: 'approved', knowledge_citation_ids: ['kc-e2e'],
+        evidence_provenance: { source: 'e2e' },
+        payload_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        payload: {
+          id: 'brief-e2e', version: 1, schema_version: 'ams_content_brief_v1', status: 'approved',
+          topic: '测试 Brief', objective: '验证 Brief 门禁', audience: '创业者', channels: ['x'],
+          constraints: [], structural_guidance: [], knowledge_citation_ids: ['kc-e2e'],
+          evidence_provenance: { source: 'e2e' },
+        },
+      };
       const initScript = `(() => {
         localStorage.setItem('ai-marketing-studio-auth-session', ${JSON.stringify(JSON.stringify(session))});
         const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -235,7 +251,16 @@ async function withCdpPage(run, { authenticated = false } = {}) {
             }
             return json({ ok: true, code: 'GENERATED', message: 'ok', data: { ...${JSON.stringify(generated)}, summary: 'x / 独立创业者 / 专业自然 / 单图' }, meta: { total_tokens: 12, provider: 'dashscope/qwen', model: 'qwen-plus' } });
           }
-          if (url.includes('/rest/v1/ke_content_briefs_v1')) return json([{ brief_id: 'brief-e2e', brief_version: 1, brief_schema_version: 'ams_content_brief_v1', brief_status: 'approved', knowledge_citation_ids: ['kc-e2e'], evidence_provenance: { source: 'e2e' }, payload: { id: 'brief-e2e', version: 1, schema_version: 'ams_content_brief_v1', status: 'approved', topic: '测试 Brief', knowledge_citation_ids: ['kc-e2e'], evidence_provenance: { source: 'e2e' } }, payload_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }]);
+          if (url.includes('/functions/v1/p19-workspace-command')) {
+            const body = JSON.parse(init.body || '{}');
+            if (body.command === 'project.list') {
+              return json({ ok: true, schema_version: ${JSON.stringify(p19Schema)}, read_only: true, data: { projects: [{ id: ${JSON.stringify(projectId)} }] }, diagnostics: { issues: [] } });
+            }
+            if (body.command === 'project.read' && String(body.payload?.project_id || '') === ${JSON.stringify(projectId)}) {
+              return json({ ok: true, schema_version: ${JSON.stringify(p19Schema)}, read_only: true, data: { project: { id: ${JSON.stringify(projectId)}, brief: ${JSON.stringify(briefRow)}, evidence: [], analyses: [], knowledge_cards: [], handoff: null, handoffs: [], lineage: null, fingerprint: '' } }, diagnostics: { issues: [] } });
+            }
+            return json({ ok: false, code: 'UNKNOWN_COMMAND', message: '命令不在允许清单内。' });
+          }
           if (url.includes('/rest/v1/content_library') && (init.method || '').toUpperCase() === 'POST') { saveCount += 1; savedBodies.push(JSON.parse(init.body || '{}')); return json({ id: 'draft-e2e' }); }
           if (url.includes('/auth/v1/user')) return json(${JSON.stringify(session.user)});
           if (url.includes('/rest/v1/profiles')) return json([]);

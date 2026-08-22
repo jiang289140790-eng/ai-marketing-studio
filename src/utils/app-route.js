@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { navigationItems } from '../data/navigation.js';
 
 const validPages = new Set(navigationItems.map((item) => item.id));
-const legacyAliases = { aiworks: 'generation' };
-const harnessContextSources = new Set(['accounts', 'analytics', 'data-analytics', 'publish']);
-const harnessContextEntities = new Set(['account', 'account-list', 'analytics-summary', 'publish-queue', 'publish-task']);
+const legacyAliases = { dashboard: 'ai', plan: 'campaigns', aiworks: 'generation' };
+const harnessContextSources = new Set(['accounts', 'analytics', 'data-analytics', 'publish', 'generation', 'research', 'knowledge']);
+const harnessContextEntities = new Set(['account', 'account-list', 'analytics-summary', 'publish-queue', 'publish-task', 'generation-workspace', 'research-project', 'knowledge-vault']);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function boundedText(value, maxLength) {
@@ -47,7 +47,8 @@ export function parseAppRoute(hash = window.location.hash) {
 }
 
 export function buildAppHash(page = 'dashboard', detailId = '', routeParams = {}) {
-  const safePage = validPages.has(page) ? page : 'dashboard';
+  const resolvedPage = legacyAliases[page] || page;
+  const safePage = validPages.has(resolvedPage) ? resolvedPage : 'ai';
   const path = detailId
     ? `#/${safePage}/${encodeURIComponent(detailId)}`
     : `#/${safePage}`;

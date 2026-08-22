@@ -131,14 +131,24 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /snapshot\?\.error\?\.retry_unsafe !== true/);
   assert.match(page, /partial: '部分完成'/);
   assert.match(app, /default:\s*return <AIWorkspacePage/);
-  assert.doesNotMatch(sidebar, /PREVIEW_NAV_IDS/);
-  assert.match(sidebar, /navigationSections\.map/);
+  assert.match(sidebar, /new Set\(\['ai', 'research', 'generation', 'knowledge', 'connections'\]\)/);
+  assert.match(sidebar, /Staging 智能工作台/);
 });
 
 test('AI workspace exposes structured terminal tool results', async () => {
   const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.match(page, /activeTask\.result\?\.result_data/);
   assert.match(page, /查看工具返回结果/);
+});
+
+test('generation workspace hands exact bounded context to the AI Harness workspace', async () => {
+  const page = await readFile(new URL('../src/pages/GenerationTasksPage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /buildHarnessContextParams\(\{/);
+  assert.match(page, /source: 'generation'/);
+  assert.match(page, /entity: 'generation-workspace'/);
+  assert.match(page, /交给 AI 编排/);
+  assert.match(page, /onNavigate\?\.\('ai'/);
+  assert.match(page, /先展示报价，等待我确认后再执行/);
 });
 
 test('browser code never submits legacy direct tasks: every submission is plan then confirm', async () => {

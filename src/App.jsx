@@ -27,6 +27,8 @@ const KnowledgeVaultPage = lazy(() => import('./pages/KnowledgeVaultPage').then(
 const ResearchWorkspacePage = lazy(() => import('./pages/ResearchWorkspacePage').then((module) => ({ default: module.ResearchWorkspacePage })));
 const AIWorkspacePage = lazy(() => import('./pages/AIWorkspacePage').then((module) => ({ default: module.AIWorkspacePage })));
 
+const PRIMARY_WORKSPACE_PAGES = new Set(['ai', 'research', 'generation', 'knowledge', 'connections']);
+
 const pageTitles = {
   ai: 'AI 工作台',
   dashboard: 'AI 工作台',
@@ -72,6 +74,7 @@ export default function App() {
   const campaignState = useCampaignContext();
   const contextPages = new Set(['campaigns', 'plan', 'workspace', 'intelligence', 'assets', 'publish', 'data-analytics', 'analytics']);
   const auxiliaryDescription = auxiliaryPageDescriptions[activePage] || '';
+  const useAuxiliaryFrame = Boolean(auxiliaryDescription) && !PRIMARY_WORKSPACE_PAGES.has(activePage);
   const [auxiliaryScope, setAuxiliaryScope] = useState('campaign');
   const [auxiliaryMode, setAuxiliaryMode] = useState('normal');
 
@@ -147,7 +150,7 @@ export default function App() {
         {authError && !session && <div className="notice error">{authError}</div>}
         <PageErrorBoundary resetKey={`${activePage}:${detailId || ''}`} onNavigate={navigate}>
           <Suspense fallback={<div className="notice">正在加载页面...</div>}>
-            {auxiliaryDescription ? (
+            {useAuxiliaryFrame ? (
               <AuxiliaryPageFrame
                 dataScope={auxiliaryScope}
                 description={auxiliaryDescription}

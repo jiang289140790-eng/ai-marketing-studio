@@ -6,6 +6,7 @@ import { GenerationArtifactViewer } from '../components/generation-execution/Gen
 import { createP19Store } from '../services/p19-store.js';
 import { createP20OnlineStore } from '../services/p20-online-store.js';
 import { isSupabaseConfigured } from '../services/supabase-client';
+import { buildHarnessContextParams } from '../utils/app-route.js';
 import {
   G1_ASPECT_RATIOS,
   G1_MODES,
@@ -329,7 +330,20 @@ export function GenerationTasksPage({
           <h2>把想法变成图片或视频</h2>
           <p>描述你想要的成品。系统自动关联当前项目资料，先给出报价，只有你确认后才会开始生成。</p>
         </div>
-        <button className="ghost-button" type="button" onClick={() => onNavigate?.('research')}>查看研究资料</button>
+        <div className="button-row">
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => onNavigate?.('ai', '', buildHarnessContextParams({
+              source: 'generation',
+              entity: 'generation-workspace',
+              intent: '基于当前项目最新 Brief、知识卡和证据规划图片或视频生成；先展示报价，等待我确认后再执行。',
+            }))}
+          >
+            交给 AI 编排
+          </button>
+          <button className="ghost-button" type="button" onClick={() => onNavigate?.('research')}>查看研究资料</button>
+        </div>
       </div>
 
       {projectError && <div className="notice error">{projectError}</div>}

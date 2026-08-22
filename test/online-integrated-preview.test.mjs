@@ -239,13 +239,13 @@ test('CommandCenter.jsx：文件存在、导出 CommandCenter 且包含 P17-C �
 });
 
 // ==============================================================================
-// Header.jsx 与 Sidebar.jsx：只读标识
+// Header.jsx 与 Sidebar.jsx：staging 工作区标识
 // ==============================================================================
-test('Header.jsx 与 Sidebar.jsx：标注线上只读预览', () => {
-  assert.ok(readSource('src/components/Header.jsx').includes('线上只读预览'),
-    'Header 必须显示只读预览标识');
-  assert.ok(readSource('src/components/Sidebar.jsx').includes('线上只读预览'),
-    'Sidebar 品牌必须标注只读预览');
+test('Header.jsx 与 Sidebar.jsx：标注 staging 智能工作区', () => {
+  assert.ok(readSource('src/components/Header.jsx').includes('Staging 工作区'),
+    'Header 必须显示 staging 工作区标识');
+  assert.ok(readSource('src/components/Sidebar.jsx').includes('Staging 智能工作台'),
+    'Sidebar 品牌必须标注 staging 智能工作台');
 });
 
 // ==============================================================================

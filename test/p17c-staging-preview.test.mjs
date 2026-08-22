@@ -103,17 +103,17 @@ function readSource(relativePath) {
 // ============================================================================
 // 路由测试
 // ============================================================================
-test('路由：#/dashboard #/research #/knowledge 均可解析为有效页面', async () => {
+test('路由：旧 dashboard 收敛到 AI，research 与 knowledge 保持有效', async () => {
   globalThis.window = { URLSearchParams: globalThis.URLSearchParams, location: { hash: '#/' } };
   try {
     const { parseAppRoute, buildAppHash } = await import('../src/utils/app-route.js');
 
-    assert.equal(parseAppRoute('#/dashboard').page, 'dashboard');
+    assert.equal(parseAppRoute('#/dashboard').page, 'ai');
     assert.equal(parseAppRoute('#/research').page, 'research');
     assert.equal(parseAppRoute('#/knowledge').page, 'knowledge');
     assert.equal(parseAppRoute('#/intelligence').page, 'intelligence');
 
-    assert.equal(buildAppHash('dashboard'), '#/dashboard');
+    assert.equal(buildAppHash('dashboard'), '#/ai');
     assert.equal(buildAppHash('research'), '#/research');
     assert.equal(buildAppHash('knowledge'), '#/knowledge');
   } finally {
@@ -323,14 +323,14 @@ test('源码证据：KnowledgeVaultPage 引用 staging-preview-service 且无写
   assert.ok(!source.includes('knowledge-governance'), 'KnowledgeVaultPage 不得引用旧治理工具');
 });
 
-test('源码证据：Header 包含只读预览标识', () => {
+test('源码证据：Header 标识当前 staging 工作区', () => {
   const source = readSource('src/components/Header.jsx');
-  assert.ok(source.includes('线上只读预览'), 'Header 必须显示只读预览标识');
+  assert.ok(source.includes('Staging 工作区'), 'Header 必须显示 staging 工作区标识');
 });
 
-test('源码证据：Sidebar 品牌更新为只读预览', () => {
+test('源码证据：Sidebar 品牌标识智能工作台', () => {
   const source = readSource('src/components/Sidebar.jsx');
-  assert.ok(source.includes('线上只读预览'), 'Sidebar 品牌必须标注只读预览');
+  assert.ok(source.includes('Staging 智能工作台'), 'Sidebar 品牌必须标注 staging 智能工作台');
 });
 
 test('源码证据：App.jsx 仪表盘不再触发 CampaignContextBar', () => {

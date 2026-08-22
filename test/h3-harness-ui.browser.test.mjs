@@ -9,8 +9,6 @@ import {
   waitForSelector, click, captureDiagnostics,
   makeTempProfile, removeTempProfile, shutdownEdge, killProcessTree,
 } from './helpers/cdp-browser-harness.mjs';
-import { navigationItems } from '../src/data/navigation.js';
-
 const ROOT = join(import.meta.dirname, '..');
 
 test('H3 real browser: natural-language workspace is the simple default and advanced research remains reachable', { timeout: 90_000 }, async () => {
@@ -44,16 +42,14 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('告诉我你想完成什么')`), true);
     assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
-      navigationItems.length,
-      'navigation exposes every integrated destination',
+      5,
+      'navigation exposes the five primary product destinations',
     );
-    for (const pageId of ['publish', 'accounts', 'generation', 'analytics']) {
-      assert.equal(
-        await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item')).some((item) => item.textContent?.includes(${JSON.stringify(navigationItems.find((item) => item.id === pageId)?.label)}))`),
-        true,
-        `navigation exposes ${pageId}`,
-      );
-    }
+    assert.deepEqual(
+      await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item .nav-label'), (item) => item.textContent)`),
+      ['AI 工作台', '研究工作台', '生成工作台', '知识库', '平台连接'],
+      'primary navigation is concise and ordered by the user workflow',
+    );
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
 
@@ -62,6 +58,13 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), false, 'a bounded intent can request the server plan without pre-approving execution');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('生成计划不会调用业务工具、产生费用或写入 staging')`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-approvals input').length`), 0, 'approval controls appear only after an authoritative plan exists');
+
+    await cdp.send('Page.navigate', { url: `${baseUrl}#/generation` });
+    await waitForSelector(cdp, '[data-testid="g2-flow"]', { label: 'generation workspace' });
+    await click(cdp, { selector: '[data-testid="g2-workspace"] .primary-button', text: '交给 AI 编排', label: 'generation to Harness handoff' });
+    await waitFor(() => cdp.evaluate(`location.hash.startsWith('#/ai?') && new URLSearchParams(location.hash.split('?')[1]).get('source') === 'generation'`), { label: 'bounded generation Harness context' });
+    await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace after generation handoff' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-intent"]')?.value.includes('先展示报价，等待我确认后再执行')`), true);
 
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'H3 mobile layout settle' });

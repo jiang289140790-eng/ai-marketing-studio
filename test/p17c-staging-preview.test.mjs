@@ -341,6 +341,10 @@ test('源码证据：CommandCenter 引用 staging-preview-service 且无执行/�
 
 test('源码证据：KnowledgeVaultPage 引用 staging-preview-service 且无写入/合并/删除', () => {
   const source = readSource('src/pages/KnowledgeVaultPage.jsx');
+  assert.ok(
+    source.includes("import { StatCard } from '../components/StatCard';"),
+    'KnowledgeVaultPage live data summary must import the StatCard it renders',
+  );
   assert.ok(source.includes('staging-preview-service'), 'KnowledgeVaultPage 必须引用 staging 服务');
   assert.ok(source.includes('fetchKnowledgeEngineData'), 'KnowledgeVaultPage 必须调用知识引擎读取');
   assert.ok(source.includes('ke_knowledge_cards_v1'), 'KnowledgeVaultPage 必须引用知识卡视图');

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/auth-context';
 import { EmptyState } from '../components/EmptyState';
+import { StatCard } from '../components/StatCard';
 import {
   STAGING_VIEWS,
   getStagingRuntimeStatus,

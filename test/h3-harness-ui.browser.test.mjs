@@ -42,14 +42,16 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('告诉我你想完成什么')`), true);
     assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
-      6,
-      'navigation exposes the six primary product destinations',
+      20,
+      'navigation keeps every integrated product destination discoverable',
     );
     assert.deepEqual(
       await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item .nav-label'), (item) => item.textContent)`),
-      ['AI 工作台', '研究工作台', '角色库', '生成工作台', '知识库', '平台连接'],
-      'primary navigation is concise and ordered by the user workflow',
+      ['AI 工作台', 'AI 运营指挥中心', '运营活动', '内容计划', '研究工作台', '内容工作台', '内容情报', '发布中心', '账号矩阵', '角色库', '素材库', '生成工作台', '提示词库', '数据分析', 'AI 复盘', '运营日报', '知识库', '平台连接', '工作流与模型', '系统状态'],
+      'grouped navigation preserves the complete integrated product map',
     );
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-nav-section="智能工作"] .nav-section-toggle')?.getAttribute('aria-expanded')`), 'true', 'the active product group is expanded');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-section-toggle').length`), 6, 'every product group is directly discoverable');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
 

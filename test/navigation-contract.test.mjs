@@ -1,5 +1,7 @@
+/* global URL */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { navigationSections } from '../src/data/navigation.js';
 
 test('最终导航与辅助页面职责清单一致', () => {
@@ -17,5 +19,15 @@ test('最终导航与辅助页面职责清单一致', () => {
       { label: '系统', items: ['平台连接', '工作流与模型', '系统状态'] },
     ],
   );
+});
+
+test('侧栏展示完整分组并自动展开当前页面所在分组', async () => {
+  const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(sidebar, /PRIMARY_NAV_IDS|filter\(\(item\).*\.has\(item\.id\)/s);
+  assert.match(sidebar, /navigationSections\.map/);
+  assert.match(sidebar, /section\.items\.some\(\(item\) => item\.id === activeNavigationId\)/);
+  assert.match(sidebar, /aria-expanded=\{expanded\}/);
+  assert.match(sidebar, /hidden=\{!expanded\}/);
+  assert.match(sidebar, /全部功能/);
 });
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
-const PRIMARY_NAV_IDS = new Set(['ai', 'research', 'generation', 'knowledge', 'connections']);
+const PRIMARY_NAV_IDS = new Set(['ai', 'research', 'generation', 'characters', 'knowledge', 'connections']);
 
 export function Sidebar({ activePage, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);

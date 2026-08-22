@@ -14,6 +14,7 @@
 // 绝不引用生产项目 ID、服务角色密钥、私有 schema 或任何写操作。
 
 import { isSupabaseConfigured, requireSupabase } from './supabase-client.js';
+import { createP19CommandClient } from './p19-server-write-adapter.js';
 
 // ---- 视图名称常量 -----------------------------------------------------------
 export const STAGING_VIEWS = Object.freeze({
@@ -51,8 +52,121 @@ export function getStagingRuntimeStatus() {
     configured: isSupabaseConfigured,
     readOnly: true,
     views: [...ALL_STAGING_VIEW_NAMES],
-    note: '仅使用公开浏览器配置执行 SELECT 读取；无写操作、无 RPC、无服务角色密钥。',
+    note: '知识数据通过已认证的 server-only Edge 只读命令读取；浏览器不进入 api schema，无写操作、无服务角色密钥。',
   };
+}
+
+function knowledgeBoundaryViews(data = [], status = 'live', error = null) {
+  return {
+    status,
+    data,
+    error,
+  };
+}
+
+function knowledgeBoundaryFailure(error) {
+  const code = String(error?.code || 'KNOWLEDGE_READ_FAILED').slice(0, 80);
+  const message = String(error?.message || '知识数据读取失败。').slice(0, 300);
+  const accessDenied = /AUTH_REQUIRED|AUTH_FAILED|STAGING_ROLE_DENIED|FORBIDDEN|permission denied/i.test(`${code} ${message}`);
+  const status = accessDenied ? 'access_denied' : 'read_error';
+  return {
+    status,
+    code,
+    message,
+    accessDenied,
+  };
+}
+
+function withProjectIdentity(record, projectId) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  return { project_id: projectId, ...record };
+}
+
+async function fetchKnowledgeThroughCommandBoundary({ client, userId }) {
+  if (!isSupabaseConfigured && !client) {
+    return { status: 'not_configured', byView: {}, liveCount: 0, errorCount: 0, accessDenied: false };
+  }
+  if (!userId) {
+    return { status: 'not_signed_in', byView: {}, liveCount: 0, errorCount: 0, accessDenied: false };
+  }
+
+  try {
+    const commandClient = createP19CommandClient({ client: client || requireSupabase() });
+    const listResult = await commandClient.invoke('project.list', {});
+    const projects = Array.isArray(listResult?.data?.projects) ? listResult.data.projects : [];
+    const projectResults = await Promise.all(projects.map(async (summary) => {
+      const projectId = String(summary?.id || '');
+      if (!/^prj-[0-9a-f]{24}$/.test(projectId)) {
+        const invalid = new Error('项目列表返回了无效身份，已停止知识读取。');
+        invalid.code = 'PROJECT_ID_INVALID';
+        throw invalid;
+      }
+      const result = await commandClient.invoke('project.read', { project_id: projectId });
+      return result?.data?.project || null;
+    }));
+
+    const knowledgeCards = [];
+    const contentBriefs = [];
+    const handoffs = [];
+    for (const project of projectResults) {
+      const projectId = String(project?.id || '');
+      for (const card of project?.knowledge_cards || []) {
+        const normalized = withProjectIdentity(card, projectId);
+        if (normalized) knowledgeCards.push(normalized);
+      }
+      const brief = withProjectIdentity(project?.brief, projectId);
+      if (brief) contentBriefs.push(brief);
+      const projectHandoffs = Array.isArray(project?.handoffs)
+        ? project.handoffs
+        : (project?.handoff ? [project.handoff] : []);
+      for (const handoff of projectHandoffs) {
+        const normalized = withProjectIdentity(handoff, projectId);
+        if (normalized) handoffs.push(normalized);
+      }
+    }
+
+    const byView = {
+      [STAGING_VIEWS.KNOWLEDGE_CARDS]: knowledgeBoundaryViews(knowledgeCards),
+      [STAGING_VIEWS.CONTENT_BRIEFS]: knowledgeBoundaryViews(contentBriefs),
+      [STAGING_VIEWS.HANDOFF_MANIFEST]: knowledgeBoundaryViews(handoffs),
+      [STAGING_VIEWS.HANDOFF_PACKAGE_DETAIL]: knowledgeBoundaryViews(handoffs),
+    };
+    const totalCount = knowledgeCards.length + contentBriefs.length + handoffs.length;
+    return {
+      status: totalCount === 0 ? 'empty' : 'live',
+      byView,
+      liveCount: 4,
+      errorCount: 0,
+      accessDenied: false,
+      provenance: {
+        boundary: 'p19-workspace-command',
+        commands: ['project.list', 'project.read'],
+        ops: 'read_only',
+        note: `已通过服务端只读边界读取 ${projects.length} 个当前账号项目；浏览器未访问 api schema。`,
+      },
+    };
+  } catch (error) {
+    const failure = knowledgeBoundaryFailure(error);
+    const byView = Object.fromEntries([
+      STAGING_VIEWS.KNOWLEDGE_CARDS,
+      STAGING_VIEWS.CONTENT_BRIEFS,
+      STAGING_VIEWS.HANDOFF_MANIFEST,
+      STAGING_VIEWS.HANDOFF_PACKAGE_DETAIL,
+    ].map((view) => [view, knowledgeBoundaryViews([], failure.status, failure.message)]));
+    return {
+      status: failure.status,
+      byView,
+      liveCount: 0,
+      errorCount: failure.accessDenied ? 0 : 1,
+      accessDenied: failure.accessDenied,
+      error: { code: failure.code, message: failure.message },
+      provenance: {
+        boundary: 'p19-workspace-command',
+        commands: ['project.list', 'project.read'],
+        ops: 'read_only',
+      },
+    };
+  }
 }
 
 // ---- 内部辅助：单视图读取 ----------------------------------------------------
@@ -150,54 +264,7 @@ export async function fetchAllStagingData({ client, userId } = {}) {
 
 // ---- 公开 API：单独读取知识引擎 4 视图 ---------------------------------------
 export async function fetchKnowledgeEngineData({ client, userId } = {}) {
-  const keViews = [
-    STAGING_VIEWS.KNOWLEDGE_CARDS,
-    STAGING_VIEWS.CONTENT_BRIEFS,
-    STAGING_VIEWS.HANDOFF_MANIFEST,
-    STAGING_VIEWS.HANDOFF_PACKAGE_DETAIL,
-  ];
-  const results = await Promise.all(
-    keViews.map((view) => fetchSingleView(view, { client, userId })),
-  );
-
-  const byView = {};
-  let liveCount = 0;
-  let errorCount = 0;
-  let accessDenied = false;
-
-  for (const result of results) {
-    byView[result.view] = {
-      status: result.status,
-      data: result.data,
-      error: result.error,
-    };
-    if (result.status === 'live') liveCount += 1;
-    if (result.status === 'read_error') errorCount += 1;
-    if (result.status === 'access_denied') accessDenied = true;
-  }
-
-  const topLevelStatus = (() => {
-    if (!results.length || results.every((r) => r.status === 'not_configured')) return 'not_configured';
-    if (results.every((r) => r.status === 'not_signed_in')) return 'not_signed_in';
-    if (accessDenied && liveCount === 0) return 'access_denied';
-    if (errorCount > 0 && liveCount === 0) return 'read_error';
-    if (liveCount === 0) return 'empty';
-    return 'live';
-  })();
-
-  return {
-    status: topLevelStatus,
-    byView,
-    liveCount,
-    errorCount,
-    accessDenied,
-    provenance: {
-      schema: 'api',
-      views: [...keViews],
-      ops: 'select_only',
-      note: `已读取 ${liveCount} / ${keViews.length} 个知识引擎视图（仅 SELECT）。`,
-    },
-  };
+  return fetchKnowledgeThroughCommandBoundary({ client, userId });
 }
 
 // ---- 公开 API：单独读取世系审计视图 -----------------------------------------

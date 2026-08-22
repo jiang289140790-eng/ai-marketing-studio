@@ -42,12 +42,12 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('告诉我你想完成什么')`), true);
     assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
-      5,
-      'navigation exposes the five primary product destinations',
+      6,
+      'navigation exposes the six primary product destinations',
     );
     assert.deepEqual(
       await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item .nav-label'), (item) => item.textContent)`),
-      ['AI 工作台', '研究工作台', '生成工作台', '知识库', '平台连接'],
+      ['AI 工作台', '研究工作台', '角色库', '生成工作台', '知识库', '平台连接'],
       'primary navigation is concise and ordered by the user workflow',
     );
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');

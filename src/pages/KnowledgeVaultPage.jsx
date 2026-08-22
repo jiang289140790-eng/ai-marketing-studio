@@ -320,7 +320,7 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
   if (fetching && !keData) {
     return (
       <section className="page-stack">
-        <div className="notice">正在从 staging api 读取知识引擎数据（SELECT）...</div>
+        <div className="notice">正在通过 staging 服务端只读边界读取知识数据...</div>
       </section>
     );
   }
@@ -340,9 +340,9 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
       <div className="section-head">
         <div>
           <p className="eyebrow">知识引擎 · 线上只读预览</p>
-          <h2>来自 staging api 的只读知识数据</h2>
+          <h2>当前账号的只读知识数据</h2>
           <p>
-            本页仅执行 SELECT 读取 api.ke_* 四个视图；不写入、不合并、不删除、不修改任何知识记录。
+            本页通过已认证的服务端只读命令读取当前账号的知识卡、Brief 与交接包；浏览器不访问私有 schema，也不写入、不合并、不删除记录。
           </p>
         </div>
         <div className="button-row">
@@ -358,17 +358,17 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
       {/* ---- 整体状态 ---- */}
       {keStatus === 'read_error' && (
         <div className="notice error">
-          知识引擎视图读取失败：{keData?.error?.message || '无法连接到 staging api。'}
+          知识数据读取失败：{keData?.error?.message || '无法连接到 staging 只读服务。'}
         </div>
       )}
       {keStatus === 'access_denied' && (
         <div className="notice error">
-          知识引擎视图访问被拒绝：当前凭据无权访问 staging api schema。
+          知识数据访问被拒绝：请确认当前账号仍在 staging 访问名单中并重新登录。
         </div>
       )}
       {keStatus === 'empty' && (
         <div className="notice">
-          知识引擎四个视图均可访问，但当前没有任何记录。在知识引擎流程产出入库后会自动出现。
+          当前账号还没有知识卡、Brief 或交接包。在研究流程形成产物后会自动出现。
         </div>
       )}
 
@@ -446,7 +446,7 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
           {currentRows.length > 0 && (
             <>
               <p className="ke-view-count">
-                共 {currentRows.length} 条记录（仅 SELECT 读取，未写入或修改）
+                共 {currentRows.length} 条记录（服务端只读，未写入或修改）
               </p>
               <div className="ke-data-grid">
                 {currentRows.map((row, index) => (

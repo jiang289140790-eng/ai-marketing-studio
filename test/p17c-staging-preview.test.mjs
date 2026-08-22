@@ -12,6 +12,7 @@ import {
   buildStagingNotConfiguredView,
   buildStagingNotSignedInView,
   buildStagingReadErrorView,
+  fetchKnowledgeEngineData,
 } from '../src/services/staging-preview-service.js';
 import { navigationItems } from '../src/data/navigation.js';
 import { HARNESS_INTEGRATION_OWNED_PATHS } from './helpers/harness-integration-owned-paths.mjs';
@@ -195,9 +196,57 @@ test('关闭失败状态：运行时状态始终为只读', () => {
   const runtime = getStagingRuntimeStatus();
   assert.equal(runtime.readOnly, true);
   assert.equal(runtime.views.length, 5);
-  assert.ok(runtime.note.includes('SELECT'));
-  assert.ok(runtime.note.includes('RPC'));
-  assert.ok(runtime.note.includes('SELECT'));
+  assert.ok(runtime.note.includes('server-only Edge'));
+  assert.ok(runtime.note.includes('浏览器不进入 api schema'));
+  assert.ok(runtime.note.includes('无写操作'));
+});
+
+test('知识读取通过 P19 服务端只读边界聚合当前账号项目，不直接访问 api schema', async () => {
+  const calls = [];
+  const projectId = 'prj-1234567890abcdef12345678';
+  const client = {
+    auth: {
+      async getSession() {
+        return { data: { session: { access_token: 'bounded-test-token', user: { id: 'user-1' } } }, error: null };
+      },
+    },
+    functions: {
+      async invoke(name, request) {
+        calls.push({ name, body: request.body });
+        if (request.body.command === 'project.list') {
+          return {
+            data: { ok: true, schema_version: 'p19_command_contract_v1', data: { projects: [{ id: projectId }] } },
+            error: null,
+          };
+        }
+        return {
+          data: {
+            ok: true,
+            schema_version: 'p19_command_contract_v1',
+            data: {
+              project: {
+                id: projectId,
+                knowledge_cards: [{ id: 'kc-1234567890abcdef12345678' }],
+                brief: { id: 'brief-1234567890abcdef12345678', brief_status: 'pending_review' },
+                handoff: { id: 'handoff-1234567890abcdef12345678' },
+                handoffs: [{ id: 'handoff-1234567890abcdef12345678' }],
+              },
+            },
+          },
+          error: null,
+        };
+      },
+    },
+  };
+
+  const result = await fetchKnowledgeEngineData({ client, userId: 'user-1' });
+  assert.equal(result.status, 'live');
+  assert.deepEqual(calls.map((call) => call.body.command), ['project.list', 'project.read']);
+  assert.deepEqual(calls[1].body.payload, { project_id: projectId });
+  assert.equal(result.byView[STAGING_VIEWS.KNOWLEDGE_CARDS].data[0].project_id, projectId);
+  assert.equal(result.byView[STAGING_VIEWS.CONTENT_BRIEFS].data[0].project_id, projectId);
+  assert.equal(result.byView[STAGING_VIEWS.HANDOFF_MANIFEST].data[0].project_id, projectId);
+  assert.equal(result.provenance.boundary, 'p19-workspace-command');
 });
 
 test('关闭失败状态：not_configured 视图不含任何数据或已登录暗示', () => {
@@ -229,11 +278,13 @@ test('关闭失败状态：read_error 视图显式包含错误消息', () => {
 // ============================================================================
 // 源码证据测试
 // ============================================================================
-test('源码证据：staging-preview-service 使用 schema("api") 模式且不包含被禁引用', () => {
+test('源码证据：知识读取使用 P19 服务端边界，兼容世系视图仍保持纯 SELECT', () => {
   const source = readSource('src/services/staging-preview-service.js');
   assert.ok(source.includes("schema('api')"), '服务必须使用 schema(api) 模式');
   assert.ok(source.includes('.from('), '服务必须使用 from() 查询');
   assert.ok(source.includes('select'), '服务必须使用 select 查询');
+  assert.ok(source.includes("invoke('project.list'"), '知识读取必须先读取项目清单');
+  assert.ok(source.includes("invoke('project.read'"), '知识读取必须通过服务端读取项目产物');
   // 严禁的生产/写引用
   const forbidden = [
     'qtrlymiqohbjvklwegsw',
@@ -243,7 +294,6 @@ test('源码证据：staging-preview-service 使用 schema("api") 模式且不�
     /\.update\(/,
     /\.delete\(/,
     /\.upsert\(/,
-    /\.rpc\(/,
   ];
   for (const pattern of forbidden) {
     if (typeof pattern === 'string') {

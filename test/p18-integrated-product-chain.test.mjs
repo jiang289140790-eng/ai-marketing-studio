@@ -595,9 +595,9 @@ test('路由：App.jsx 保留既有页面并以 AI 工作台为默认入口', ()
   assert.ok(appSource.includes('AIWorkspacePage'), 'App.jsx 应导入 AIWorkspacePage');
 });
 
-test('Sidebar exposes five primary destinations while preserving legacy operations routes in the registry', () => {
+test('Sidebar exposes six primary destinations including the role library while preserving legacy operations routes in the registry', () => {
   const sidebarSource = readSource('src/components/Sidebar.jsx');
-  assert.ok(sidebarSource.includes("new Set(['ai', 'research', 'generation', 'knowledge', 'connections'])"));
+  assert.ok(sidebarSource.includes("new Set(['ai', 'research', 'generation', 'characters', 'knowledge', 'connections'])"));
   assert.ok(sidebarSource.includes('PRIMARY_NAV_IDS.has(item.id)'));
   for (const id of ['publish', 'accounts', 'analytics', 'dailyreport', 'workflows', 'health']) {
     assert.ok(navigationItems.some((item) => item.id === id), `legacy operations registry is missing ${id}`);

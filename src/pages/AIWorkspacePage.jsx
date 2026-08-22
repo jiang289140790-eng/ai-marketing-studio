@@ -18,6 +18,15 @@ const suggestions = [
   '创建交接包（基于当前项目最新待审核 Brief）',
 ];
 
+const businessPlugins = [
+  { id: 'research', label: '研究工作台', description: '采集来源、分析帖子与视频', icon: '⌕' },
+  { id: 'research-evidence', route: 'research', routeParams: { focus: 'collect' }, label: 'Evidence', description: '查看证据、版本与来源证明', icon: '◇' },
+  { id: 'knowledge', label: 'Knowledge', description: '复用已验证知识卡', icon: '◈' },
+  { id: 'research-brief', route: 'research', routeParams: { focus: 'outputs' }, label: 'Brief 审核', description: '审核、退回与交接', icon: '✓' },
+  { id: 'generation', label: '生成中心', description: '报价、确认、任务进度', icon: '✦' },
+  { id: 'assets', label: '成品库', description: '预览、下载与版本历史', icon: '▣' },
+];
+
 // The exact metric slot values are fixed server-side (compare_project);
 // these labels mirror them so the page always shows the requested metric
 // exactly as the plan will rank by.
@@ -216,11 +225,42 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
   return (
     <main className="ai-workspace" data-testid="harness-ai-workspace">
+      <div className="ai-harness-shell">
+        <aside className="ai-plugin-rail" aria-label="Harness 业务插件">
+          <div className="ai-plugin-brand">
+            <span className="ai-plugin-mark">H</span>
+            <div><strong>AMS Harness</strong><small>业务插件</small></div>
+          </div>
+          <button className="ai-new-session" type="button" onClick={() => { setIntent(''); setActiveTask(null); setError(''); }}>
+            <span>＋</span> 新建会话
+          </button>
+          <div className="ai-plugin-heading"><span>工作区</span><small>{businessPlugins.length} 个插件</small></div>
+          <nav className="ai-plugin-list">
+            <button className="active" type="button" aria-current="page">
+              <span className="ai-plugin-icon">✦</span><span><b>AI 工作台</b><small>自然语言计划与执行</small></span>
+            </button>
+            {businessPlugins.map((plugin) => (
+              <button
+                key={plugin.id}
+                type="button"
+                data-testid={`harness-plugin-${plugin.id}`}
+                onClick={() => onNavigate?.(plugin.route || plugin.id, '', plugin.routeParams || {})}
+              >
+                <span className="ai-plugin-icon">{plugin.icon}</span>
+                <span><b>{plugin.label}</b><small>{plugin.description}</small></span>
+                <i>›</i>
+              </button>
+            ))}
+          </nav>
+          <div className="ai-plugin-safety"><span className="ai-live-dot" /><div><b>Staging 安全模式</b><small>计划 → 确认 → 执行</small></div></div>
+        </aside>
+
+        <div className="ai-harness-main">
       <section className="ai-hero" data-testid="ai-workspace-hero">
         <div className="ai-hero-copy">
-          <span className="ai-kicker">AI 营销工作台</span>
+          <span className="ai-kicker">AMS × DeepSeek Harness</span>
           <h1>今天想完成什么？</h1>
-          <p>描述目标，系统会生成可确认的执行计划；费用、写入和交接仍由你决定。</p>
+          <p>研究、知识沉淀、内容策划与生成都可以从这里开始；结果会直接出现在会话中。</p>
         </div>
         <div className="ai-hero-status">
           <span className="ai-live-dot" />
@@ -257,7 +297,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="直接描述目标，例如：分析这个 X 帖子，保存证据和多模态分析，然后生成待审核 Brief…" maxLength={12000} rows={4} />
             <div className="ai-submit-row">
               <span>此步骤只生成计划，不调用付费工具，也不写入数据。</span>
-              <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '生成中…' : '生成计划'}</button>
+              <button className="primary-button ai-send-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '生成中…' : '生成计划'} <span aria-hidden="true">→</span></button>
             </div>
           </form>
           <details className="ai-capability-panel">
@@ -363,6 +403,8 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
         </div>
       </details>
+        </div>
+      </div>
     </main>
   );
 }

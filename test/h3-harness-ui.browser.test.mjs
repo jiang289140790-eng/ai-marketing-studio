@@ -43,6 +43,20 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('今天想完成什么？')`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-overview > div').length`), 4, 'AI workspace exposes a compact operational overview');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-command-center"]') !== null`), true, 'the primary natural-language command center is visible');
+    assert.deepEqual(
+      await cdp.evaluate(`Array.from(document.querySelectorAll('.ai-plugin-list button b'), (item) => item.textContent)`),
+      ['AI 工作台', '研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库'],
+      'Harness plugin rail exposes every real business destination',
+    );
+    await click(cdp, { selector: '[data-testid="harness-plugin-generation"]', label: 'generation business plugin' });
+    await waitFor(() => cdp.evaluate(`location.hash === '#/generation'`), { label: 'generation plugin exact route' });
+    await cdp.send('Page.navigate', { url: `${baseUrl}#/dashboard` });
+    await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace restored after plugin route' });
+    await click(cdp, { selector: '[data-testid="harness-plugin-research-evidence"]', label: 'Evidence business plugin' });
+    await waitFor(() => cdp.evaluate(`location.hash === '#/research?focus=collect'`), { label: 'Evidence plugin exact focused route' });
+    await waitForSelector(cdp, '.p19-workspace', { label: 'Evidence research workspace', timeout: 25_000 });
+    await cdp.send('Page.navigate', { url: `${baseUrl}#/dashboard` });
+    await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace restored after Evidence route' });
     assert.equal(await cdp.evaluate(`document.querySelector('.ai-capability-panel')?.open === false`), true, 'secondary capabilities remain collapsed until requested');
     assert.equal(await cdp.evaluate(`document.querySelector('.ai-history')?.open === false`), true, 'task history remains collapsed until requested');
     assert.equal(

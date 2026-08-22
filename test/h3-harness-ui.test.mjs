@@ -123,6 +123,14 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /此步骤只生成计划，不调用付费工具，也不写入数据/);
   assert.match(page, /data-testid="ai-command-center"/);
   assert.match(page, /按需展开 5 个常用模板/);
+  assert.match(page, /const businessPlugins = \[/);
+  for (const plugin of ['研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库']) {
+    assert.match(page, new RegExp(plugin), `Harness business plugin ${plugin} remains discoverable`);
+  }
+  assert.match(page, /onNavigate\?\.\(plugin\.route \|\| plugin\.id, '', plugin\.routeParams \|\| \{\}\)/);
+  assert.match(page, /routeParams: \{ focus: 'collect' \}[\s\S]*label: 'Evidence'/);
+  assert.match(page, /routeParams: \{ focus: 'outputs' \}[\s\S]*label: 'Brief 审核'/);
+  assert.match(page, /data-testid=\{`harness-plugin-\$\{plugin\.id\}`\}/);
   assert.match(page, /最近任务与成果/);
   assert.match(page, /默认收起/);
   assert.match(page, /history\.slice\(0, 6\)/);

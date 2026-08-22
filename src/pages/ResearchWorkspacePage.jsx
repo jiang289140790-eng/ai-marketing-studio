@@ -153,7 +153,7 @@ function buildOnlineCommand(previous, next) {
   throw workbenchError('ONLINE_COMMAND_MISSING', '无法将本次修改绑定到唯一在线命令，已拒绝保存。');
 }
 
-export function ResearchWorkspacePage() {
+export function ResearchWorkspacePage({ routeParams = {} }) {
   const { isAuthenticated, loading: authLoading, userId } = useAuth();
   const onlineMode = isAuthenticated && isServerWriteEnabled();
   // 稳定客户端实例：useState 惰性初始化（渲染期间绝不读写 ref.current）。
@@ -186,6 +186,17 @@ export function ResearchWorkspacePage() {
   // 产物页只展示当前项目内的草稿，绝不跨项目泄漏。
   const [savedDrafts, setSavedDrafts] = useState([]);
   const importInputRef = useRef(null);
+
+  useEffect(() => {
+    const focus = typeof routeParams?.focus === 'string' ? routeParams.focus : '';
+    if (!project?.id || !['collect', 'analyze', 'create', 'outputs'].includes(focus)) return undefined;
+    const frameId = globalThis.requestAnimationFrame?.(() => {
+      globalThis.document?.querySelector(`[data-destination="${focus}"]`)?.scrollIntoView({ block: 'start' });
+    });
+    return () => {
+      if (frameId !== undefined) globalThis.cancelAnimationFrame?.(frameId);
+    };
+  }, [project?.id, routeParams?.focus]);
 
   const stagingStatus = useMemo(() => getStagingRuntimeStatus(), []);
   const storageSummary = useMemo(() => {

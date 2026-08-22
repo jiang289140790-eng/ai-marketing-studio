@@ -53,6 +53,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const [history, setHistory] = useState([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const pollGeneration = useRef(0);
   const pollInFlight = useRef(false);
   const pendingSubmission = useRef(null);
@@ -103,6 +104,12 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   }, [activeTask, harnessClient, refreshHistory]);
 
   const presentationBlocks = useMemo(() => resolvePresentationBlocks(activeTask), [activeTask]);
+  const historySummary = useMemo(() => ({
+    running: history.filter((task) => ['queued', 'running'].includes(task.state)).length,
+    completed: history.filter((task) => ['succeeded', 'reused'].includes(task.state)).length,
+    attention: history.filter((task) => ['partial', 'failed', 'blocked'].includes(task.state)).length,
+  }), [history]);
+  const visibleHistory = useMemo(() => (showAllHistory ? history : history.slice(0, 6)), [history, showAllHistory]);
   const authoritativePlan = activeTask?.plan || null;
   const requiredApprovals = authoritativePlan?.approvals || {};
   const approvalsReady = (!requiredApprovals.paid_external_calls || allowPaid)
@@ -195,16 +202,30 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
   return (
     <main className="ai-workspace" data-testid="harness-ai-workspace">
-      <section className="ai-hero">
-        <div>
-          <span className="ai-kicker">AI 营销工作台</span>
-          <h1>告诉我你想完成什么</h1>
-          <p>先生成一份不可编辑的权威执行计划。涉及费用、在线写入或交接包时，由你逐项确认后才会执行。</p>
+      <section className="ai-hero" data-testid="ai-workspace-hero">
+        <div className="ai-hero-copy">
+          <span className="ai-kicker">AI 营销指挥台</span>
+          <h1>一句话，启动整个营销流程</h1>
+          <p>从研究、分析、知识沉淀到内容与视觉生成，先看清计划，再决定是否执行。</p>
+          <div className="ai-flow" aria-label="工作流程">
+            <span><b>1</b>说出目标</span><i>→</i><span><b>2</b>确认计划</span><i>→</i><span><b>3</b>查看成果</span>
+          </div>
         </div>
-        <button className="secondary-button" type="button" onClick={() => onNavigate?.('research')}>进入高级研究模式</button>
+        <div className="ai-hero-status">
+          <span className="ai-live-dot" />
+          <div><strong>Staging 智能执行层已连接</strong><small>费用与写入始终由你确认</small></div>
+          <button className="secondary-button" type="button" onClick={() => onNavigate?.('research')}>打开研究工作台</button>
+        </div>
       </section>
 
-      <section className="ai-command-card">
+      <section className="ai-overview" aria-label="工作台概览">
+        <div><span>正在执行</span><strong>{historySummary.running}</strong><small>可随时回来查看进度</small></div>
+        <div><span>已完成</span><strong>{historySummary.completed}</strong><small>成果已保留在工作区</small></div>
+        <div><span>需要处理</span><strong>{historySummary.attention}</strong><small>失败或部分完成的任务</small></div>
+        <div className="ai-overview-promise"><span>安全边界</span><strong>计划 → 确认 → 执行</strong><small>不会绕过你的批准</small></div>
+      </section>
+
+      <section className="ai-command-card" data-testid="ai-command-center">
         {routeContext.source && (
           <div className="ai-route-context" data-testid="harness-route-context">
             <div>
@@ -215,17 +236,23 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             {routeContext.campaign_id && <code>{routeContext.campaign_id}</code>}
           </div>
         )}
-        <form onSubmit={createPlan}>
-          <label htmlFor="ai-intent">任务目标</label>
-          <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="例如：分析这个 X 帖子 https://x.com/user/status/1234567890123456789，保存证据和多模态分析，然后生成待审核 Brief" maxLength={12000} rows={5} />
-          <div className="ai-suggestions" aria-label="常用任务">
-            {suggestions.map((text) => <button key={text} type="button" onClick={() => setIntent(text)}>{text}</button>)}
-          </div>
-          <div className="ai-submit-row">
-            <span>生成计划不会调用业务工具、产生费用或写入 staging。</span>
-            <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '正在生成计划…' : '生成执行计划'}</button>
-          </div>
-        </form>
+        <div className="ai-command-layout">
+          <form onSubmit={createPlan}>
+            <div className="ai-command-title"><span>新任务</span><h2>今天想让 AI 帮你完成什么？</h2></div>
+            <label className="sr-only" htmlFor="ai-intent">任务目标</label>
+            <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="直接描述目标，例如：分析这个 X 帖子，保存证据和多模态分析，然后生成待审核 Brief…" maxLength={12000} rows={4} />
+            <div className="ai-submit-row">
+              <span>此步骤只生成计划，不调用付费工具，也不写入数据。</span>
+              <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '正在生成计划…' : '生成安全计划 →'}</button>
+            </div>
+          </form>
+          <aside className="ai-capability-panel">
+            <div className="ai-command-title"><span>常用能力</span><h2>从一个明确动作开始</h2></div>
+            <div className="ai-suggestions" aria-label="常用任务">
+              {suggestions.map((text, index) => <button key={text} type="button" onClick={() => setIntent(text)}><b>{['研究', '洞察', '比较', '分析', '交接'][index]}</b><span>{text}</span></button>)}
+            </div>
+          </aside>
+        </div>
       </section>
 
       {error && <div className="notice error" role="alert">{error}</div>}
@@ -293,8 +320,8 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       )}
 
       <section className="ai-history">
-        <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
-        {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <div className="ai-task-list">{history.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>}
+        <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2><p>默认只显示最近 6 条，减少页面噪音。</p></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
+        {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
       </section>
     </main>
   );

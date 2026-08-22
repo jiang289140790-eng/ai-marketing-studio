@@ -39,7 +39,9 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await cdp.send('Page.navigate', { url: `${baseUrl}#/dashboard` });
     await waitFor(() => cdp.evaluate(`location.href === ${JSON.stringify(`${baseUrl}#/dashboard`)} && document.readyState === 'complete'`), { label: 'AI workspace exact route and DOM readiness' });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace' });
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('告诉我你想完成什么')`), true);
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('一句话，启动整个营销流程')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-overview > div').length`), 4, 'AI workspace exposes a compact operational overview');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-command-center"]') !== null`), true, 'the primary natural-language command center is visible');
     assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
       20,
@@ -58,7 +60,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await click(cdp, { selector: '.ai-suggestions button', index: 0, label: 'first suggested task' });
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-authoritative-plan"]') === null`), true, 'selecting a suggestion must not invent a client-side plan');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), false, 'a bounded intent can request the server plan without pre-approving execution');
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('生成计划不会调用业务工具、产生费用或写入 staging')`), true);
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('此步骤只生成计划，不调用付费工具，也不写入数据')`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-approvals input').length`), 0, 'approval controls appear only after an authoritative plan exists');
 
     await cdp.send('Page.navigate', { url: `${baseUrl}#/generation` });
@@ -72,7 +74,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'H3 mobile layout settle' });
     assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth > document.documentElement.clientWidth`), false);
 
-    await click(cdp, { selector: '.ai-hero .secondary-button', text: '进入高级研究模式', label: 'advanced research mode' });
+    await click(cdp, { selector: '.ai-hero .secondary-button', text: '打开研究工作台', label: 'advanced research mode' });
     await waitFor(() => cdp.evaluate(`location.hash.startsWith('#/research')`), { label: 'advanced research route' });
     await waitForSelector(cdp, '.p19-workspace', { label: 'existing advanced research page', timeout: 25_000 });
   } catch (error) {

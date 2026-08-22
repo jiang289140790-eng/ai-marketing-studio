@@ -118,9 +118,12 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   const app = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
-  assert.match(page, /告诉我你想完成什么/);
-  assert.match(page, /进入高级研究模式/);
-  assert.match(page, /生成计划不会调用业务工具、产生费用或写入 staging/);
+  assert.match(page, /一句话，启动整个营销流程/);
+  assert.match(page, /打开研究工作台/);
+  assert.match(page, /此步骤只生成计划，不调用付费工具，也不写入数据/);
+  assert.match(page, /data-testid="ai-command-center"/);
+  assert.match(page, /默认只显示最近 6 条/);
+  assert.match(page, /history\.slice\(0, 6\)/);
   assert.match(page, /data-testid="harness-authoritative-plan"/);
   assert.match(page, /authoritativePlan\.fingerprint/);
   assert.match(page, /requiredApprovals\.paid_external_calls/);

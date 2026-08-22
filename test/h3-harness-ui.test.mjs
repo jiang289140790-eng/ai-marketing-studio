@@ -150,7 +150,9 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(app, /ams-sidebar-collapsed/);
   assert.match(app, /onCollapsedChange=\{updateSidebarCollapsed\}/);
   assert.doesNotMatch(sidebar, /PRIMARY_NAV_IDS/);
-  assert.match(sidebar, /navigationSections\.map/);
+  assert.match(sidebar, /const corePlugins = \[/);
+  assert.match(sidebar, /secondarySections\.map/);
+  assert.match(sidebar, /data-testid=\{plugin\.testId\}/);
   assert.match(sidebar, /aria-expanded=\{expanded\}/);
   assert.match(sidebar, /activeSectionLabel/);
   assert.match(sidebar, /sidebar-collapse-toggle/);

@@ -74,6 +74,13 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     setIntent(routeContext.intent || '');
   }, [routeContext.intent, routeContextKey]);
 
+  useEffect(() => {
+    if (!routeParams?.new) return;
+    setIntent('');
+    setActiveTask(null);
+    setError('');
+  }, [routeParams?.new]);
+
   const refreshHistory = useCallback(async () => {
     try {
       const response = await harnessClient.list(30);

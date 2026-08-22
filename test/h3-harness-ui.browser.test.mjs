@@ -44,7 +44,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-overview > div').length`), 4, 'AI workspace exposes a compact operational overview');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-command-center"]') !== null`), true, 'the primary natural-language command center is visible');
     assert.deepEqual(
-      await cdp.evaluate(`Array.from(document.querySelectorAll('.ai-plugin-list button b'), (item) => item.textContent)`),
+      await cdp.evaluate(`Array.from(document.querySelectorAll('.harness-core-plugins .nav-label'), (item) => item.textContent)`),
       ['AI 工作台', '研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库'],
       'Harness plugin rail exposes every real business destination',
     );
@@ -61,16 +61,16 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelector('.ai-history')?.open === false`), true, 'task history remains collapsed until requested');
     assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
-      20,
+      22,
       'navigation keeps every integrated product destination discoverable',
     );
     assert.deepEqual(
       await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item .nav-label'), (item) => item.textContent)`),
-      ['AI 工作台', 'AI 运营指挥中心', '运营活动', '内容计划', '研究工作台', '内容工作台', '内容情报', '发布中心', '账号矩阵', '角色库', '素材库', '生成工作台', '提示词库', '数据分析', 'AI 复盘', '运营日报', '知识库', '平台连接', '工作流与模型', '系统状态'],
+      ['AI 工作台', '研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库', 'AI 运营指挥中心', '运营活动', '内容计划', '内容工作台', '内容情报', '发布中心', '账号矩阵', '角色库', '提示词库', '数据分析', 'AI 复盘', '运营日报', '平台连接', '工作流与模型', '系统状态'],
       'grouped navigation preserves the complete integrated product map',
     );
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-nav-section="智能工作"] .nav-section-toggle')?.getAttribute('aria-expanded')`), 'true', 'the active product group is expanded');
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-section-toggle').length`), 6, 'every product group is directly discoverable');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.harness-core-plugin').length`), 7, 'every core Harness plugin is directly discoverable');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-section-toggle').length`), 5, 'secondary product groups remain discoverable under more tools');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
 
@@ -78,7 +78,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await click(cdp, { selector: '.sidebar-collapse-toggle', label: 'collapse desktop sidebar' });
     await waitFor(() => cdp.evaluate(`document.querySelector('.app-shell').classList.contains('sidebar-collapsed')`), { label: 'desktop sidebar collapsed state' });
     await waitFor(() => cdp.evaluate(`document.querySelector('.sidebar').getBoundingClientRect().width <= 80`), { label: 'collapsed navigation icon rail width' });
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 20, 'collapsing the rail keeps every destination available');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 22, 'collapsing the rail keeps every destination available');
     assert.equal(await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-label')).every((item) => getComputedStyle(item).display === 'none')`), true, 'collapsed navigation hides verbose labels');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'collapsed navigation preserves the active route');
     await click(cdp, { selector: '.sidebar-collapse-toggle', label: 'expand desktop sidebar' });
@@ -103,7 +103,8 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'H3 mobile layout settle' });
     assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth > document.documentElement.clientWidth`), false);
 
-    await click(cdp, { selector: '.ai-hero .secondary-button', text: '高级研究模式', label: 'advanced research mode' });
+    await click(cdp, { selector: '.sidebar-toggle', text: '菜单', label: 'open mobile Harness navigation' });
+    await click(cdp, { selector: '[data-testid="harness-plugin-research"]', label: 'mobile research plugin' });
     await waitFor(() => cdp.evaluate(`location.hash.startsWith('#/research')`), { label: 'advanced research route' });
     await waitForSelector(cdp, '.p19-workspace', { label: 'existing advanced research page', timeout: 25_000 });
   } catch (error) {

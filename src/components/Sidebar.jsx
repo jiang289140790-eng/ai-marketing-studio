@@ -1,7 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
-export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate }) {
+const corePlugins = [
+  { id: 'ai', label: 'AI 工作台', icon: '✦', testId: 'harness-plugin-ai' },
+  { id: 'research', label: '研究工作台', icon: '⌕', testId: 'harness-plugin-research' },
+  { id: 'research-evidence', route: 'research', routeParams: { focus: 'collect' }, label: 'Evidence', icon: '◇', testId: 'harness-plugin-research-evidence' },
+  { id: 'knowledge', label: 'Knowledge', icon: '◈', testId: 'harness-plugin-knowledge' },
+  { id: 'research-brief', route: 'research', routeParams: { focus: 'outputs' }, label: 'Brief 审核', icon: '✓', testId: 'harness-plugin-research-brief' },
+  { id: 'generation', label: '生成中心', icon: '✦', testId: 'harness-plugin-generation' },
+  { id: 'assets', label: '成品库', icon: '▣', testId: 'harness-plugin-assets' },
+];
+
+const coreRouteIds = new Set(['ai', 'research', 'knowledge', 'generation', 'assets']);
+const secondarySections = navigationSections
+  .map((section) => ({ ...section, items: section.items.filter((item) => !coreRouteIds.has(item.id)) }))
+  .filter((section) => section.items.length > 0);
+
+export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeParams = {} }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
   const activeNavigationId = activePage === 'dashboard' ? 'ai' : activePage;
@@ -21,10 +36,20 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
     });
   }, [activeSectionLabel]);
 
-  const allExpanded = expandedSections.size === navigationSections.length;
+  const allExpanded = secondarySections.every((section) => expandedSections.has(section.label));
 
   function navigate(pageId) {
     onNavigate(pageId);
+    setMobileOpen(false);
+  }
+
+  function navigatePlugin(plugin) {
+    onNavigate(plugin.route || plugin.id, '', plugin.routeParams || {});
+    setMobileOpen(false);
+  }
+
+  function startNewTask() {
+    onNavigate('ai', '', { new: String(Date.now()) });
     setMobileOpen(false);
   }
 
@@ -38,19 +63,20 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
   }
 
   function toggleAllSections() {
-    setExpandedSections(allExpanded ? new Set(activeSectionLabel ? [activeSectionLabel] : []) : new Set(navigationSections.map((section) => section.label)));
+    setExpandedSections(allExpanded ? new Set(activeSectionLabel ? [activeSectionLabel] : []) : new Set(secondarySections.map((section) => section.label)));
   }
 
   return (
     <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''} ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-top">
+        <span className="sr-only">Staging 智能工作台</span>
         <div className="brand">
           <div className="brand-mark">
             <img src={logoSrc} alt="AI 营销工作室标志" />
           </div>
           <div className="brand-copy">
-            <strong>AI 营销工作室</strong>
-            <span>Staging 智能工作台</span>
+            <strong>deepseek</strong>
+            <span>HARNESS · AI 营销工作室</span>
           </div>
         </div>
         <button
@@ -68,12 +94,51 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
         </button>
       </div>
 
+      <button className="harness-new-task" type="button" onClick={startNewTask}>
+        <span className="nav-label">新任务</span>
+        <span aria-hidden="true">＋</span>
+      </button>
+
+      <div className="harness-session-shortcuts" aria-label="最近会话">
+        <span className="harness-sidebar-caption">会话</span>
+        <button type="button" onClick={() => navigate('ai')}>
+          <span className="nav-label">当前工作会话</span><span aria-hidden="true">•••</span>
+        </button>
+      </div>
+
       <nav className="nav-list" aria-label="主导航">
         <div className="nav-overview">
-          <span>全部功能</span>
+          <span>业务插件</span>
+          <span>{corePlugins.length}</span>
+        </div>
+        <div className="harness-core-plugins">
+          {corePlugins.map((plugin) => {
+            const route = plugin.route || plugin.id;
+            const requiredFocus = plugin.routeParams?.focus;
+            const active = activeNavigationId === route && (requiredFocus ? routeParams.focus === requiredFocus : !routeParams.focus);
+            return (
+              <button
+                key={plugin.id}
+                className={`nav-item harness-core-plugin ${active ? 'active' : ''}`}
+                data-testid={plugin.testId}
+                onClick={() => navigatePlugin(plugin)}
+                type="button"
+                title={collapsed ? plugin.label : undefined}
+                aria-label={collapsed ? plugin.label : undefined}
+              >
+                <span className="nav-icon">{plugin.icon}</span>
+                <span className="nav-label">{plugin.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="nav-overview harness-more-heading">
+          <span>更多工具</span>
+          <span className="sr-only">全部功能</span>
           <button type="button" onClick={toggleAllSections}>{allExpanded ? '收起' : '展开'}</button>
         </div>
-        {navigationSections.map((section) => {
+        {secondarySections.map((section) => {
           const expanded = expandedSections.has(section.label);
           const sectionId = `nav-section-${section.items[0]?.id || section.label}`;
           return (

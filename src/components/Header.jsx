@@ -28,12 +28,17 @@ export function Header({ description, title }) {
   return (
     <header className="header">
       <div>
-        <p className="eyebrow">个人 AI 运营工作台</p>
-        <h1>{title}</h1>
+        <p className="eyebrow">AI 营销工作室</p>
+        <h1>{title}<span className="header-chevron" aria-hidden="true">⌄</span></h1>
         {description && <p className="header-description">{description}</p>}
       </div>
 
       <div className="header-actions">
+        <button className="header-search" type="button" onClick={() => globalThis.document?.querySelector('#ai-intent')?.focus()}>
+          <span aria-hidden="true">⌕</span><span>搜索</span><kbd>⌘K</kbd>
+        </button>
+        <button className="header-icon-button" type="button" aria-label="帮助">?</button>
+        <button className="header-icon-button" type="button" aria-label="通知">♢</button>
         {!isSupabaseConfigured && <span className="config-pill warning">等待数据服务配置</span>}
         {isSupabaseConfigured && <span className="config-pill preview">Staging 工作区</span>}
         {user ? (

@@ -595,9 +595,11 @@ test('路由：App.jsx 保留既有页面并以 AI 工作台为默认入口', ()
   assert.ok(appSource.includes('AIWorkspacePage'), 'App.jsx 应导入 AIWorkspacePage');
 });
 
-test('Sidebar exposes the complete grouped navigation while preserving every operations route', () => {
+test('Sidebar exposes core Harness plugins plus the complete secondary operations map', () => {
   const sidebarSource = readSource('src/components/Sidebar.jsx');
-  assert.ok(sidebarSource.includes('navigationSections.map((section) =>'));
+  assert.ok(sidebarSource.includes('const corePlugins = ['));
+  assert.ok(sidebarSource.includes('secondarySections.map((section) =>'));
+  assert.ok(sidebarSource.includes('更多工具'));
   assert.ok(sidebarSource.includes('aria-expanded={expanded}'));
   assert.ok(sidebarSource.includes('hidden={!expanded && !collapsed}'));
   assert.ok(sidebarSource.includes('sidebar-collapse-toggle'));

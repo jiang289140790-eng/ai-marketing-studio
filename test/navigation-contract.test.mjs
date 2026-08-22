@@ -21,15 +21,20 @@ test('最终导航与辅助页面职责清单一致', () => {
   );
 });
 
-test('侧栏展示完整分组并自动展开当前页面所在分组', async () => {
+test('侧栏优先展示 Harness 核心插件并将完整产品图收纳为更多工具', async () => {
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(sidebar, /PRIMARY_NAV_IDS|filter\(\(item\).*\.has\(item\.id\)/s);
-  assert.match(sidebar, /navigationSections\.map/);
+  assert.match(sidebar, /const corePlugins = \[/);
+  for (const plugin of ['AI 工作台', '研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库']) {
+    assert.match(sidebar, new RegExp(plugin));
+  }
+  assert.match(sidebar, /const secondarySections = navigationSections/);
+  assert.match(sidebar, /secondarySections\.map/);
   assert.match(sidebar, /section\.items\.some\(\(item\) => item\.id === activeNavigationId\)/);
   assert.match(sidebar, /aria-expanded=\{expanded\}/);
   assert.match(sidebar, /hidden=\{!expanded && !collapsed\}/);
   assert.match(sidebar, /sidebar-collapse-toggle/);
   assert.match(sidebar, /aria-label=\{collapsed \? '展开侧栏' : '收起侧栏'\}/);
   assert.match(sidebar, /全部功能/);
+  assert.match(sidebar, /更多工具/);
 });
 

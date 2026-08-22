@@ -574,3 +574,152 @@
   .ai-harness-main .ai-hero { grid-template-columns: 1fr; }
   .ai-harness-main .ai-hero-status { min-width: 0; }
 }
+
+/* The Harness shell now belongs to App. AIWorkspacePage contributes only the
+   conversation canvas, avoiding the previous page-inside-a-page layout. */
+.ai-workspace {
+  width: min(1380px, calc(100% - 48px));
+  max-width: none;
+  margin: 0 auto;
+  padding: 38px 0 56px;
+  color: #1c2922;
+}
+
+.ai-harness-shell {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ai-plugin-rail {
+  display: none;
+}
+
+.ai-harness-main {
+  display: grid;
+  gap: 22px;
+  max-width: 1260px;
+  margin: 0 auto;
+  padding: 0;
+}
+
+.ai-harness-main .ai-hero {
+  display: grid;
+  justify-items: center;
+  padding: 8px 24px 2px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+
+.ai-harness-main .ai-hero h1 {
+  margin-top: 4px;
+  font-size: clamp(34px, 4vw, 54px);
+  font-weight: 750;
+  letter-spacing: -.045em;
+}
+
+.ai-harness-main .ai-hero p {
+  max-width: 660px;
+  font-size: 15px;
+}
+
+.ai-harness-main .ai-hero-status {
+  display: none;
+}
+
+.ai-harness-main .ai-overview-disclosure {
+  order: 3;
+  border-radius: 14px;
+}
+
+.ai-harness-main .ai-command-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ai-command-layout > form {
+  position: relative;
+  padding: 18px;
+  border: 1px solid #d9e2dd;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 14px 40px rgba(30, 68, 49, .09);
+}
+
+.ai-command-title {
+  display: none;
+}
+
+.ai-harness-main .ai-command-card textarea {
+  min-height: 112px;
+  padding: 4px 4px 14px;
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  resize: vertical;
+  box-shadow: none;
+}
+
+.ai-harness-main .ai-command-card textarea:focus {
+  outline: 0;
+  box-shadow: none;
+}
+
+.ai-submit-row {
+  min-height: 44px;
+  border-top: 1px solid #eef2f0;
+  padding-top: 12px;
+}
+
+.ai-submit-row::before {
+  content: '＋  附件';
+  color: #56655d;
+  font-size: 13px;
+}
+
+.ai-submit-row > span {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+.ai-harness-main .ai-send-button {
+  min-width: 46px;
+  min-height: 42px;
+  padding: 10px 16px;
+  background: #168a5a;
+}
+
+.ai-capability-panel {
+  margin-top: 12px;
+}
+
+.ai-conversation,
+.ai-history {
+  width: min(1120px, 100%);
+  margin-inline: auto;
+}
+
+.ai-message-user {
+  margin-left: auto;
+  border-radius: 18px 18px 4px 18px;
+}
+
+.ai-message-assistant {
+  border-radius: 18px;
+}
+
+@media (max-width: 760px) {
+  .ai-workspace { width: calc(100% - 20px); padding-top: 24px; }
+  .ai-harness-main { padding: 0; }
+  .ai-harness-main .ai-hero { padding-inline: 8px; }
+  .ai-command-layout > form { padding: 14px; }
+  .ai-submit-row::before { display: none; }
+}

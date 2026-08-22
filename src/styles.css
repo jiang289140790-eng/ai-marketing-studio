@@ -1943,6 +1943,337 @@ textarea {
   }
 }
 
+/* Harness application shell
+   The whole product now shares one navigation, one top bar and one content
+   surface. Individual pages remain authoritative business plugins. */
+:root {
+  color-scheme: light;
+  --bg: #f8faf9;
+  --panel: #ffffff;
+  --panel-2: #f7faf8;
+  --panel-3: #eef5f1;
+  --line: #e1e8e4;
+  --muted: #718078;
+  --text: #26332d;
+  --text-strong: #132019;
+  --accent: #168a5a;
+  --accent-2: #168a5a;
+  --success: #168a5a;
+  --warning: #c97919;
+  --danger: #d64545;
+  --shadow: 0 16px 48px rgba(25, 58, 43, .08);
+}
+
+html,
+body {
+  background: #f8faf9;
+  color: var(--text);
+}
+
+body {
+  background-image: none;
+}
+
+.harness-app-shell {
+  grid-template-columns: 296px minmax(0, 1fr);
+  background: #fff;
+}
+
+.harness-app-shell.sidebar-collapsed {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.harness-app-shell .sidebar {
+  min-width: 0;
+  padding: 18px 16px;
+  border-right: 1px solid #e1e8e4;
+  background: #f6f9f7;
+  color: #1d2a24;
+  scrollbar-color: #c4d0ca transparent;
+}
+
+.harness-app-shell .brand {
+  margin-bottom: 0;
+}
+
+.harness-app-shell .brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: #e4f2eb;
+  box-shadow: none;
+}
+
+.harness-app-shell .brand strong {
+  color: #14211b;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.harness-app-shell .brand span {
+  margin-top: 3px;
+  color: #64736b;
+  font-size: 10px;
+  letter-spacing: .07em;
+}
+
+.harness-app-shell .sidebar-collapse-toggle {
+  width: 30px;
+  height: 30px;
+  border-color: #d7e1dc;
+  background: #fff;
+  color: #42534a;
+}
+
+.harness-app-shell .sidebar-collapse-toggle:hover {
+  background: #edf6f1;
+  color: #107247;
+}
+
+.harness-new-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 18px 0 14px;
+  padding: 11px 15px;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #168a5a, #0d7650);
+  color: white;
+  cursor: pointer;
+  font-weight: 800;
+  box-shadow: 0 7px 18px rgba(22, 138, 90, .18);
+}
+
+.harness-session-shortcuts {
+  display: grid;
+  gap: 5px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid #e5ebe8;
+}
+
+.harness-sidebar-caption {
+  padding: 0 8px;
+  color: #7b8982;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.harness-session-shortcuts button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: #e4f1ea;
+  color: #315244;
+  cursor: pointer;
+  text-align: left;
+}
+
+.harness-app-shell .nav-list {
+  gap: 5px;
+  padding: 12px 2px 20px 0;
+  scrollbar-color: #c4d0ca transparent;
+}
+
+.harness-app-shell .nav-overview,
+.harness-app-shell .nav-section-toggle,
+.harness-app-shell .nav-section-title {
+  color: #718078;
+}
+
+.harness-app-shell .nav-overview button {
+  color: #168a5a;
+}
+
+.harness-core-plugins {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 9px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid #e5ebe8;
+}
+
+.harness-app-shell .harness-core-plugin {
+  padding-inline: 11px;
+  font-weight: 700;
+}
+
+.harness-app-shell .harness-more-heading {
+  margin-top: 2px;
+}
+
+.harness-app-shell .nav-section-toggle:hover,
+.harness-app-shell .nav-section-toggle:focus-visible {
+  background: #edf3f0;
+  color: #26372e;
+}
+
+.harness-app-shell .nav-section-meta > span:first-child {
+  background: #e8eeeb;
+}
+
+.harness-app-shell .nav-item {
+  min-height: 38px;
+  border-radius: 9px;
+  color: #34443b;
+}
+
+.harness-app-shell .nav-item:hover {
+  border-color: transparent;
+  background: #edf3f0;
+  color: #143d2b;
+}
+
+.harness-app-shell .nav-item.active {
+  border-color: #d3e5db;
+  background: #e2f1e9;
+  color: #0e6f45;
+  box-shadow: inset 3px 0 #168a5a;
+}
+
+.harness-app-shell .sidebar-note {
+  border-color: #dae4df;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.harness-app-shell .sidebar-note span {
+  color: #244136;
+}
+
+.harness-app-shell .main-shell {
+  padding: 0;
+  background: #fff;
+}
+
+.harness-app-shell .header {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  min-height: 64px;
+  align-items: center;
+  margin: 0;
+  padding: 10px 28px;
+  border-bottom: 1px solid #e3e9e6;
+  background: rgba(255, 255, 255, .94);
+  backdrop-filter: blur(14px);
+}
+
+.harness-app-shell .header > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.harness-app-shell .header .eyebrow,
+.harness-app-shell .header-description {
+  display: none;
+}
+
+.harness-app-shell .header h1 {
+  color: #1a2721;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.header-chevron {
+  margin-left: 7px;
+  color: #75837c;
+  font-size: 14px;
+}
+
+.header-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 132px;
+  padding: 8px 11px;
+  border: 1px solid #dce4e0;
+  border-radius: 10px;
+  background: #fbfcfb;
+  color: #65736c;
+  cursor: pointer;
+}
+
+.header-search kbd {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid #dce4e0;
+  border-radius: 5px;
+  background: #f1f4f2;
+  color: #849088;
+  font-size: 10px;
+}
+
+.header-icon-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #435149;
+  cursor: pointer;
+}
+
+.header-icon-button:hover { background: #eef3f0; }
+
+.harness-app-shell .user-chip {
+  border-color: transparent;
+  background: transparent;
+  color: #223128;
+}
+
+.harness-app-shell .ghost-button,
+.harness-app-shell .primary-button,
+.harness-app-shell .secondary-button {
+  border-radius: 9px;
+}
+
+.harness-app-shell .config-pill,
+.harness-app-shell .status-badge.connected {
+  color: #0f7045;
+}
+
+.harness-app-shell .notice {
+  margin: 16px 28px 0;
+}
+
+.harness-app-shell > .main-shell > main,
+.harness-app-shell > .main-shell > .auxiliary-page-frame,
+.harness-app-shell > .main-shell > .campaign-context-bar {
+  width: min(1380px, calc(100% - 48px));
+  margin-inline: auto;
+}
+
+.harness-app-shell.sidebar-collapsed .harness-new-task {
+  justify-content: center;
+  padding-inline: 8px;
+}
+
+.harness-app-shell.sidebar-collapsed .harness-new-task .nav-label,
+.harness-app-shell.sidebar-collapsed .harness-session-shortcuts,
+.harness-app-shell.sidebar-collapsed .harness-sidebar-caption {
+  display: none;
+}
+
+@media (max-width: 780px) {
+  .harness-app-shell { display: block; }
+  .harness-app-shell .sidebar { height: auto; padding: 10px 14px; }
+  .harness-new-task, .harness-session-shortcuts { display: none; }
+  .harness-app-shell .header { padding-inline: 14px; }
+  .header-search, .header-icon-button, .harness-app-shell .config-pill { display: none; }
+  .harness-app-shell > .main-shell > main,
+  .harness-app-shell > .main-shell > .auxiliary-page-frame,
+  .harness-app-shell > .main-shell > .campaign-context-bar { width: calc(100% - 20px); }
+}
+
 /* AI Daily Ops command center */
 .daily-ops-panel,
 .attention-panel,

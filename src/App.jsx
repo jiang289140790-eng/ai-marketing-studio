@@ -158,12 +158,13 @@ export default function App() {
   }, [activePage, auxiliaryMode, auxiliaryScope, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, userId]);
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <div className={`app-shell harness-app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar
         activePage={activePage}
         collapsed={sidebarCollapsed}
         onCollapsedChange={updateSidebarCollapsed}
         onNavigate={navigate}
+        routeParams={routeParams}
       />
       <div className="main-shell">
         <Header description={auxiliaryDescription} title={pageTitles[activePage] || pageTitles.dashboard} />

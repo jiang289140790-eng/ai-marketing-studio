@@ -60,6 +60,11 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelector('.ai-capability-panel')?.open === false`), true, 'secondary capabilities remain collapsed until requested');
     assert.equal(await cdp.evaluate(`document.querySelector('.ai-history')?.open === false`), true, 'task history remains collapsed until requested');
     assert.equal(
+      await cdp.evaluate(`document.querySelector('.ai-overview-disclosure').getBoundingClientRect().top < document.querySelector('[data-testid="ai-command-center"]').getBoundingClientRect().top`),
+      true,
+      'task overview stays above the command composer instead of floating below recent results',
+    );
+    assert.equal(
       await cdp.evaluate(`document.querySelectorAll('.nav-item').length`),
       22,
       'navigation keeps every integrated product destination discoverable',
@@ -91,6 +96,19 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-submit"]').disabled`), false, 'a bounded intent can request the server plan without pre-approving execution');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('此步骤只生成计划，不调用付费工具，也不写入数据')`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-approvals input').length`), 0, 'approval controls appear only after an authoritative plan exists');
+
+    await cdp.evaluate(`(() => {
+      const input = document.querySelector('[data-testid="harness-attachment-input"]');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['bounded attachment text'], 'brief-notes.txt', { type: 'text/plain', lastModified: 1 }));
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await waitForSelector(cdp, '[data-testid="harness-attachments"]', { label: 'selected attachment tray' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-attachments"]').innerText.includes('brief-notes.txt')`), true, 'selected attachment is visibly bound to the task composer');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-attachments"]').innerText.includes('文本已读取')`), true, 'bounded text attachment content is read locally');
+    await click(cdp, { selector: '[data-testid="harness-attachments"] button', label: 'remove selected attachment' });
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="harness-attachments"]') === null`), { label: 'attachment removed' });
 
     await cdp.send('Page.navigate', { url: `${baseUrl}#/generation` });
     await waitForSelector(cdp, '[data-testid="g2-flow"]', { label: 'generation workspace' });

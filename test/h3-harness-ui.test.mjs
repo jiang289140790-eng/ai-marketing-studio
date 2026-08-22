@@ -121,6 +121,12 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /今天想完成什么？/);
   assert.match(page, /高级研究模式/);
   assert.match(page, /此步骤只生成计划，不调用付费工具，也不写入数据/);
+  assert.match(page, /data-testid="harness-attachment-input"/);
+  assert.match(page, /data-testid="harness-attachments"/);
+  assert.match(page, /MAX_ATTACHMENTS = 5/);
+  assert.match(page, /MAX_ATTACHMENT_BYTES = 10 \* 1024 \* 1024/);
+  assert.match(page, /附件上下文（由用户本地选择）/);
+  assert.match(page, /任务目标与附件文本合计不能超过 12000 个字符/);
   assert.match(page, /data-testid="ai-command-center"/);
   assert.match(page, /按需展开 5 个常用模板/);
   assert.match(page, /const businessPlugins = \[/);

@@ -18,6 +18,17 @@ const suggestions = [
   '创建交接包（基于当前项目最新待审核 Brief）',
 ];
 
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_BYTES = 128 * 1024;
+const MAX_TEXT_ATTACHMENT_CHARS = 4_000;
+const TEXT_ATTACHMENT_TYPES = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+]);
+
 const businessPlugins = [
   { id: 'research', label: '研究工作台', description: '采集来源、分析帖子与视频', icon: '⌕' },
   { id: 'research-evidence', route: 'research', routeParams: { focus: 'collect' }, label: 'Evidence', description: '查看证据、版本与来源证明', icon: '◇' },
@@ -64,9 +75,11 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const [submitting, setSubmitting] = useState(false);
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [showFullResult, setShowFullResult] = useState(false);
+  const [attachments, setAttachments] = useState([]);
   const pollGeneration = useRef(0);
   const pollInFlight = useRef(false);
   const pendingSubmission = useRef(null);
+  const attachmentInput = useRef(null);
   const routeContext = useMemo(() => parseHarnessContextParams(routeParams), [routeParams]);
   const routeContextKey = JSON.stringify(routeContext);
 
@@ -77,6 +90,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   useEffect(() => {
     if (!routeParams?.new) return;
     setIntent('');
+    setAttachments([]);
     setActiveTask(null);
     setError('');
   }, [routeParams?.new]);
@@ -162,7 +176,14 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     setSubmitting(true);
     setError('');
     try {
-      const normalizedIntent = normalizeHarnessIntent(intent);
+      const attachmentContext = attachments.length > 0
+        ? `\n\n附件上下文（由用户本地选择）：\n${attachments.map((attachment, index) => {
+          const identity = `${index + 1}. ${attachment.name} · ${attachment.type || '未知类型'} · ${formatBytes(attachment.size)}`;
+          return attachment.text ? `${identity}\n文本摘录：${attachment.text}` : identity;
+        }).join('\n')}`
+        : '';
+      const normalizedIntent = normalizeHarnessIntent(`${intent}${attachmentContext}`);
+      if (normalizedIntent.length > 12_000) throw new Error('任务目标与附件文本合计不能超过 12000 个字符。');
       const projectId = readHarnessActiveProject();
       const submissionKey = JSON.stringify([projectId, normalizedIntent]);
       if (pendingSubmission.current?.key !== submissionKey) {
@@ -183,6 +204,42 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function selectAttachments(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (files.length === 0) return;
+    const available = Math.max(0, MAX_ATTACHMENTS - attachments.length);
+    if (available === 0) {
+      setError(`每个任务最多添加 ${MAX_ATTACHMENTS} 个附件。`);
+      return;
+    }
+    const accepted = [];
+    for (const file of files.slice(0, available)) {
+      if (file.size <= 0 || file.size > MAX_ATTACHMENT_BYTES) {
+        setError(`附件“${file.name}”必须小于 ${formatBytes(MAX_ATTACHMENT_BYTES)}。`);
+        continue;
+      }
+      let text = '';
+      if (TEXT_ATTACHMENT_TYPES.has(file.type) && file.size <= MAX_TEXT_ATTACHMENT_BYTES) {
+        text = (await file.text()).slice(0, MAX_TEXT_ATTACHMENT_CHARS).trim();
+      }
+      accepted.push({
+        id: `${file.name}-${file.size}-${file.lastModified}-${globalThis.crypto?.randomUUID?.() || Date.now()}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        text,
+      });
+    }
+    setAttachments((current) => [...current, ...accepted].slice(0, MAX_ATTACHMENTS));
+    if (files.length > available) setError(`每个任务最多添加 ${MAX_ATTACHMENTS} 个附件，其余文件未加入。`);
+    else if (accepted.length > 0) setError('');
+  }
+
+  function removeAttachment(id) {
+    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   }
 
   async function confirmPlan() {
@@ -238,7 +295,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             <span className="ai-plugin-mark">H</span>
             <div><strong>AMS Harness</strong><small>业务插件</small></div>
           </div>
-          <button className="ai-new-session" type="button" onClick={() => { setIntent(''); setActiveTask(null); setError(''); }}>
+          <button className="ai-new-session" type="button" onClick={() => { setIntent(''); setAttachments([]); setActiveTask(null); setError(''); }}>
             <span>＋</span> 新建会话
           </button>
           <div className="ai-plugin-heading"><span>工作区</span><small>{businessPlugins.length} 个插件</small></div>
@@ -302,7 +359,30 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             <div className="ai-command-title"><span>任务目标</span><h2 className="sr-only">创建 AI 任务</h2></div>
             <label className="sr-only" htmlFor="ai-intent">任务目标</label>
             <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="直接描述目标，例如：分析这个 X 帖子，保存证据和多模态分析，然后生成待审核 Brief…" maxLength={12000} rows={4} />
+            {attachments.length > 0 && (
+              <div className="ai-attachment-list" data-testid="harness-attachments" aria-label="已选择附件">
+                {attachments.map((attachment) => (
+                  <div className="ai-attachment-chip" key={attachment.id}>
+                    <span aria-hidden="true">{attachment.type.startsWith('image/') ? '▧' : attachment.type.startsWith('video/') ? '▶' : '▤'}</span>
+                    <div><b title={attachment.name}>{attachment.name}</b><small>{formatBytes(attachment.size)} · {attachment.text ? '文本已读取' : attachment.type}</small></div>
+                    <button type="button" aria-label={`移除附件 ${attachment.name}`} onClick={() => removeAttachment(attachment.id)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="ai-submit-row">
+              <input
+                ref={attachmentInput}
+                className="sr-only"
+                data-testid="harness-attachment-input"
+                type="file"
+                multiple
+                accept="image/*,video/*,application/pdf,text/plain,text/markdown,text/csv,application/json"
+                onChange={selectAttachments}
+              />
+              <button className="ai-attachment-button" type="button" onClick={() => attachmentInput.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS}>
+                <span aria-hidden="true">＋</span> 附件
+              </button>
               <span>此步骤只生成计划，不调用付费工具，也不写入数据。</span>
               <button className="primary-button ai-send-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '生成中…' : '生成计划'} <span aria-hidden="true">→</span></button>
             </div>
@@ -414,4 +494,11 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       </div>
     </main>
   );
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

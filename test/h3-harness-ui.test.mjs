@@ -152,7 +152,11 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
 test('AI workspace exposes structured terminal tool results', async () => {
   const page = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.match(page, /activeTask\.result\?\.result_data/);
-  assert.match(page, /查看工具返回结果/);
+  assert.match(page, /data-testid="harness-result-summary"/);
+  assert.match(page, /查看 \{evidenceCount\} 条证据/);
+  assert.match(page, /查看执行报告/);
+  assert.match(page, /onNavigate\?\.\('research'\)/);
+  assert.match(page, /<summary>技术详情<\/summary>/);
 });
 
 test('generation workspace hands exact bounded context to the AI Harness workspace', async () => {

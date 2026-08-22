@@ -244,7 +244,9 @@ test('real browser: natural language becomes an authoritative plan, exact approv
     await waitFor(() => cdp.evaluate(`document.querySelector('.ai-section-heading h2')?.textContent === '已完成'`), { timeout: 15_000, label: 'successful resumed task' });
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-step-st-1"]').dataset.state`), 'reused', 'completed/reused steps remain untouched');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-step-st-5"]').dataset.state`), 'succeeded');
-    assert.equal(await cdp.evaluate(`document.querySelector('.ai-raw-response .ai-result-copy')?.textContent.includes('pending_review Brief v2 已生成') === true`), true);
+    await click(cdp, { selector: '[data-testid="harness-result-summary"] .secondary-button', label: 'readable execution report' });
+    await waitForSelector(cdp, '[data-testid="harness-readable-result"]', { label: 'readable execution report body' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-readable-result"]')?.textContent.includes('pending_review Brief v2 已生成') === true`), true);
     assert.equal(await cdp.evaluate(`document.body.textContent.includes(${JSON.stringify('brief-' + '3'.repeat(24))})`), true);
 
     const calls = await cdp.evaluate(`structuredClone(globalThis.__harnessFixture.calls)`);

@@ -54,6 +54,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [showFullResult, setShowFullResult] = useState(false);
   const pollGeneration = useRef(0);
   const pollInFlight = useRef(false);
   const pendingSubmission = useRef(null);
@@ -110,6 +111,18 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     attention: history.filter((task) => ['partial', 'failed', 'blocked'].includes(task.state)).length,
   }), [history]);
   const visibleHistory = useMemo(() => (showAllHistory ? history : history.slice(0, 6)), [history, showAllHistory]);
+  const artifactRefs = Array.isArray(activeTask?.result?.artifact_refs)
+    ? activeTask.result.artifact_refs
+    : [];
+  const evidenceCount = artifactRefs.filter((ref) => /(^|\/)ev-[0-9a-f]{24}(?:$|\/)/.test(String(ref))).length;
+  const terminalTask = activeTask && ['succeeded', 'reused', 'partial', 'failed', 'blocked', 'cancelled'].includes(activeTask.state);
+  const resultHeadline = evidenceCount > 0
+    ? `${evidenceCount} 条内容已保存为证据`
+    : artifactRefs.length > 0
+      ? `${artifactRefs.length} 项成果已生成`
+      : activeTask?.state === 'succeeded' || activeTask?.state === 'reused'
+        ? '任务已完成'
+        : '任务已停止';
   const authoritativePlan = activeTask?.plan || null;
   const requiredApprovals = authoritativePlan?.approvals || {};
   const approvalsReady = (!requiredApprovals.paid_external_calls || allowPaid)
@@ -123,6 +136,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     setAllowPaid(false);
     setAllowWrites(false);
     setAllowHandoff(false);
+    setShowFullResult(false);
     setActiveTask(task);
   }
 
@@ -315,11 +329,25 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             </div>
           )}
 
+          {terminalTask && (
+            <section className={`ai-result-summary ${activeTask.state}`} data-testid="harness-result-summary">
+              <div className="ai-result-summary-copy">
+                <span>任务结果</span>
+                <h3>{resultHeadline}</h3>
+                <p>{evidenceCount > 0 ? '内容已经进入当前研究项目，可继续分析、生成知识卡或整理 Brief。' : '成果已保留在当前工作区，可随时回来查看。'}</p>
+              </div>
+              <div className="ai-result-actions">
+                {evidenceCount > 0 && <button className="primary-button" type="button" onClick={() => onNavigate?.('research')}>查看 {evidenceCount} 条证据</button>}
+                {activeTask.result?.final_response && <button className="secondary-button" type="button" aria-expanded={showFullResult} onClick={() => setShowFullResult((value) => !value)}>{showFullResult ? '收起执行报告' : '查看执行报告'}</button>}
+              </div>
+              {showFullResult && activeTask.result?.final_response && <div className="ai-result-copy" data-testid="harness-readable-result">{activeTask.result.final_response}</div>}
+            </section>
+          )}
+
           {presentationBlocks.length > 0 && <PresentationPanel blocks={presentationBlocks} />}
-          {activeTask.result?.final_response && (presentationBlocks.length > 0 ? <details className="ai-raw-response"><summary>查看原始回复</summary><div className="ai-result-copy">{activeTask.result.final_response}</div></details> : <div className="ai-result-copy">{activeTask.result.final_response}</div>)}
-          {activeTask.result?.result_data && <details className="ai-raw-response"><summary>查看工具返回结果</summary><pre className="ai-result-copy">{JSON.stringify(activeTask.result.result_data, null, 2)}</pre></details>}
+          {!terminalTask && activeTask.result?.final_response && (presentationBlocks.length > 0 ? <details className="ai-raw-response"><summary>查看原始回复</summary><div className="ai-result-copy">{activeTask.result.final_response}</div></details> : <div className="ai-result-copy">{activeTask.result.final_response}</div>)}
           {activeTask.error && <div className="notice error" data-testid="harness-task-error">{activeTask.error.operation ? `${activeTask.error.operation} · ` : ''}{activeTask.error.tool_code || activeTask.error.message || activeTask.error.summary || activeTask.error.code}</div>}
-          {activeTask.result?.artifact_refs?.length > 0 && <div className="ai-artifacts"><strong>本次产物</strong>{activeTask.result.artifact_refs.map((ref) => <code key={ref}>{ref}</code>)}</div>}
+          {(activeTask.result?.result_data || artifactRefs.length > 0) && <details className="ai-technical-details"><summary>技术详情</summary>{activeTask.result?.result_data && <pre className="ai-result-copy">{JSON.stringify(activeTask.result.result_data, null, 2)}</pre>}{artifactRefs.length > 0 && <div className="ai-artifacts"><strong>产物身份</strong>{artifactRefs.map((ref) => <code key={ref}>{ref}</code>)}</div>}</details>}
         </section>
       )}
 

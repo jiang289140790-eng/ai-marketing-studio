@@ -239,7 +239,8 @@ test('Harness GenUI/visualize real browser: bounded charts, flows, tables, fragm
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="presentation-block-fragment"] iframe')?.hasAttribute('sandbox')`), true, 'fragment renders inside a sandboxed iframe');
     await waitForSelector(cdp, '[data-testid="presentation-block-fallback"]', { label: 'fallback block' });
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('不支持的组件类型：scene3d')`), true);
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('查看原始回复')`), true, 'raw response collapses behind a disclosure when presentation renders');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-result-summary"]') !== null`), true, 'terminal result exposes a readable summary');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-result-summary"] .secondary-button') !== null`), true, 'full response is available behind a readable report action');
 
     // 6) 刷新恢复：整页 reload 后历史重开仍渲染同一 presentation。
     await cdp.send('Page.reload', { ignoreCache: true });

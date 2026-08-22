@@ -214,11 +214,35 @@
 .ai-progress span.failed, .ai-progress span.cancelled { background: #ef6472; }
 .ai-progress span.partial { background: #e5a93d; }
 .ai-result-copy { padding: 16px; white-space: pre-wrap; line-height: 1.7; border-radius: 14px; background: #121e31; }
+.ai-result-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid rgba(40, 202, 139, .32);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(30, 104, 83, .2), rgba(17, 29, 48, .9));
+}
+.ai-result-summary.partial,
+.ai-result-summary.failed,
+.ai-result-summary.blocked,
+.ai-result-summary.cancelled { border-color: rgba(229, 169, 61, .35); background: linear-gradient(135deg, rgba(117, 78, 20, .2), rgba(17, 29, 48, .9)); }
+.ai-result-summary-copy { display: grid; gap: 4px; }
+.ai-result-summary-copy > span { color: #71e4d4; font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.ai-result-summary-copy h3 { margin: 0; font-size: 20px; }
+.ai-result-summary-copy p { margin: 0; color: var(--ai-muted); font-size: 13px; line-height: 1.55; }
+.ai-result-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.ai-result-summary > .ai-result-copy { grid-column: 1 / -1; max-height: 420px; overflow: auto; border: 1px solid var(--ai-line); }
 .ai-raw-response { margin-top: 14px; }
 .ai-raw-response summary { cursor: pointer; color: #9fb0cc; font-size: 13px; padding: 6px 0; }
 .ai-raw-response .ai-result-copy { margin-top: 10px; }
 .ai-artifacts { display: grid; gap: 8px; margin-top: 16px; }
 .ai-artifacts code { padding: 10px; border-radius: 8px; background: #09101c; color: #71e4d4; overflow-wrap: anywhere; }
+.ai-technical-details { margin-top: 14px; border-top: 1px solid var(--ai-line); }
+.ai-technical-details > summary { padding: 13px 0 4px; cursor: pointer; color: #7888a2; font-size: 12px; }
+.ai-technical-details .ai-result-copy { margin-top: 10px; }
 
 .ai-task-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
 .ai-task-list > button { display: grid; grid-template-columns: auto 1fr; gap: 9px 12px; align-items: center; min-width: 0; width: 100%; padding: 13px 14px; text-align: left; border: 1px solid #253550; border-radius: 13px; background: #111c2e; color: white; cursor: pointer; }
@@ -259,4 +283,7 @@
   .ai-plan-steps > li { grid-template-columns: 1fr; }
   .ai-step-error { grid-column: auto; }
   .ai-step-badges { justify-content: flex-start; }
+  .ai-result-summary { grid-template-columns: 1fr; }
+  .ai-result-actions { justify-content: stretch; }
+  .ai-result-actions button { flex: 1; }
 }

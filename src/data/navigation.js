@@ -4,6 +4,13 @@ export const navigationSections = [
     items: [{ id: 'ai', label: 'AI 工作台', icon: '✦' }],
   },
   {
+    label: 'AI 任务',
+    items: [
+      { id: 'ai-execution', label: '执行详情', icon: '▸' },
+      { id: 'ai-results', label: '结果与审核', icon: '✓' },
+    ],
+  },
+  {
     label: '总览',
     items: [{ id: 'dashboard', label: 'AI 运营指挥中心', icon: '◉' }],
   },

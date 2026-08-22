@@ -114,6 +114,15 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/p36-research-ux-redesign.test.mjs',
   'test/research-live-data.test.mjs',
   'test/research-workspace.test.mjs',
+  // AI 三页任务架构（新任务首页/执行详情/结果与审核）：精确路径清单。
+  'src/pages/TaskExecutionPage.jsx',
+  'src/pages/TaskResultsPage.jsx',
+  'src/pages/ai-task-pages.css',
+  'src/services/harness-task-model.js',
+  'test/ai-three-page-model.test.mjs',
+  'test/ai-three-page-route.test.mjs',
+  'test/ai-three-page.browser.test.mjs',
+  'acceptance-evidence/ai-three-page-architecture-2026-08-23/**',
 ]);
 
 // Strict revision-2 contract with glob support (`/**` matches a directory and
@@ -190,6 +199,15 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'supabase/tests/g1_b0_generation_adversarial.test.sql',
   'test/g1-migration-replay.test.mjs',
   'test/p19-sql-integration.test.mjs',
+  // AI 三页任务架构（新任务首页/执行详情/结果与审核）：严格 diff 门禁镜像。
+  'src/pages/TaskExecutionPage.jsx',
+  'src/pages/TaskResultsPage.jsx',
+  'src/pages/ai-task-pages.css',
+  'src/services/harness-task-model.js',
+  'test/ai-three-page-model.test.mjs',
+  'test/ai-three-page-route.test.mjs',
+  'test/ai-three-page.browser.test.mjs',
+  'acceptance-evidence/ai-three-page-architecture-2026-08-23/**',
 ]);
 
 // Environment files the harness itself writes next to the worktree; they are

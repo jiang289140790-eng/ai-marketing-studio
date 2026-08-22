@@ -788,3 +788,125 @@
   .ai-submit-row > span { order: 3; width: 100%; }
   .ai-attachment-chip { max-width: 100%; }
 }
+
+/* ---- 三页任务架构：新任务首页入口 ---- */
+
+.ai-task-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ai-task-flow > button {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 151, 190, .2);
+  border-radius: 12px;
+  background: rgba(12, 23, 40, .6);
+  color: #d9e3f2;
+  cursor: pointer;
+}
+
+.ai-task-flow > button:disabled {
+  cursor: default;
+  opacity: .62;
+}
+
+.ai-task-flow > button.active {
+  border-color: rgba(117, 105, 255, .5);
+  background: rgba(112, 67, 255, .1);
+}
+
+.ai-task-flow b {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(119, 87, 255, .22);
+  color: #b8a9ff;
+  font-size: 12px;
+}
+
+.ai-task-flow span { display: grid; gap: 2px; min-width: 0; }
+.ai-task-flow strong { font-size: 13px; }
+.ai-task-flow small { color: #7f8fa8; font-size: 11px; }
+.ai-task-flow i { color: #667895; font-style: normal; }
+
+.ai-active-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ai-task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(125, 151, 190, .12);
+}
+
+.ai-task-row:last-child { border-bottom: 0; }
+
+.ai-task-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.ai-task-row-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.ai-task-row-main time {
+  color: #7f8fa8;
+  font-size: 12px;
+}
+
+.ai-task-row-links {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-task-row-links button {
+  padding: 4px 10px;
+  border: 1px solid rgba(125, 151, 190, .22);
+  border-radius: 999px;
+  background: transparent;
+  color: #9fb2cc;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ai-task-row-links button:hover {
+  border-color: rgba(117, 105, 255, .5);
+  color: #b8a9ff;
+}
+
+@media (max-width: 760px) {
+  .ai-task-flow { grid-template-columns: 1fr; }
+  .ai-task-row { grid-template-columns: 1fr; }
+  .ai-task-row-links { justify-content: flex-start; }
+  .ai-active-task-actions { justify-content: flex-start; }
+}

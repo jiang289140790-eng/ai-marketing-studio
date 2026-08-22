@@ -221,13 +221,13 @@ test('Harness GenUI/visualize real browser: bounded charts, flows, tables, fragm
     await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: 'workspace route loaded' });
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace' });
-    await waitForSelector(cdp, '.ai-task-list button', { label: 'task history' });
+    await waitForSelector(cdp, '.ai-task-row-main', { label: 'task history' });
 
-    // 4) 三个任务出现在历史记录里。
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-task-list button').length`), 3);
+    // 4) 三个任务出现在历史记录里（每行主体按钮 = 一条任务）。
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-task-row-main').length`), 3);
 
     // 5) 好任务：图表/流程图/表格/片段/降级块全部渲染。
-    await click(cdp, { selector: '.ai-task-list button', index: 0, label: 'good task history entry' });
+    await click(cdp, { selector: '.ai-task-row-main', index: 0, label: 'good task history entry' });
     await waitForSelector(cdp, '[data-testid="harness-presentation"]', { label: 'presentation panel' });
     await waitForSelector(cdp, '[data-testid="presentation-block-chart"]', { label: 'chart block' });
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-chart"] rect').length >= 1`), true, 'bars render as SVG rects');
@@ -244,20 +244,20 @@ test('Harness GenUI/visualize real browser: bounded charts, flows, tables, fragm
 
     // 6) 刷新恢复：整页 reload 后历史重开仍渲染同一 presentation。
     await cdp.send('Page.reload', { ignoreCache: true });
-    await waitForSelector(cdp, '.ai-task-list button', { label: 'task history after reload' });
-    await click(cdp, { selector: '.ai-task-list button', index: 0, label: 'good task history entry after reload' });
+    await waitForSelector(cdp, '.ai-task-row-main', { label: 'task history after reload' });
+    await click(cdp, { selector: '.ai-task-row-main', index: 0, label: 'good task history entry after reload' });
     await waitForSelector(cdp, '[data-testid="presentation-block-chart"]', { label: 'chart block after refresh' });
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-flow"] .harp-flow-node').length`), 3, 'flow survives refresh recovery');
 
     // 7) 旧任务（无 persisted presentation）：结构化结果派生仍渲染。
-    await click(cdp, { selector: '.ai-task-list button', index: 1, label: 'legacy task history entry' });
+    await click(cdp, { selector: '.ai-task-row-main', index: 1, label: 'legacy task history entry' });
     await waitForSelector(cdp, '[data-testid="presentation-block-summary"]', { label: 'derived structured summary' });
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('任务概况')`), true);
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('旧任务：没有持久化 presentation')`), true);
     await waitForSelector(cdp, '[data-testid="presentation-block-table"]', { label: 'derived artifacts table' });
 
     // 8) 对抗任务：所有恶意块降级，无脚本执行，页面不崩溃。
-    await click(cdp, { selector: '.ai-task-list button', index: 2, label: 'hostile task history entry' });
+    await click(cdp, { selector: '.ai-task-row-main', index: 2, label: 'hostile task history entry' });
     await waitForSelector(cdp, '[data-testid="harness-presentation"]', { label: 'hostile presentation panel' });
     await delay(500);
     assert.equal(await cdp.evaluate('window.__pwned === undefined'), true, 'hostile script payloads never execute');

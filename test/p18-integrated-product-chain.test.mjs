@@ -604,7 +604,7 @@ test('Sidebar exposes core Harness plugins plus the complete secondary operation
   assert.ok(sidebarSource.includes('hidden={!expanded && !collapsed}'));
   assert.ok(sidebarSource.includes('sidebar-collapse-toggle'));
   assert.ok(!sidebarSource.includes('PRIMARY_NAV_IDS'));
-  assert.equal(navigationItems.length, 20);
+  assert.equal(navigationItems.length, 22);
   for (const id of ['publish', 'accounts', 'analytics', 'dailyreport', 'workflows', 'health']) {
     assert.ok(navigationItems.some((item) => item.id === id), `operations navigation is missing ${id}`);
   }

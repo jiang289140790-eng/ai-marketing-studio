@@ -1,0 +1,372 @@
+/* 三页任务架构：任务执行详情页 + 任务结果与审核页（页面专属，使用全局主题变量）。 */
+
+.ai-task-page {
+  --ai-line: rgba(125, 151, 190, .2);
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 22px clamp(16px, 2vw, 32px) 48px;
+  display: grid;
+  gap: 14px;
+}
+
+.ai-task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ai-task-head h2 {
+  margin: 4px 0 6px;
+  font-size: clamp(22px, 2.6vw, 30px);
+  letter-spacing: -.02em;
+}
+
+.ai-task-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 720px;
+}
+
+.ai-task-hero {
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+  border: 1px solid rgba(117, 105, 255, .36);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(112, 67, 255, .24), transparent 42%),
+    linear-gradient(135deg, #11142e 0%, #0b1828 68%);
+}
+
+.ai-task-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-task-identity code {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .06);
+  color: #b9c8dd;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-task-identity small {
+  color: #7f8fa8;
+  font-size: 12px;
+}
+
+.ai-task-intent {
+  margin: 0;
+  color: #e3eaf6;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.ai-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-task-meta span {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .07);
+  color: #b9c8dd;
+  font-size: 12px;
+}
+
+.ai-task-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-task-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  background: var(--panel);
+}
+
+.ai-task-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ai-task-panel-head h3 {
+  margin: 2px 0 0;
+}
+
+.ai-task-panel-head code {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .06);
+  color: #b9c8dd;
+  font-size: 11px;
+}
+
+.ai-task-approvals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.approval-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 210, 122, .12);
+  color: #ffd27a;
+  font-size: 12px;
+}
+
+.ai-task-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.ai-task-steps li {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.ai-step-state {
+  display: inline-flex;
+  width: max-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #26364f;
+  color: #cbd5e5;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.ai-step-state.succeeded,
+.ai-step-state.reused {
+  background: rgba(40, 202, 139, .15);
+  color: #4ee5aa;
+}
+
+.ai-step-state.failed,
+.ai-step-state.blocked {
+  background: rgba(239, 100, 114, .15);
+  color: #ff8b96;
+}
+
+.ai-step-state.running {
+  background: rgba(128, 87, 255, .2);
+  color: #b9a6ff;
+}
+
+.ai-step-state.planned {
+  background: rgba(125, 151, 190, .12);
+  color: #93a4bd;
+}
+
+.ai-step-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-step-copy > strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.ai-step-copy > small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-step-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.ai-step-badges span,
+.ai-step-badges time {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(125, 151, 190, .1);
+  color: #93a4bd;
+  font-size: 11px;
+}
+
+.ai-step-badges .cost {
+  background: rgba(255, 210, 122, .12);
+  color: #ffd27a;
+}
+
+.ai-step-badges .write {
+  background: rgba(40, 202, 139, .12);
+  color: #82e8db;
+}
+
+.ai-step-badges .attempts {
+  background: rgba(128, 87, 255, .16);
+  color: #b9a6ff;
+}
+
+.ai-step-error {
+  margin: 0;
+  color: #ff9aa4;
+  font-size: 13px;
+}
+
+.ai-task-retry-zone {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.ai-task-retry-zone .ai-approvals {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-task-retry-zone .ai-approvals label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #d5ddec;
+  font-size: 13px;
+}
+
+.ai-review-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.ai-review-details .detail-card {
+  min-width: 0;
+}
+
+.ai-task-empty {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.ai-result-copy {
+  padding: 14px;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .04);
+  overflow-wrap: anywhere;
+}
+
+.ai-chain-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ai-chain-meta span {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(125, 151, 190, .1);
+  color: #93a4bd;
+  font-size: 12px;
+}
+
+.ai-chain-meta code {
+  color: #71e4d4;
+  font-size: 11px;
+}
+
+.ai-chain-list {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.ai-chain-list > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.ai-chain-list dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-chain-list dd {
+  margin: 0;
+}
+
+.ai-chain-list code {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .05);
+  color: #b9c8dd;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-task-page .ai-artifacts {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ai-task-page .ai-artifacts code {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .05);
+  color: #71e4d4;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.ai-task-page .ai-technical-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--ai-line);
+}
+
+.ai-task-page .ai-technical-details > summary {
+  padding: 13px 0 4px;
+  cursor: pointer;
+  color: #7888a2;
+  font-size: 12px;
+}
+
+.ai-task-nav {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ai-task-page .ai-task-panel + .ai-task-panel {
+  margin-top: 0;
+}

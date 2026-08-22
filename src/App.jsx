@@ -26,11 +26,15 @@ const WorkflowModelConfigPage = lazy(() => import('./pages/WorkflowModelConfigPa
 const KnowledgeVaultPage = lazy(() => import('./pages/KnowledgeVaultPage').then((module) => ({ default: module.KnowledgeVaultPage })));
 const ResearchWorkspacePage = lazy(() => import('./pages/ResearchWorkspacePage').then((module) => ({ default: module.ResearchWorkspacePage })));
 const AIWorkspacePage = lazy(() => import('./pages/AIWorkspacePage').then((module) => ({ default: module.AIWorkspacePage })));
+const TaskExecutionPage = lazy(() => import('./pages/TaskExecutionPage').then((module) => ({ default: module.TaskExecutionPage })));
+const TaskResultsPage = lazy(() => import('./pages/TaskResultsPage').then((module) => ({ default: module.TaskResultsPage })));
 
-const PRIMARY_WORKSPACE_PAGES = new Set(['ai', 'research', 'generation', 'knowledge', 'connections']);
+const PRIMARY_WORKSPACE_PAGES = new Set(['ai', 'ai-execution', 'ai-results', 'research', 'generation', 'knowledge', 'connections']);
 
 const pageTitles = {
   ai: 'AI 工作台',
+  'ai-execution': '任务执行详情',
+  'ai-results': '任务结果与审核',
   dashboard: 'AI 工作台',
   campaigns: '运营活动',
   plan: '内容计划',
@@ -116,6 +120,10 @@ export default function App() {
     switch (activePage) {
       case 'ai':
         return <AIWorkspacePage {...props} />;
+      case 'ai-execution':
+        return <TaskExecutionPage {...props} />;
+      case 'ai-results':
+        return <TaskResultsPage {...props} />;
       case 'campaigns':
         return <CampaignStrategyPage {...props} />;
       case 'plan':

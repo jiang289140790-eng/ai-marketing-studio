@@ -333,6 +333,27 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         </div>
       </section>
 
+      <nav className="ai-task-flow" aria-label="三页任务流程" data-testid="ai-task-flow">
+        {[
+          ['新任务', '创建或进入任务', activeTask ? ['ai', activeTask.id] : null],
+          ['执行详情', '计划、进度与失败', activeTask ? ['ai-execution', activeTask.id] : null],
+          ['结果与审核', '结果、产物与来源链', activeTask ? ['ai-results', activeTask.id] : null],
+        ].map(([label, description, target], index) => (
+          <button
+            key={label}
+            type="button"
+            data-testid={`ai-task-flow-${['home', 'execution', 'results'][index]}`}
+            className={index === 0 ? 'active' : ''}
+            disabled={!target}
+            onClick={() => target && onNavigate?.(target[0], target[1])}
+          >
+            <b>{index + 1}</b>
+            <span><strong>{label}</strong><small>{description}</small></span>
+            <i>›</i>
+          </button>
+        ))}
+      </nav>
+
       <details className="ai-overview-disclosure">
         <summary><span>任务概览</span><b>{historySummary.running} 个执行中 · {historySummary.completed} 个已完成 · {historySummary.attention} 个待处理</b><i>展开</i></summary>
         <section className="ai-overview" aria-label="工作台概览">
@@ -408,7 +429,11 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           <article className="ai-message ai-message-assistant">
           <div className="ai-section-heading">
             <div><span>AI 营销工作台</span><h2>{stateLabels[activeTask.state] || activeTask.state}</h2></div>
-            {['planned', 'queued', 'running'].includes(activeTask.state) && <button type="button" className="secondary-button" onClick={() => harnessClient.cancel(activeTask.id).then((value) => setActiveTask(taskFromResponse(value) || activeTask)).catch((caught) => setError(caught.message))}>取消任务</button>}
+            <div className="ai-active-task-actions">
+              <button type="button" className="secondary-button" data-testid={`ai-task-open-execution-${activeTask.id}`} onClick={() => onNavigate?.('ai-execution', activeTask.id)}>执行详情</button>
+              <button type="button" className="secondary-button" data-testid={`ai-task-open-results-${activeTask.id}`} onClick={() => onNavigate?.('ai-results', activeTask.id)}>结果与审核</button>
+              {['planned', 'queued', 'running'].includes(activeTask.state) && <button type="button" className="secondary-button" onClick={() => harnessClient.cancel(activeTask.id).then((value) => setActiveTask(taskFromResponse(value) || activeTask)).catch((caught) => setError(caught.message))}>取消任务</button>}
+            </div>
           </div>
           <div className="ai-progress" aria-label="任务进度"><span className={activeTask.state} /></div>
 
@@ -487,7 +512,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         </summary>
         <div className="ai-history-body">
           <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2><p>展开后先显示最近 6 条，需要时再查看全部。</p></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
-          {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <button key={task.id} type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
+          {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <div className="ai-task-row" key={task.id}><button className="ai-task-row-main" type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button><div className="ai-task-row-links"><button type="button" data-testid={`ai-task-open-execution-${task.id}`} onClick={() => onNavigate?.('ai-execution', task.id)}>执行详情</button><button type="button" data-testid={`ai-task-open-results-${task.id}`} onClick={() => onNavigate?.('ai-results', task.id)}>结果与审核</button></div></div>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
         </div>
       </details>
         </div>

@@ -218,26 +218,26 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     <main className="ai-workspace" data-testid="harness-ai-workspace">
       <section className="ai-hero" data-testid="ai-workspace-hero">
         <div className="ai-hero-copy">
-          <span className="ai-kicker">AI 营销指挥台</span>
-          <h1>一句话，启动整个营销流程</h1>
-          <p>从研究、分析、知识沉淀到内容与视觉生成，先看清计划，再决定是否执行。</p>
-          <div className="ai-flow" aria-label="工作流程">
-            <span><b>1</b>说出目标</span><i>→</i><span><b>2</b>确认计划</span><i>→</i><span><b>3</b>查看成果</span>
-          </div>
+          <span className="ai-kicker">AI 营销工作台</span>
+          <h1>今天想完成什么？</h1>
+          <p>描述目标，系统会生成可确认的执行计划；费用、写入和交接仍由你决定。</p>
         </div>
         <div className="ai-hero-status">
           <span className="ai-live-dot" />
-          <div><strong>Staging 智能执行层已连接</strong><small>费用与写入始终由你确认</small></div>
-          <button className="secondary-button" type="button" onClick={() => onNavigate?.('research')}>打开研究工作台</button>
+          <div><strong>Harness 已连接</strong><small>安全模式 · Staging</small></div>
+          <button className="secondary-button" type="button" onClick={() => onNavigate?.('research')}>高级研究模式</button>
         </div>
       </section>
 
-      <section className="ai-overview" aria-label="工作台概览">
-        <div><span>正在执行</span><strong>{historySummary.running}</strong><small>可随时回来查看进度</small></div>
-        <div><span>已完成</span><strong>{historySummary.completed}</strong><small>成果已保留在工作区</small></div>
-        <div><span>需要处理</span><strong>{historySummary.attention}</strong><small>失败或部分完成的任务</small></div>
-        <div className="ai-overview-promise"><span>安全边界</span><strong>计划 → 确认 → 执行</strong><small>不会绕过你的批准</small></div>
-      </section>
+      <details className="ai-overview-disclosure">
+        <summary><span>任务概览</span><b>{historySummary.running} 个执行中 · {historySummary.completed} 个已完成 · {historySummary.attention} 个待处理</b><i>展开</i></summary>
+        <section className="ai-overview" aria-label="工作台概览">
+          <div><span>正在执行</span><strong>{historySummary.running}</strong><small>可随时回来查看进度</small></div>
+          <div><span>已完成</span><strong>{historySummary.completed}</strong><small>成果已保留在工作区</small></div>
+          <div><span>需要处理</span><strong>{historySummary.attention}</strong><small>失败或部分完成的任务</small></div>
+          <div className="ai-overview-promise"><span>安全边界</span><strong>计划 → 确认 → 执行</strong><small>不会绕过你的批准</small></div>
+        </section>
+      </details>
 
       <section className="ai-command-card" data-testid="ai-command-center">
         {routeContext.source && (
@@ -252,12 +252,12 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         )}
         <div className="ai-command-layout">
           <form onSubmit={createPlan}>
-            <div className="ai-command-title"><span>新任务</span><h2>今天想让 AI 帮你完成什么？</h2></div>
+            <div className="ai-command-title"><span>任务目标</span><h2 className="sr-only">创建 AI 任务</h2></div>
             <label className="sr-only" htmlFor="ai-intent">任务目标</label>
             <textarea id="ai-intent" data-testid="harness-intent" value={intent} onChange={(event) => setIntent(event.target.value)} placeholder="直接描述目标，例如：分析这个 X 帖子，保存证据和多模态分析，然后生成待审核 Brief…" maxLength={12000} rows={4} />
             <div className="ai-submit-row">
               <span>此步骤只生成计划，不调用付费工具，也不写入数据。</span>
-              <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '正在生成计划…' : '生成安全计划 →'}</button>
+              <button className="primary-button" data-testid="harness-submit" type="submit" disabled={!intent.trim() || submitting}>{submitting ? '生成中…' : '生成计划'}</button>
             </div>
           </form>
           <details className="ai-capability-panel">
@@ -276,13 +276,14 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       {error && <div className="notice error" role="alert">{error}</div>}
 
       {activeTask && (
-        <section className="ai-active-task" data-testid="harness-active-task">
+        <section className="ai-active-task ai-conversation" data-testid="harness-active-task">
+          <div className="ai-message ai-message-user"><span>你</span><p>{activeTask.request?.intent}</p></div>
+          <article className="ai-message ai-message-assistant">
           <div className="ai-section-heading">
-            <div><span>当前任务</span><h2>{stateLabels[activeTask.state] || activeTask.state}</h2></div>
+            <div><span>AI 营销工作台</span><h2>{stateLabels[activeTask.state] || activeTask.state}</h2></div>
             {['planned', 'queued', 'running'].includes(activeTask.state) && <button type="button" className="secondary-button" onClick={() => harnessClient.cancel(activeTask.id).then((value) => setActiveTask(taskFromResponse(value) || activeTask)).catch((caught) => setError(caught.message))}>取消任务</button>}
           </div>
           <div className="ai-progress" aria-label="任务进度"><span className={activeTask.state} /></div>
-          <p>{activeTask.request?.intent}</p>
 
           {authoritativePlan && (
             <div className="ai-plan" data-testid="harness-authoritative-plan">
@@ -348,6 +349,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           {!terminalTask && activeTask.result?.final_response && (presentationBlocks.length > 0 ? <details className="ai-raw-response"><summary>查看原始回复</summary><div className="ai-result-copy">{activeTask.result.final_response}</div></details> : <div className="ai-result-copy">{activeTask.result.final_response}</div>)}
           {activeTask.error && <div className="notice error" data-testid="harness-task-error">{activeTask.error.operation ? `${activeTask.error.operation} · ` : ''}{activeTask.error.tool_code || activeTask.error.message || activeTask.error.summary || activeTask.error.code}</div>}
           {(activeTask.result?.result_data || artifactRefs.length > 0) && <details className="ai-technical-details"><summary>技术详情</summary>{activeTask.result?.result_data && <pre className="ai-result-copy">{JSON.stringify(activeTask.result.result_data, null, 2)}</pre>}{artifactRefs.length > 0 && <div className="ai-artifacts"><strong>产物身份</strong>{artifactRefs.map((ref) => <code key={ref}>{ref}</code>)}</div>}</details>}
+          </article>
         </section>
       )}
 

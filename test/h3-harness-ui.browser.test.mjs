@@ -40,7 +40,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await cdp.send('Page.navigate', { url: `${baseUrl}#/dashboard` });
     await waitFor(() => cdp.evaluate(`location.href === ${JSON.stringify(`${baseUrl}#/dashboard`)} && document.readyState === 'complete'`), { label: 'AI workspace exact route and DOM readiness' });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace' });
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('一句话，启动整个营销流程')`), true);
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('今天想完成什么？')`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-overview > div').length`), 4, 'AI workspace exposes a compact operational overview');
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-command-center"]') !== null`), true, 'the primary natural-language command center is visible');
     assert.equal(await cdp.evaluate(`document.querySelector('.ai-capability-panel')?.open === false`), true, 'secondary capabilities remain collapsed until requested');
@@ -89,7 +89,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: 'H3 mobile layout settle' });
     assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth > document.documentElement.clientWidth`), false);
 
-    await click(cdp, { selector: '.ai-hero .secondary-button', text: '打开研究工作台', label: 'advanced research mode' });
+    await click(cdp, { selector: '.ai-hero .secondary-button', text: '高级研究模式', label: 'advanced research mode' });
     await waitFor(() => cdp.evaluate(`location.hash.startsWith('#/research')`), { label: 'advanced research route' });
     await waitForSelector(cdp, '.p19-workspace', { label: 'existing advanced research page', timeout: 25_000 });
   } catch (error) {

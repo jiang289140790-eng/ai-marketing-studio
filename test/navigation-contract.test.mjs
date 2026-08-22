@@ -27,7 +27,9 @@ test('侧栏展示完整分组并自动展开当前页面所在分组', async ()
   assert.match(sidebar, /navigationSections\.map/);
   assert.match(sidebar, /section\.items\.some\(\(item\) => item\.id === activeNavigationId\)/);
   assert.match(sidebar, /aria-expanded=\{expanded\}/);
-  assert.match(sidebar, /hidden=\{!expanded\}/);
+  assert.match(sidebar, /hidden=\{!expanded && !collapsed\}/);
+  assert.match(sidebar, /sidebar-collapse-toggle/);
+  assert.match(sidebar, /aria-label=\{collapsed \? '展开侧栏' : '收起侧栏'\}/);
   assert.match(sidebar, /全部功能/);
 });
 

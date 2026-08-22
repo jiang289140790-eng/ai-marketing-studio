@@ -599,7 +599,8 @@ test('Sidebar exposes the complete grouped navigation while preserving every ope
   const sidebarSource = readSource('src/components/Sidebar.jsx');
   assert.ok(sidebarSource.includes('navigationSections.map((section) =>'));
   assert.ok(sidebarSource.includes('aria-expanded={expanded}'));
-  assert.ok(sidebarSource.includes('hidden={!expanded}'));
+  assert.ok(sidebarSource.includes('hidden={!expanded && !collapsed}'));
+  assert.ok(sidebarSource.includes('sidebar-collapse-toggle'));
   assert.ok(!sidebarSource.includes('PRIMARY_NAV_IDS'));
   assert.equal(navigationItems.length, 20);
   for (const id of ['publish', 'accounts', 'analytics', 'dailyreport', 'workflows', 'health']) {

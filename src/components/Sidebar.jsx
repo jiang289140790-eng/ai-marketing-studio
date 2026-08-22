@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { navigationSections } from '../data/navigation';
 
-export function Sidebar({ activePage, onNavigate }) {
+export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
   const activeNavigationId = activePage === 'dashboard' ? 'ai' : activePage;
@@ -42,7 +42,7 @@ export function Sidebar({ activePage, onNavigate }) {
   }
 
   return (
-    <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+    <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''} ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-top">
         <div className="brand">
           <div className="brand-mark">
@@ -53,6 +53,16 @@ export function Sidebar({ activePage, onNavigate }) {
             <span>Staging 智能工作台</span>
           </div>
         </div>
+        <button
+          className="sidebar-collapse-toggle"
+          type="button"
+          aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+          aria-pressed={collapsed}
+          title={collapsed ? '展开侧栏' : '收起侧栏'}
+          onClick={() => onCollapsedChange?.(!collapsed)}
+        >
+          <span aria-hidden="true">{collapsed ? '›' : '‹'}</span>
+        </button>
         <button className="sidebar-toggle" type="button" aria-expanded={mobileOpen} aria-label="展开或收起导航" onClick={() => setMobileOpen((current) => !current)}>
           {mobileOpen ? '关闭' : '菜单'}
         </button>
@@ -78,13 +88,15 @@ export function Sidebar({ activePage, onNavigate }) {
                 <span className="nav-section-title">{section.label}</span>
                 <span className="nav-section-meta"><span>{section.items.length}</span><span aria-hidden="true">⌄</span></span>
               </button>
-              <div className="nav-section-items" id={sectionId} hidden={!expanded}>
+              <div className="nav-section-items" id={sectionId} hidden={!expanded && !collapsed}>
                 {section.items.map((item) => (
                   <button
                     key={item.id}
                     className={`nav-item ${activeNavigationId === item.id ? 'active' : ''}`}
                     onClick={() => navigate(item.id)}
                     type="button"
+                    title={collapsed ? item.label : undefined}
+                    aria-label={collapsed ? item.label : undefined}
                   >
                     <span className="nav-icon">{item.icon}</span>
                     <span className="nav-label">{item.label}</span>

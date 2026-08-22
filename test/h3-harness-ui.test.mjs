@@ -136,10 +136,16 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /snapshot\?\.error\?\.retry_unsafe !== true/);
   assert.match(page, /partial: '部分完成'/);
   assert.match(app, /default:\s*return <AIWorkspacePage/);
+  assert.match(app, /sidebarCollapsed/);
+  assert.match(app, /ams-sidebar-collapsed/);
+  assert.match(app, /onCollapsedChange=\{updateSidebarCollapsed\}/);
   assert.doesNotMatch(sidebar, /PRIMARY_NAV_IDS/);
   assert.match(sidebar, /navigationSections\.map/);
   assert.match(sidebar, /aria-expanded=\{expanded\}/);
   assert.match(sidebar, /activeSectionLabel/);
+  assert.match(sidebar, /sidebar-collapse-toggle/);
+  assert.match(sidebar, /collapsed \? '展开侧栏' : '收起侧栏'/);
+  assert.match(sidebar, /hidden=\{!expanded && !collapsed\}/);
   assert.match(sidebar, /Staging 智能工作台/);
 });
 

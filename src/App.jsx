@@ -77,6 +77,23 @@ export default function App() {
   const useAuxiliaryFrame = Boolean(auxiliaryDescription) && !PRIMARY_WORKSPACE_PAGES.has(activePage);
   const [auxiliaryScope, setAuxiliaryScope] = useState('campaign');
   const [auxiliaryMode, setAuxiliaryMode] = useState('normal');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return globalThis.localStorage?.getItem('ams-sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  function updateSidebarCollapsed(nextValue) {
+    const collapsed = Boolean(nextValue);
+    setSidebarCollapsed(collapsed);
+    try {
+      globalThis.localStorage?.setItem('ams-sidebar-collapsed', String(collapsed));
+    } catch {
+      // The layout remains usable when browser storage is unavailable.
+    }
+  }
 
   useEffect(() => {
     setAuxiliaryScope('campaign');
@@ -141,8 +158,13 @@ export default function App() {
   }, [activePage, auxiliaryMode, auxiliaryScope, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, userId]);
 
   return (
-    <div className="app-shell">
-      <Sidebar activePage={activePage} onNavigate={navigate} />
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <Sidebar
+        activePage={activePage}
+        collapsed={sidebarCollapsed}
+        onCollapsedChange={updateSidebarCollapsed}
+        onNavigate={navigate}
+      />
       <div className="main-shell">
         <Header description={auxiliaryDescription} title={pageTitles[activePage] || pageTitles.dashboard} />
         {userId && contextPages.has(activePage) && !auxiliaryDescription && <CampaignContextBar onNavigate={navigate} />}

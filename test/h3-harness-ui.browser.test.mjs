@@ -36,6 +36,7 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     await cdp.open();
     tracker = createPageTracker(cdp);
     await cdp.send('Page.enable');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.navigate', { url: `${baseUrl}#/dashboard` });
     await waitFor(() => cdp.evaluate(`location.href === ${JSON.stringify(`${baseUrl}#/dashboard`)} && document.readyState === 'complete'`), { label: 'AI workspace exact route and DOM readiness' });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace' });
@@ -58,6 +59,17 @@ test('H3 real browser: natural-language workspace is the simple default and adva
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-section-toggle').length`), 6, 'every product group is directly discoverable');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'default route exposes exactly one active navigation item');
     assert.equal(await cdp.evaluate(`document.querySelector('.nav-item.active .nav-label')?.textContent === 'AI 工作台'`), true, 'default route aliases only to the AI workspace navigation item');
+
+    assert.equal(await cdp.evaluate(`document.querySelector('.app-shell').classList.contains('sidebar-collapsed')`), false, 'desktop navigation starts expanded on a fresh profile');
+    await click(cdp, { selector: '.sidebar-collapse-toggle', label: 'collapse desktop sidebar' });
+    await waitFor(() => cdp.evaluate(`document.querySelector('.app-shell').classList.contains('sidebar-collapsed')`), { label: 'desktop sidebar collapsed state' });
+    await waitFor(() => cdp.evaluate(`document.querySelector('.sidebar').getBoundingClientRect().width <= 80`), { label: 'collapsed navigation icon rail width' });
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 20, 'collapsing the rail keeps every destination available');
+    assert.equal(await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-label')).every((item) => getComputedStyle(item).display === 'none')`), true, 'collapsed navigation hides verbose labels');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'collapsed navigation preserves the active route');
+    await click(cdp, { selector: '.sidebar-collapse-toggle', label: 'expand desktop sidebar' });
+    await waitFor(() => cdp.evaluate(`!document.querySelector('.app-shell').classList.contains('sidebar-collapsed')`), { label: 'desktop sidebar expanded state' });
+    assert.equal(await cdp.evaluate(`globalThis.localStorage.getItem('ams-sidebar-collapsed')`), 'false', 'sidebar preference is persisted safely');
 
     await click(cdp, { selector: '.ai-capability-panel > summary', label: 'expand suggested tasks' });
     await click(cdp, { selector: '.ai-suggestions button', index: 0, label: 'first suggested task' });

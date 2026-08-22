@@ -107,7 +107,7 @@ function browserFixtureSource() {
         record('plan', value);
         if (value.projectId !== projectId) throw new Error('fixture binding mismatch');
         if (value.intent === intent) { phase = 'planned'; current = structuredClone(base); return { ok: true, task: structuredClone(current) }; }
-        presets = [...document.querySelectorAll('.ai-suggestions button')].map((button) => button.textContent);
+        presets = [...document.querySelectorAll('.ai-suggestions button')].map((button) => button.querySelector('span')?.textContent || button.textContent);
         if (presets.includes(value.intent)) {
           // A visible preset must be sent verbatim and must produce an
           // authoritative plan — never a client-side plan and never a
@@ -187,11 +187,14 @@ test('real browser: natural language becomes an authoritative plan, exact approv
     // its displayed text, submitting it produces an authoritative plan (never
     // a client-side plan and never a post-submission PLANNER_SLOT_REQUIRED
     // error), and the two-phase plan flow stays intact for each preset.
+    if (!await cdp.evaluate(`document.querySelector('.ai-capability-panel')?.open`)) {
+      await click(cdp, { selector: '.ai-capability-panel > summary', label: 'expand deterministic presets' });
+    }
     const presetCount = await cdp.evaluate(`document.querySelectorAll('.ai-suggestions button').length`);
     assert.equal(presetCount, 5, 'exactly the bounded preset set is advertised');
     for (let index = 0; index < presetCount; index += 1) {
       await click(cdp, { selector: '.ai-suggestions button', index, label: `visible preset ${index}` });
-      const displayed = await cdp.evaluate(`document.querySelector('.ai-suggestions button:nth-child(${index + 1})')?.textContent`);
+      const displayed = await cdp.evaluate(`document.querySelector('.ai-suggestions button:nth-child(${index + 1}) span')?.textContent`);
       await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="harness-intent"]').value === ${JSON.stringify(displayed)}`), { label: `preset ${index} fills exactly its displayed text` });
       const callsBefore = await cdp.evaluate(`globalThis.__harnessFixture.calls.filter((call) => call.method === 'plan').length`);
       await click(cdp, { selector: '[data-testid="harness-submit"]', label: `submit preset ${index}` });

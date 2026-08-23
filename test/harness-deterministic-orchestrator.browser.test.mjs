@@ -1,7 +1,8 @@
 /* global fetch */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import {
@@ -13,6 +14,7 @@ import {
 const ROOT = join(import.meta.dirname, '..');
 const THREAD_ID = 'th-11111111-1111-4111-8111-111111111111';
 const TASK_ID = 'ht-11111111-1111-4111-8111-111111111111';
+const SCREENSHOT_DIR = join(ROOT, 'acceptance-evidence', 'harness-conversation-20260823');
 
 function fixtureSource() {
   return `(async () => {
@@ -28,6 +30,7 @@ function fixtureSource() {
     let eventSink;
     const pendingEvents = [];
     const calls = [];
+    const navigations = [];
     const messages = [];
     const threadState = { status: 'active', currentTaskId: null, stopGeneration: false };
     const append = (value) => messages.push({ sequence: ++sequence, status: 'completed', ...value });
@@ -59,6 +62,10 @@ function fixtureSource() {
               { step: 'st-3', label: '生成 Brief', operation: 'workspace.brief.assemble' },
             ],
           } });
+          append({ id: 'tool', thread_id: threadId, task_id: taskId, role: 'tool', kind: 'tool_call', content: '准备读取项目上下文', structured_payload: { tool: 'workspace.evidence.list', project_id: 'project-safe', API_KEY: 'must-never-render', authorization: 'must-never-render', nested: { password: 'must-never-render' } } });
+          append({ id: 'evidence', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'evidence', content: '已找到可复用 Evidence', structured_payload: { count: 2, source: '当前项目', credential: 'must-never-render', Cookie: 'must-never-render' } });
+          append({ id: 'historical', thread_id: threadId, task_id: 'ht-22222222-2222-4222-8222-222222222222', role: 'assistant', kind: 'artifact', content: '{"auth":"must-never-render"}', structured_payload: { signed_url: 'must-never-render', signature: 'must-never-render', title: '历史成品' } });
+          append({ id: 'unsafe-text', thread_id: threadId, role: 'assistant', kind: 'text', content: '{"bearer":"must-never-render"}' });
           threadState.status = 'waiting_confirmation';
           threadState.currentTaskId = taskId;
           queueMicrotask(() => emit('plan_created', {}));
@@ -76,13 +83,13 @@ function fixtureSource() {
     };
     localStorage.clear();
     document.body.innerHTML = '<div id="root"></div>';
-    createRoot(document.getElementById('root')).render(React.createElement(AIWorkspacePage, { harnessClient: client, onNavigate: () => {} }));
+    createRoot(document.getElementById('root')).render(React.createElement(AIWorkspacePage, { harnessClient: client, onNavigate: (page, id) => navigations.push({ page, id }) }));
     globalThis.__setGenerationActive = (active) => {
       threadState.stopGeneration = active;
       threadState.status = active ? 'executing' : 'waiting_confirmation';
       emit(active ? 'task_progress' : 'plan_created', {});
     };
-    globalThis.__fixture = { calls, messages, threadId, taskId };
+    globalThis.__fixture = { calls, messages, navigations, threadId, taskId };
     return true;
   })()`;
 }
@@ -118,6 +125,40 @@ test('real browser: authoritative plan and confirmation remain in one server-bac
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.conversation-card.kind-plan li').length`), 3);
     assert.equal(await cdp.evaluate(`document.querySelector('.conversation-card.kind-plan').textContent.includes('2 次付费调用')`), true);
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-flow-execution"]').disabled`), false);
+    await click(cdp, { selector: '[data-testid="ai-task-flow-execution"]', label: 'task flow execution link' });
+    await click(cdp, { selector: '[data-testid="ai-task-flow-results"]', label: 'task flow results link' });
+    await click(cdp, { selector: '.conversation-toolbar button:first-of-type', label: 'conversation toolbar execution link' });
+    await click(cdp, { selector: '.conversation-toolbar button:last-of-type', label: 'conversation toolbar results link' });
+    await click(cdp, { selector: '.conversation-card.kind-plan footer button:not(.primary)', label: 'plan execution link' });
+    await click(cdp, { selector: '.conversation-card.kind-plan footer button:last-child', label: 'plan results link' });
+    const navigationSnapshot = await cdp.evaluate(`structuredClone(globalThis.__fixture.navigations)`);
+    assert.deepEqual(navigationSnapshot, [
+      { page: 'ai-execution', id: TASK_ID },
+      { page: 'ai-results', id: TASK_ID },
+      { page: 'ai-execution', id: TASK_ID },
+      { page: 'ai-results', id: TASK_ID },
+      { page: 'ai-execution', id: TASK_ID },
+      { page: 'ai-results', id: TASK_ID },
+    ], 'all visible task links preserve the authoritative taskId');
+    for (const [width, height] of [[1440, 1000], [1366, 900], [1024, 850], [768, 900], [390, 844]]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
+      const state = await cdp.evaluate(`(() => ({
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        plan: Boolean(document.querySelector('.kind-plan')),
+        tool: Boolean(document.querySelector('.kind-tool_call details')),
+        result: Boolean(document.querySelector('.kind-evidence .conversation-summary-grid')),
+        taskButtons: Array.from(document.querySelectorAll('.conversation-toolbar button')).every((button) => button.getBoundingClientRect().right <= innerWidth + 1),
+        hasPre: Boolean(document.querySelector('.conversation-workspace pre')),
+        leaked: document.querySelector('.conversation-workspace').innerText.includes('must-never-render'),
+        historicalActions: document.querySelectorAll('.kind-artifact footer button').length,
+      }))()`);
+      assert.deepEqual(state, { overflow: false, plan: true, tool: true, result: true, taskButtons: true, hasPre: false, leaked: false, historicalActions: 0 }, `${width}px structured conversation remains safe and reachable`);
+      if (process.env.AMS_CAPTURE_ACCEPTANCE_SCREENSHOTS === '1') {
+        mkdirSync(SCREENSHOT_DIR, { recursive: true });
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(SCREENSHOT_DIR, `tasks-new-conversation-${width}.png`), Buffer.from(screenshot.data, 'base64'));
+      }
+    }
     const sendsBeforeActiveEnter = await cdp.evaluate(`globalThis.__fixture.calls.filter((call) => call.method === 'sendMessage').length`);
     await cdp.evaluate(`globalThis.__setGenerationActive(true)`);
     await waitForSelector(cdp, '.composer-stop', { label: 'authoritative stop action' });
@@ -134,7 +175,8 @@ test('real browser: authoritative plan and confirmation remain in one server-bac
     assert.equal(sends.length, 2);
     assert.equal(sends.every((call) => call.value.threadId === THREAD_ID), true);
     assert.equal(new Set(sends.map((call) => call.value.requestId)).size, 2);
-    assert.equal(snapshot.messages.filter((message) => message.task_id).every((message) => message.task_id === TASK_ID), true);
+    assert.equal(snapshot.messages.filter((message) => message.id !== 'historical' && message.task_id).every((message) => message.task_id === TASK_ID), true);
+    assert.equal(snapshot.messages.find((message) => message.id === 'historical')?.task_id, 'ht-22222222-2222-4222-8222-222222222222');
     assert.equal(tracker.state.exceptions, 0, tracker.state.lastException || 'browser exception');
   } catch (error) {
     if (cdp) error.message += `\n${await captureDiagnostics(cdp, { tracker })}`;

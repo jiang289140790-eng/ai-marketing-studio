@@ -43,12 +43,67 @@ function reconcileMessages(current, incoming) {
   return normalizeMessages([...authoritative, ...pending]);
 }
 
-function MessageCard({ message, onNavigate, onCommand, canConfirm }) {
+function readableLabel(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function summarizeValue(value) {
+  if (value == null || value === '') return '未提供';
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (Array.isArray(value)) return `${value.length} 项`;
+  if (typeof value === 'object') return `${Object.keys(value).length} 个字段`;
+  return String(value);
+}
+
+const VISIBLE_PAYLOAD_FIELDS = Object.freeze({
+  tool_call: ['tool', 'name', 'operation', 'summary', 'status'],
+  tool_result: ['tool', 'name', 'operation', 'status', 'count', 'duration_ms', 'summary'],
+  evidence: ['title', 'source', 'source_name', 'count', 'status', 'summary'],
+  analysis: ['title', 'count', 'status', 'summary', 'version'],
+  knowledge: ['title', 'count', 'status', 'summary', 'version'],
+  brief: ['title', 'review_status', 'status', 'version', 'summary'],
+  artifact: ['title', 'name', 'type', 'status', 'count', 'version'],
+  progress: ['completed_steps', 'total_steps', 'status', 'summary'],
+});
+
+function StructuredSummary({ payload, kind, limit = 6 }) {
+  const allowed = new Set(VISIBLE_PAYLOAD_FIELDS[kind] || []);
+  const entries = Object.entries(payload || {})
+    .filter(([key, value]) => allowed.has(key) && value != null && value !== '')
+    .slice(0, limit);
+  if (!entries.length) return <p className="conversation-empty-result">暂时没有可展示的数据。</p>;
+  return <dl className="conversation-summary-grid">{entries.map(([key, value]) => <div key={key}><dt>{readableLabel(key)}</dt><dd>{summarizeValue(value)}</dd></div>)}</dl>;
+}
+
+function isSerializedPayload(value) {
+  const text = String(value || '').trim();
+  if (!text || !['{', '['].includes(text[0])) return false;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed !== null && typeof parsed === 'object';
+  } catch {
+    return false;
+  }
+}
+
+function MessageIcon({ role, kind }) {
+  if (role === 'user') return <span className="message-avatar user" aria-hidden="true">你</span>;
+  const glyphs = { plan: '☷', tool_call: '⌘', tool_result: '✓', approval: '!', progress: '↻', evidence: 'E', analysis: 'A', knowledge: 'K', brief: 'B', artifact: '◆', error: '!' };
+  return <span className={`message-avatar assistant kind-${kind}`} aria-hidden="true">{glyphs[kind] || 'AI'}</span>;
+}
+
+function MessageCard({ message, onNavigate, onCommand, canConfirm, currentTaskId }) {
   const payload = messagePayload(message);
   const kind = message.kind || 'text';
-  const taskId = message.task_id || message.taskId;
+  const messageTaskId = message.task_id || message.taskId;
+  const taskId = messageTaskId && messageTaskId === currentTaskId ? currentTaskId : null;
+  const safeContent = !isSerializedPayload(message.content) ? message.content : '';
   if (kind === 'text') {
-    return <article className={`conversation-message ${message.role === 'user' ? 'user' : 'assistant'}`} data-kind={kind} data-testid="conversation-message"><div>{messageText(message)}</div></article>;
+    const content = messageText(message);
+    const displayText = message.role === 'user' || !isSerializedPayload(content) ? content : '结构化响应已由安全视图收起。';
+    return <article className={`conversation-message ${message.role === 'user' ? 'user' : 'assistant'}`} data-kind={kind} data-testid="conversation-message"><MessageIcon role={message.role} kind={kind} /><div className="message-body"><span className="message-author">{message.role === 'user' ? '你' : 'DeepSeek Harness'}</span><div>{displayText}</div></div></article>;
   }
   const labels = {
     plan: '执行计划', tool_call: 'Tool Call', tool_result: '工具结果', approval: '等待确认',
@@ -57,13 +112,17 @@ function MessageCard({ message, onNavigate, onCommand, canConfirm }) {
   };
   return (
     <article className={`conversation-card kind-${kind}`} data-kind={kind}>
-      <header><strong>{labels[kind] || kind}</strong><span>{message.status}</span></header>
-      {message.content && <p>{message.content}</p>}
-      {kind === 'plan' && Array.isArray(payload.steps) && <ol>{payload.steps.map((step, index) => <li key={step.step || index}><b>{step.label || step.title || `步骤 ${index + 1}`}</b><small>{step.operation || step.tool || ''}</small></li>)}</ol>}
+      <MessageIcon role={message.role} kind={kind} />
+      <div className="conversation-card-body">
+      <header><strong>{labels[kind] || readableLabel(kind)}</strong><span className={`message-status status-${message.status || 'ready'}`}>{message.status || 'ready'}</span></header>
+      {safeContent && <p>{safeContent}</p>}
+      {kind === 'plan' && Array.isArray(payload.steps) && <ol className="conversation-plan-steps">{payload.steps.map((step, index) => <li key={step.step || index}><span>{index + 1}</span><div><b>{step.label || step.title || `步骤 ${index + 1}`}</b><small>{step.operation || step.tool || ''}</small></div></li>)}</ol>}
       {kind === 'plan' && <div className="conversation-plan-risk"><span>费用风险：{payload.cost_indicators?.paid_calls > 0 ? `${payload.cost_indicators.paid_calls} 次付费调用` : '无付费调用'}</span><span>审批：{Object.values(payload.approvals || {}).some(Boolean) ? '需要确认' : '无需额外审批'}</span></div>}
-      {kind === 'tool_call' && <details><summary>查看参数摘要</summary><pre>{JSON.stringify(payload, null, 2)}</pre></details>}
-      {['tool_result', 'evidence', 'analysis', 'knowledge', 'brief', 'artifact'].includes(kind) && <details><summary>查看结构化结果</summary><pre>{JSON.stringify(payload, null, 2)}</pre></details>}
+      {kind === 'tool_call' && <details className="conversation-tool-details"><summary>查看工具与参数摘要</summary><StructuredSummary payload={payload} kind={kind} /></details>}
+      {['tool_result', 'evidence', 'analysis', 'knowledge', 'brief', 'artifact'].includes(kind) && <StructuredSummary payload={payload} kind={kind} />}
+      {messageTaskId && !taskId && <p className="conversation-historical-note">历史任务记录，仅供查看。</p>}
       {taskId && <footer>{kind === 'plan' && canConfirm && <button type="button" className="primary" onClick={() => onCommand?.('执行')}>确认执行</button>}<button type="button" onClick={() => onNavigate?.('ai-execution', taskId)}>查看执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', taskId)}>查看完整结果</button></footer>}
+      </div>
     </article>
   );
 }
@@ -211,7 +270,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   return (
     <main className="ai-workspace conversation-page" data-testid="harness-ai-workspace">
       <section className="conversation-heading">
-        <div><span>AMS × DeepSeek Harness</span><h1>今天想完成什么？</h1><p>问答、计划、执行进度和结果都保留在同一个会话中。</p></div>
+        <div><span>AMS × DeepSeek Harness</span><h1>{messages.length ? 'AI 营销工作区' : '今天想完成什么？'}</h1><p>问答、计划、执行进度和结果都保留在同一个会话中。</p></div>
         <div className={`conversation-connection ${connection}`}><i />{connectionLabel}</div>
       </section>
 
@@ -222,9 +281,10 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       </nav>
 
       <section className={`conversation-workspace ${messages.length === 0 && !liveText ? 'is-empty' : 'has-conversation'}`} data-testid="conversation-workspace">
+        {messages.length > 0 && <header className="conversation-toolbar"><div><span className="harness-mark">H</span><div><strong>DeepSeek Harness</strong><small>{currentTaskId ? '已关联当前任务' : '对话会话'}</small></div></div><div>{currentTaskId && <><button type="button" onClick={() => onNavigate?.('ai-execution', currentTaskId)}>执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', currentTaskId)}>结果与审核</button></>}</div></header>}
         <div className="conversation-transcript" ref={transcriptRef} aria-live="polite" data-testid="conversation-transcript" onScroll={(event) => { const node = event.currentTarget; setUserNearBottom(node.scrollHeight - node.scrollTop - node.clientHeight < 96); }}>
-          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>今天想完成什么？</h2><p>直接提问，或描述一个需要执行的营销任务。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} onNavigate={onNavigate} onCommand={send} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
-          {liveText && <article className="conversation-message assistant streaming"><div>{liveText}<span className="stream-caret" /></div></article>}
+          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>今天想完成什么？</h2><p>直接提问，或描述一个需要执行的营销任务。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onCommand={send} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
+          {liveText && <article className="conversation-message assistant streaming"><MessageIcon role="assistant" kind="text" /><div className="message-body"><span className="message-author">DeepSeek Harness</span><div>{liveText}<span className="stream-caret" /></div></div></article>}
           {sending && !liveText && <div className="conversation-thinking"><i /><span>正在思考…</span></div>}
         </div>
 

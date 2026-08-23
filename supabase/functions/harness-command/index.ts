@@ -365,11 +365,11 @@ Deno.serve(async (request) => {
           if (assistantMessageId) await rpc('harness_complete_message_v1', {
             p_user_id: userId, p_thread_id: checked.body.thread_id, p_message_id: assistantMessageId, p_status: 'stopped',
           });
-          await appendEvent('generation_stopped', { code: 'GENERATION_STOPPED' });
           await rpc('harness_release_generation_v1', {
             p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
             p_status: 'stopped', p_clear_current_task: true,
           });
+          await appendEvent('generation_stopped', { code: 'GENERATION_STOPPED' });
           return;
         }
         await rpc('harness_release_generation_v1', {
@@ -378,11 +378,11 @@ Deno.serve(async (request) => {
         });
         if (!assistantMessageId && assistantText) await appendEvent('assistant_text_completed', { content: assistantText });
       } catch (error) {
-        await appendEvent('error', { code: 'GENERATION_FAILED', message: 'Assistant generation failed.' });
         await rpc('harness_release_generation_v1', {
           p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
           p_status: 'failed', p_clear_current_task: true,
         });
+        await appendEvent('error', { code: 'GENERATION_FAILED', message: 'Assistant generation failed.' });
       }
     };
     EdgeRuntime.waitUntil(processGeneration());

@@ -128,7 +128,7 @@ test('SQL 集成：全新数据库回放 51 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 54, '迁移集必须包含 staging 已应用的 G3 历史与 Harness conversation contract，共 54 项');
+    assert.equal(migrations.length, 55, '迁移集必须包含 staging 已应用的 G3 历史、Harness conversation contract 与过期生成恢复，共 55 项');
     for (const name of migrations) {
       if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
         const legacy = `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous)

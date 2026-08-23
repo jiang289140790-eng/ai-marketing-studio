@@ -73,6 +73,7 @@ test('same message request replay returns before confirmation processing in queu
 test('Edge source implements real SSE replay, heartbeat and no simulated model streaming', async () => {
   const source = await readFile(new globalThis.URL('../supabase/functions/harness-command/index.ts', import.meta.url), 'utf8');
   const migration = await readFile(new globalThis.URL('../supabase/migrations/20260823032957_harness_conversation_contract_v1.sql', import.meta.url), 'utf8');
+  const recoveryMigration = await readFile(new globalThis.URL('../supabase/migrations/20260824005728_harness_expired_generation_recovery.sql', import.meta.url), 'utf8');
   assert.match(source, /text\/event-stream/);
   assert.match(source, /last-event-id/);
   assert.match(source, /: heartbeat/);
@@ -93,4 +94,9 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /internal\/task-events/);
   assert.doesNotMatch(source, /Task projection is pushed durably[\s\S]*\/v1\/tasks\/\$\{threadState\.currentTaskId\}/);
   assert.doesNotMatch(source, /setTimeout\([^,]+,\s*\d+\).*assistant_text_delta/s);
+  assert.match(recoveryMigration, /active_generation_lease_until/);
+  assert.match(recoveryMigration, /stopGeneration[\s\S]*active_generation_lease_until\s*>=\s*now\(\)/);
+  const failureRelease = source.indexOf("p_status: 'failed'");
+  const failureEvent = source.indexOf("appendEvent('error'", failureRelease);
+  assert.ok(failureRelease >= 0 && failureEvent > failureRelease, 'failure lease must release before its terminal event');
 });

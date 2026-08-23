@@ -149,6 +149,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'supabase/migrations/20260820170554_g3_provider_registry_routing_v1.sql',
   'supabase/migrations/20260821090000_g3_provider_registry_routing_v1.sql',
   'supabase/migrations/20260823032957_harness_conversation_contract_v1.sql',
+  'supabase/migrations/20260824005728_harness_expired_generation_recovery.sql',
   'supabase/tests/harness_conversation_contract_v1.test.sql',
   'test/harness-conversation-edge-contract.test.mjs',
 ]);
@@ -197,6 +198,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'supabase/migrations/20260820170554_g3_provider_registry_routing_v1.sql',
   'supabase/migrations/20260821090000_g3_provider_registry_routing_v1.sql',
   'supabase/migrations/20260823032957_harness_conversation_contract_v1.sql',
+  'supabase/migrations/20260824005728_harness_expired_generation_recovery.sql',
   'supabase/tests/harness_conversation_contract_v1.test.sql',
   'test/harness-conversation-edge-contract.test.mjs',
   'supabase/functions/harness-tool-bridge/bridge-core.mjs',

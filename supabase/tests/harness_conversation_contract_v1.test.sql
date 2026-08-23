@@ -149,6 +149,26 @@ begin
   if not ((api.harness_release_generation_v1(owner_id, thread_id, 'generation-1', 'stopped', true))->>'released')::boolean then
     raise exception 'generation release failed';
   end if;
+
+  if not ((api.harness_claim_generation_v1(owner_id, thread_id, 'generation-expired'))->>'claimed')::boolean then
+    raise exception 'expired lease test generation claim failed';
+  end if;
+  update ams_private.harness_threads_v1
+  set active_generation_lease_until = now() - interval '1 minute'
+  where id = thread_id;
+  if ((api.harness_get_thread_v1(owner_id, thread_id)->'actions'->>'stopGeneration')::boolean) then
+    raise exception 'expired generation remained stoppable';
+  end if;
+  if not ((api.harness_get_thread_v1(owner_id, thread_id)->'actions'->>'sendMessage')::boolean) then
+    raise exception 'expired generation kept the composer disabled';
+  end if;
+  if ((api.harness_request_stop_v1(owner_id, thread_id))->>'accepted')::boolean then
+    raise exception 'expired generation stop was accepted';
+  end if;
+  if not ((api.harness_release_generation_v1(owner_id, thread_id, 'generation-expired', 'failed', true))->>'released')::boolean then
+    raise exception 'expired generation cleanup failed';
+  end if;
+
   if ((api.harness_claim_generation_v1(owner_id, thread_id, 'generation-1'))->>'claimed')::boolean then
     raise exception 'completed request id reclaimed after release';
   end if;

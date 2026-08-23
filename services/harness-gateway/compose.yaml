@@ -42,7 +42,7 @@ services:
       - tool_egress
 
   model-proxy:
-    image: ams-harness-gateway:0.7.0-conversation-v1
+    image: ams-harness-gateway:0.5.0-g1
     container_name: ams-harness-model-proxy
     restart: unless-stopped
     read_only: true

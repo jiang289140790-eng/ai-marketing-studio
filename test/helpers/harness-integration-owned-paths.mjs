@@ -86,6 +86,16 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/test/tool-contract.test.mjs',
   'services/harness-gateway/test/deterministic-executor.test.mjs',
   'services/harness-gateway/test/planner.test.mjs',
+  // H1/H2 semantic planning, capability memory and execution critic:
+  // exact files only; no directory-level expansion.
+  'docs/H1_DEEPSEEK_SEMANTIC_AGENT_LOOP.md',
+  'docs/H2_DYNAMIC_CAPABILITY_MEMORY_CRITIC.md',
+  'services/harness-gateway/capability-registry.mjs',
+  'services/harness-gateway/execution-critic.mjs',
+  'services/harness-gateway/project-task-memory.mjs',
+  'services/harness-gateway/semantic-planner.mjs',
+  'services/harness-gateway/test/h2-capability-memory-critic.test.mjs',
+  'services/harness-gateway/test/semantic-planner.test.mjs',
   'services/harness-gateway/tool-client.mjs',
   'services/harness-gateway/tool-contract.mjs',
   'src/App.jsx',
@@ -167,6 +177,14 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/state-store.mjs',
   'services/harness-gateway/tool-client.mjs',
   'services/harness-gateway/tool-contract.mjs',
+  // H1/H2 semantic planning, capability memory and execution critic:
+  // exact files only; no directory-level expansion.
+  'docs/H1_DEEPSEEK_SEMANTIC_AGENT_LOOP.md',
+  'docs/H2_DYNAMIC_CAPABILITY_MEMORY_CRITIC.md',
+  'services/harness-gateway/capability-registry.mjs',
+  'services/harness-gateway/execution-critic.mjs',
+  'services/harness-gateway/project-task-memory.mjs',
+  'services/harness-gateway/semantic-planner.mjs',
   'services/harness-gateway/test/**',
   'supabase/functions/harness-command/index.ts',
   'supabase/functions/harness-command/edge-core.mjs',

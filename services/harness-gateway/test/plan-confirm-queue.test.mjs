@@ -120,12 +120,42 @@ test('plan-only submission never executes and replays idempotently', async () =>
   assert.equal(first.task.state, 'planned');
   assert.equal(first.task.plan.schema_version, 'ams_harness_plan_v1');
   assert.equal(first.task.plan_fingerprint, first.task.plan.fingerprint);
+  assert.equal(first.task.h2_context.capability_registry.registry_version, 'h2_capability_registry_v1');
+  assert.ok(first.task.h2_context.capability_registry.capability_count > 0, 'reviewed runtime capabilities are attached to the exact plan');
+  assert.equal(first.task.h2_context.project_memory.item_count, 0, 'a new project task starts with bounded empty memory');
+  assert.equal(first.task.h2_context.preflight_critic.verdict, 'pass', 'the exact immutable plan passes preflight review');
   assert.equal(bridge.calls.length, 0, 'planning must not contact the bridge');
   await queue.whenIdle();
   assert.equal(bridge.calls.length, 0, 'a plan alone must never execute');
   const replay = await queue.plan(planRequest(), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
   assert.equal(replay.replayed, true);
   assert.equal(replay.task.id, first.task.id);
+});
+
+test('semantic clarification releases planning reservation and performs zero bridge or runner calls', async () => {
+  const bridge = mockBridge();
+  let plannerCalls = 0;
+  const clarificationPlanner = {
+    async plan() {
+      plannerCalls += 1;
+      return {
+        ok: false,
+        code: 'PLANNER_CLARIFICATION_REQUIRED',
+        diagnostics: { questions: [{ id: 'x_sort', field: 'sort', prompt: 'X 只能按最新发布搜索，是否接受？', options: ['接受', '改搜 Reddit 热门'] }] },
+      };
+    },
+  };
+  const queue = createQueue(bridge, { plannerOverride: clarificationPlanner });
+  const request = planRequest({ request_id: 'clarification-1', intent: '帮我收集最近最热的 X 帖子 5 条' });
+  const first = await queue.plan(request, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(first.code, 'PLANNER_CLARIFICATION_REQUIRED');
+  assert.equal(first.diagnostics.questions.length, 1);
+  assert.equal(queue.list('user-a').length, 0, 'clarification does not persist an executable task');
+  assert.equal(bridge.calls.length, 0, 'clarification never contacts business tools');
+  const second = await queue.plan(request, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  assert.equal(second.code, 'PLANNER_CLARIFICATION_REQUIRED');
+  assert.equal(plannerCalls, 2, 'a later explicit request can plan fresh after the reservation is released');
+  assert.equal(bridge.calls.length, 0);
 });
 
 test('stale or tampered confirmation fails closed with zero execution', async () => {
@@ -334,10 +364,11 @@ test('an accepted failed-step retry replays idempotently while queued, running, 
       runner: async () => { throw new Error('legacy runner must not run'); },
       planner,
       initialTasks: [partial],
-      deterministicRunner: async () => {
+      deterministicRunner: async (_request, _taskId, _signal, _runtime, liveTask) => {
         executions += 1;
         markStarted();
         await gate;
+        applyScriptedStepEvidence(liveTask, outcome);
         return { outcome, final_response: outcome, artifact_refs: [] };
       },
       validateRuntimeContext: (context) => (context?.delegatedAuthorization ? { ok: true } : { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' }),
@@ -355,7 +386,7 @@ test('an accepted failed-step retry replays idempotently while queued, running, 
     await queue.whenIdle();
     const finalReplay = queue.retry(request, partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
     assert.equal(finalReplay.replayed, true, `${outcome}: final replay`);
-    assert.equal(finalReplay.task.state, outcome);
+    assert.equal(finalReplay.task.state, outcome, JSON.stringify({ error: finalReplay.task.error, critic: finalReplay.task.h2_context?.postflight_critic, states: finalReplay.task.step_states }));
     assert.equal(executions, 1, `${outcome}: exact replay never enqueues or executes twice`);
     const otherStep = queue.retry(retryRequest(partial.id, partial.plan.fingerprint, 'st-1', approvals), partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
     assert.notEqual(otherStep.replayed, true, `${outcome}: a different step is never treated as the accepted retry`);
@@ -850,11 +881,26 @@ test('inactive partial tasks share the bounded history retention limit', async (
 // performs exactly one read-only generation.status there).
 // ---------------------------------------------------------------------------
 
+function applyScriptedStepEvidence(task, outcome) {
+  if (outcome === 'succeeded') {
+    for (const step of task.plan.steps) task.step_states[step.step] = { state: 'succeeded' };
+    return;
+  }
+  if (outcome === 'running') {
+    const first = task.plan.steps[0];
+    task.step_states[first.step] = { ...(task.step_states[first.step] || {}), state: 'succeeded', observed_round: 1 };
+    return;
+  }
+  const failed = task.plan.steps.find((step) => task.step_states?.[step.step]?.state === 'failed' || task.step_states?.[step.step]?.failed_count > 0) || task.plan.steps[0];
+  task.step_states[failed.step] = { ...(task.step_states[failed.step] || {}), state: 'failed', observed_round: 1 };
+}
+
 function scriptedQueue({ outcomes, initialTasks = [], onEvent = () => {}, capacity = 10 }) {
   let executions = 0;
-  const deterministicRunner = async () => {
+  const deterministicRunner = async (_request, _taskId, _signal, _runtime, task) => {
     const outcome = outcomes[Math.min(executions, outcomes.length - 1)];
     executions += 1;
+    applyScriptedStepEvidence(task, outcome);
     return { outcome, final_response: `scripted-round-${executions - 1}`, artifact_refs: [] };
   };
   const queue = new HarnessTaskQueue({
@@ -942,11 +988,15 @@ test('concurrent continuations are idempotently merged into exactly one refresh 
   const queue = new HarnessTaskQueue({
     runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
     planner,
-    deterministicRunner: async () => {
+    deterministicRunner: async (_request, _taskId, _signal, _runtime, task) => {
       executions += 1;
-      if (executions === 1) return { outcome: 'running', final_response: 'round-1', artifact_refs: [] };
+      if (executions === 1) {
+        applyScriptedStepEvidence(task, 'running');
+        return { outcome: 'running', final_response: 'round-1', artifact_refs: [] };
+      }
       markStarted();
       await gate;
+      applyScriptedStepEvidence(task, 'succeeded');
       return { outcome: 'succeeded', final_response: 'round-2', artifact_refs: [] };
     },
     validateRuntimeContext: (context) => (context?.delegatedAuthorization ? { ok: true } : { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' }),
@@ -999,8 +1049,9 @@ test('continuation rejects an expired delegated authorization before any executi
   const queue = new HarnessTaskQueue({
     runner: async () => { throw new Error('legacy runner must not run for planned tasks'); },
     planner,
-    deterministicRunner: async () => {
+    deterministicRunner: async (_request, _taskId, _signal, _runtime, task) => {
       executions += 1;
+      applyScriptedStepEvidence(task, 'running');
       return { outcome: 'running', final_response: 'parked', artifact_refs: [] };
     },
     validateRuntimeContext: (context) => validateDelegatedAuthorization(context, { now, minimumValidityMs: 750_000 }),

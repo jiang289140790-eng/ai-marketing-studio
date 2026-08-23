@@ -2,7 +2,10 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { HARNESS_DIAGNOSTIC_CATEGORIES, HARNESS_DIAGNOSTIC_CODES, HARNESS_DIAGNOSTIC_STAGES, MAX_HARNESS_DIAGNOSTIC_SUMMARY, redactSensitive } from './harness-runner.mjs';
 import { derivePresentation, normalizePresentation } from './presentation/presentation-contract.mjs';
+import { buildCapabilityManifest } from './capability-registry.mjs';
+import { critiqueExecution, critiquePlan } from './execution-critic.mjs';
 import { validatePlanShape } from './planner.mjs';
+import { buildProjectTaskMemory } from './project-task-memory.mjs';
 
 export const GATEWAY_SCHEMA_VERSION = 'ams_harness_gateway_v1';
 
@@ -465,6 +468,27 @@ export class HarnessTaskQueue {
         } else if (task.plan.fingerprint !== task.plan_fingerprint) {
           task.plan_fingerprint = task.plan.fingerprint;
         }
+        if (task.h2_context) {
+          const currentManifest = buildCapabilityManifest();
+          const contextValid = task.h2_context?.capability_registry?.registry_version === currentManifest.registry_version
+            && task.h2_context?.capability_registry?.fingerprint === currentManifest.fingerprint
+            && task.h2_context?.preflight_critic?.verdict === 'pass';
+          if (!contextValid) {
+            task.state = 'failed';
+            task.updated_at = new Date().toISOString();
+            task.error = { code: 'CAPABILITY_MANIFEST_DRIFT', message: 'Persisted capability context no longer matches the reviewed registry.' };
+            task.h2_context = {
+              capability_registry: {
+                registry_version: currentManifest.registry_version,
+                fingerprint: currentManifest.fingerprint,
+                capability_count: currentManifest.capabilities.length,
+              },
+              project_memory: null,
+              preflight_critic: { schema_version: 'ams_harness_execution_critic_v1', verdict: 'blocked', code: 'CAPABILITY_MANIFEST_DRIFT' },
+              postflight_critic: null,
+            };
+          }
+        }
       }
       if (task.state === 'queued' || task.state === 'running') {
         if (task.pending_continuation === true) {
@@ -494,7 +518,7 @@ export class HarnessTaskQueue {
       }
       if (task.step_states == null || typeof task.step_states !== 'object' || Array.isArray(task.step_states)) task.step_states = {};
       this.#tasks.set(task.id, task);
-      if (['GATEWAY_RESTARTED', 'PLAN_CORRUPTED', 'PLANNED_TASK_LIMIT_RESTORED'].includes(task.error?.code)) this.#emit(task, 'recovered_failed');
+      if (['GATEWAY_RESTARTED', 'PLAN_CORRUPTED', 'PLANNED_TASK_LIMIT_RESTORED', 'CAPABILITY_MANIFEST_DRIFT'].includes(task.error?.code)) this.#emit(task, 'recovered_failed');
     }
     this.#pruneHistory();
   }
@@ -630,8 +654,27 @@ export class HarnessTaskQueue {
       await Promise.resolve();
       try {
       let planResult;
+      let capabilityManifest;
+      let memoryResult;
       try {
-        planResult = await this.#planner.plan({ taskId: task.id, request: { ...validated.value, request_fingerprint: requestFingerprint } });
+        capabilityManifest = buildCapabilityManifest();
+        memoryResult = validated.value.project_id
+          ? buildProjectTaskMemory({
+              tasks: [...this.#tasks.values()],
+              userId: validated.value.user_id,
+              projectId: validated.value.project_id,
+            })
+          : { ok: true, value: null };
+        if (!memoryResult.ok) {
+          this.#planReservations.delete(reservationKey);
+          return { ok: false, code: memoryResult.code };
+        }
+        planResult = await this.#planner.plan({
+          taskId: task.id,
+          request: { ...validated.value, request_fingerprint: requestFingerprint },
+          capabilityManifest,
+          projectMemory: memoryResult.value,
+        });
       } catch {
         this.#planReservations.delete(reservationKey);
         return { ok: false, code: 'PLANNER_UNAVAILABLE' };
@@ -655,6 +698,25 @@ export class HarnessTaskQueue {
         this.#planReservations.delete(reservationKey);
         return { ok: false, code: 'PLANNER_OUTPUT_INVALID' };
       }
+      const critic = critiquePlan({ plan, capabilityManifest, memory: memoryResult.value });
+      if (!critic.ok) {
+        this.#planReservations.delete(reservationKey);
+        return { ok: false, code: critic.value.code };
+      }
+      task.h2_context = {
+        capability_registry: {
+          registry_version: capabilityManifest.registry_version,
+          fingerprint: capabilityManifest.fingerprint,
+          capability_count: capabilityManifest.capabilities.length,
+        },
+        project_memory: memoryResult.value ? {
+          fingerprint: memoryResult.value.fingerprint,
+          item_count: memoryResult.value.items.length,
+          prior_workflows: memoryResult.value.items.map((item) => item.workflow),
+        } : null,
+        preflight_critic: critic.value,
+        postflight_critic: null,
+      };
       task.plan = plan;
       task.plan_fingerprint = plan.fingerprint;
       this.#tasks.set(task.id, task);
@@ -914,6 +976,23 @@ export class HarnessTaskQueue {
         this.#transition(task, 'cancelled');
         return;
       }
+      if (task.plan) {
+        const critic = critiqueExecution({
+          plan: task.plan,
+          stepStates: task.step_states || {},
+          output,
+        });
+        task.h2_context = { ...(task.h2_context || {}), postflight_critic: critic.value };
+        if (!critic.ok) {
+          const error = Object.assign(new Error('Execution result failed the bounded postflight critic.'), { code: critic.value.code });
+          error.partialResult = {
+            ...output,
+            outcome: 'failed',
+            partial_completion: true,
+          };
+          throw error;
+        }
+      }
       task.result = {
         final_response: boundedUtf8(output?.final_response, MAX_RESULT_BYTES),
         artifact_refs: Array.isArray(output?.artifact_refs) ? output.artifact_refs.slice(0, 50).map((value) => bounded(value, 500)) : [],
@@ -947,6 +1026,14 @@ export class HarnessTaskQueue {
         this.#transition(task, output?.outcome === 'partial' ? 'partial' : output?.outcome === 'failed' ? 'failed' : 'succeeded');
       }
     } catch (error) {
+      if (task.plan && !task.h2_context?.postflight_critic) {
+        const critic = critiqueExecution({
+          plan: task.plan,
+          stepStates: task.step_states || {},
+          output: { outcome: 'failed' },
+        });
+        task.h2_context = { ...(task.h2_context || {}), postflight_critic: critic.value };
+      }
       const taskFailure = controller.signal.aborted
         ? null
         : error?.diagnostic

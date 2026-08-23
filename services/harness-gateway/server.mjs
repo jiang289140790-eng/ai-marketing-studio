@@ -6,6 +6,7 @@ import { HarnessTaskQueue, runWithIsolatedTaskView, runWithTaskTimeout, validate
 import { createHarnessRunner, harnessReadiness } from './harness-runner.mjs';
 import { appendTaskEvent, loadTaskEvents, loadTaskSnapshots } from './state-store.mjs';
 import { createPlanner } from './planner.mjs';
+import { createDeepSeekSemanticPlanner } from './semantic-planner.mjs';
 import { createBridgeStateReader, executeConfirmedPlan } from './deterministic-executor.mjs';
 import { createToolClient } from './tool-client.mjs';
 import { createConversationRunner } from './conversation-runner.mjs';
@@ -25,6 +26,11 @@ const MAX_BODY = 64 * 1024;
 const TASK_TIMEOUT_MS = Number(process.env.HARNESS_TASK_TIMEOUT_MS || 600_000);
 const TOOL_WINDOW_MS = 150_000;
 const QUEUE_CAPACITY = 2;
+const semanticPlanner = createDeepSeekSemanticPlanner({
+  endpoint: process.env.AMS_MODEL_PROXY_URL || 'http://127.0.0.1:8791/v1/chat/completions',
+  model: process.env.HARNESS_PLANNER_MODEL || 'deepseek-chat',
+  timeoutMs: Number(process.env.HARNESS_PLANNER_TIMEOUT_MS || 20_000),
+});
 
 // The deterministic executor is the only code that turns a confirmed plan
 // into tool calls. Planning uses the deterministic intent classifier (the
@@ -71,7 +77,7 @@ for (const event of unacknowledgedCandidates) taskProjector.enqueue(event);
 const queue = new HarnessTaskQueue({
   runner: createHarnessRunner(),
   deterministicRunner: createDeterministicRunner(),
-  planner: createPlanner(),
+  planner: createPlanner({ modelPlanner: semanticPlanner }),
   capacity: QUEUE_CAPACITY,
   initialTasks,
   onEvent: (event) => {

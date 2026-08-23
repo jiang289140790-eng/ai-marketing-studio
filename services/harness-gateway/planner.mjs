@@ -20,6 +20,9 @@ export const MAX_PLAN_INTENT = 12_000;
 export const REQUEST_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 export const STEP_ID_PATTERN = /^st-\d+$/;
 export const ITEM_ID_PATTERN = /^st-\d+#\d+$/;
+export const PLANNER_AUDIT_SCHEMA_VERSION = 'ams_harness_planner_audit_v1';
+const PLANNER_AUDIT_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+const PLANNER_AUDIT_VALUE = /^[a-z0-9][a-z0-9._-]{0,119}$/i;
 
 const POST_URL_PATTERN = /(https?:\/\/[^\s，,。；;）)>"\]]+)/iu;
 const INTEGER_PATTERN = /(\d{1,2})\s*条/;
@@ -93,6 +96,9 @@ const COMPARE_PERSIST_TRIGGERS = /保存(?!的|过)|存档|persist\b|save\b/i;
 const SIMILAR_TRIGGERS = /类似|相似|相似内容|相似风格|generate\s+similar|similar\s+content|草案|draft\b/i;
 const LINEAGE_TRIGGERS = /溯源|血缘|审计|lineage|audit\b/i;
 const CAPABILITY_TRIGGERS = /能力|capabilit|当前项目|项目状态|项目信息|read\s+(?:the\s+)?project|what\s+can/i;
+const X_UNSUPPORTED_RANKING = /最热|热门|热度|最火|爆款|most\s+popular|hottest|top\s+performing/i;
+const X_SUPPORTED_LATEST = /按最新|最新发布|时间倒序|latest\s+only|sort\s*[:=]\s*latest/i;
+const CLARIFICATION_CONTEXT = /用户已确认的约束[:：]/;
 
 function plainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -450,7 +456,7 @@ function validateI2vReferenceAsset(workflow, candidateSlots) {
  * `slots` come from the deterministic classifier or from an injectable model
  * planner; both run through the same fail-closed normalization below.
  */
-export function buildPlan({ taskId, request, workflowId, slots: candidateSlots }) {
+export function buildPlan({ taskId, request, workflowId, slots: candidateSlots, plannerAudit = null }) {
   if (typeof taskId !== 'string' || !/^ht-[0-9a-f-]{36}$/.test(taskId)) return fail('PLAN_TASK_ID_INVALID');
   if (!request || typeof request !== 'object') return fail('PLAN_REQUEST_INVALID');
   if (typeof request.user_id !== 'string' || !request.user_id.trim()) return fail('PLAN_BINDING_INVALID', { field: 'user_id' });
@@ -516,6 +522,7 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots }
     request_fingerprint: request.request_fingerprint,
     approvals,
     cost_indicators: costIndicators,
+    ...(plannerAudit ? { planner_audit: plannerAudit } : {}),
     slots,
     steps,
   };
@@ -535,7 +542,7 @@ export function validatePlanShape(plan) {
   const allowed = new Set([
     'schema_version', 'plan_version', 'task_id', 'workflow', 'workflow_title', 'intent',
     'user_id', 'project_id', 'request_fingerprint', 'approvals', 'cost_indicators',
-    'slots', 'steps', 'fingerprint',
+    'planner_audit', 'slots', 'steps', 'fingerprint',
   ]);
   const unknown = Object.keys(plan).find((key) => !allowed.has(key));
   if (unknown) return fail('PLAN_UNKNOWN_FIELD', { field: unknown });
@@ -561,6 +568,26 @@ export function validatePlanShape(plan) {
     || !Number.isSafeInteger(plan.cost_indicators.paid_calls) || plan.cost_indicators.paid_calls < 0
     || !Number.isSafeInteger(plan.cost_indicators.online_writes) || plan.cost_indicators.online_writes < 0) {
     return fail('PLAN_COST_INDICATORS_INVALID');
+  }
+  if (plan.planner_audit !== undefined) {
+    const audit = plan.planner_audit;
+    const allowedAudit = new Set([
+      'schema_version', 'mode', 'provider', 'model', 'planner_version',
+      'prompt_schema_fingerprint', 'clarification_state', 'validation_verdict',
+    ]);
+    if (!plainObject(audit)) return fail('PLAN_PLANNER_AUDIT_INVALID');
+    const unknownAudit = Object.keys(audit).find((key) => !allowedAudit.has(key));
+    if (unknownAudit) return fail('PLAN_PLANNER_AUDIT_INVALID', { field: unknownAudit });
+    if (audit.schema_version !== PLANNER_AUDIT_SCHEMA_VERSION
+      || !['deterministic', 'semantic'].includes(audit.mode)
+      || !PLANNER_AUDIT_VALUE.test(audit.provider)
+      || !PLANNER_AUDIT_VALUE.test(audit.model)
+      || !PLANNER_AUDIT_VALUE.test(audit.planner_version)
+      || !PLANNER_AUDIT_FINGERPRINT_PATTERN.test(audit.prompt_schema_fingerprint)
+      || !['not_required', 'resolved'].includes(audit.clarification_state)
+      || audit.validation_verdict !== 'authoritative_plan_validated') {
+      return fail('PLAN_PLANNER_AUDIT_INVALID');
+    }
   }
   // 与 buildPlan 同一 G1 图生视频契约（前置）：持久化计划缺/坏引用素材身份
   // 同样先于无关必填字段报告（旧计划或篡改计划都不能绕过素材必需性）。
@@ -615,22 +642,51 @@ export function validatePlanShape(plan) {
  */
 export function createPlanner({ modelPlanner = null } = {}) {
   return {
-    async plan({ taskId, request }) {
-      let classification;
-      if (modelPlanner) {
+    async plan({ taskId, request, capabilityManifest = null, projectMemory = null }) {
+      let classification = classifyIntent(request.intent);
+      let plannerMode = 'deterministic';
+      const requiresSemanticClarification = classification.ok === true
+        && ['search_x', 'search_x_reddit'].includes(classification.value.workflow)
+        && X_UNSUPPORTED_RANKING.test(request.intent)
+        && !X_SUPPORTED_LATEST.test(request.intent);
+      const hasClarificationContext = CLARIFICATION_CONTEXT.test(request.intent);
+      if (modelPlanner && (classification.ok !== true || requiresSemanticClarification || hasClarificationContext)) {
+        plannerMode = 'semantic';
         let raw;
         try {
-          raw = await modelPlanner(request.intent);
-        } catch {
-          return fail('PLANNER_UNAVAILABLE');
+          raw = await modelPlanner(request.intent, {
+            capability_manifest: capabilityManifest,
+            project_memory: projectMemory,
+          });
+        } catch (error) {
+          const code = typeof error?.code === 'string' && /^PLANNER_[A-Z0-9_]{1,64}$/.test(error.code)
+            ? error.code
+            : 'PLANNER_UNAVAILABLE';
+          return fail(code);
         }
-        if (raw && raw.ok === false) return raw;
-        if (!raw || !plainObject(raw) || typeof raw.workflow !== 'string') {
+        if (raw?.kind === 'clarification') {
+          return fail('PLANNER_CLARIFICATION_REQUIRED', { questions: raw.questions });
+        }
+        // Backward-compatible injection seam for deterministic unit fakes:
+        // production semantic output always carries kind=plan and is already
+        // schema-normalized by semantic-planner.mjs.
+        if (!raw || !plainObject(raw) || (raw.kind != null && raw.kind !== 'plan') || typeof raw.workflow !== 'string') {
           return fail('PLANNER_OUTPUT_INVALID');
         }
-        classification = { ok: true, value: raw };
-      } else {
-        classification = classifyIntent(request.intent);
+        classification = { ok: true, value: { workflow: raw.workflow, slots: raw.slots } };
+        if (requiresSemanticClarification
+          && raw.workflow === 'search_x'
+          && raw.slots?.sort === 'latest'
+          && !X_SUPPORTED_LATEST.test(request.intent)) {
+          return fail('PLANNER_CLARIFICATION_REQUIRED', {
+            questions: [{
+              id: 'x_sort',
+              field: 'sort',
+              prompt: 'X 当前只能按最新发布搜索，无法证明“最热”。是否改为按最新发布，或改搜 Reddit 热门内容？',
+              options: ['按最新发布搜索 X', '改搜 Reddit 热门内容'],
+            }],
+          });
+        }
       }
       if (classification.ok !== true) {
         return classification && classification.ok === false
@@ -640,11 +696,35 @@ export function createPlanner({ modelPlanner = null } = {}) {
       if (!plainObject(classification.value) || typeof classification.value.workflow !== 'string') {
         return fail('PLANNER_OUTPUT_INVALID');
       }
+      const modelAudit = modelPlanner?.audit;
+      const plannerAudit = plannerMode === 'semantic'
+        ? {
+            schema_version: PLANNER_AUDIT_SCHEMA_VERSION,
+            mode: 'semantic',
+            provider: modelAudit?.provider || 'semantic-model',
+            model: modelAudit?.model || 'injected-model',
+            planner_version: modelAudit?.planner_version || 'h1-semantic-planner-v1',
+            prompt_schema_fingerprint: modelAudit?.prompt_schema_fingerprint
+              || createHash('sha256').update('injected-semantic-planner-v1').digest('hex'),
+            clarification_state: hasClarificationContext ? 'resolved' : 'not_required',
+            validation_verdict: 'authoritative_plan_validated',
+          }
+        : {
+            schema_version: PLANNER_AUDIT_SCHEMA_VERSION,
+            mode: 'deterministic',
+            provider: 'ams-deterministic',
+            model: 'none',
+            planner_version: 'deterministic-planner-v1',
+            prompt_schema_fingerprint: createHash('sha256').update('ams-deterministic-planner-v1').digest('hex'),
+            clarification_state: 'not_required',
+            validation_verdict: 'authoritative_plan_validated',
+          };
       const built = buildPlan({
         taskId,
         request,
         workflowId: classification.value.workflow,
         slots: classification.value.slots,
+        plannerAudit,
       });
       if (!built.ok) return built;
       return { ok: true, value: built.value };

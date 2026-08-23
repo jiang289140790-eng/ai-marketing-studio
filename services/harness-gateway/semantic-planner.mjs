@@ -34,7 +34,10 @@ export function semanticPlannerSystemPrompt(capabilityManifest = buildCapability
     `schema_version must be ${SEMANTIC_PLANNER_SCHEMA_VERSION}.`,
     'For an executable request return: {"schema_version":"...","kind":"plan","workflow":"catalog id","slots":{...}}.',
     'If a required fact is missing or the requested behavior is unsupported/ambiguous, return: {"schema_version":"...","kind":"clarification","questions":[{"id":"...","field":"...","prompt":"...","options":["...","..."]}]}.',
-    'Ask at most three concise questions. Never silently map X/Twitter hottest/most popular to latest: X search currently supports latest only; ask whether latest is acceptable or whether the user wants Reddit hot/top.',
+    'Ask at most three concise questions. Omit options for a free-text question; when options are present they must contain 2 to 4 unique non-empty choices.',
+    'Distinguish reuse from collection: when the user asks to inspect, rank, compare, or find the best item in the current project or its existing/saved evidence, use compare_project. Do not ask for a search keyword, do not select a search workflow, and do not invent a save/write.',
+    'For compare_project, map impressions/views/plays/exposure to metric=views and engagement/interactions to metric=engagement. Existing/saved evidence is input state, not a request to persist the comparison.',
+    'Only for a request that actually collects/searches new X/Twitter content: never silently map hottest/most popular to latest. X search currently supports latest only; ask whether latest is acceptable or whether the user wants Reddit hot/top.',
     'A request to collect/save N results means save_count=N when online saving is clearly requested; otherwise do not invent a write.',
     `Reviewed capability registry (${checked.value.registry_version}, ${checked.value.fingerprint}): ${JSON.stringify(checked.value.capabilities)}`,
   ].join('\n');
@@ -49,7 +52,13 @@ function normalizeQuestion(value) {
   if (typeof value.prompt !== 'string' || !value.prompt.trim() || value.prompt.length > 240) return null;
   const question = { id: value.id, field: value.field, prompt: value.prompt.trim() };
   if (value.options !== undefined) {
-    if (!Array.isArray(value.options) || value.options.length < 2 || value.options.length > 4) return null;
+    if (!Array.isArray(value.options) || value.options.length > 4) return null;
+    // An empty options array carries the same bounded meaning as omitting the
+    // optional field: the user must answer in free text. Normalize it away
+    // instead of rejecting an otherwise valid clarification. A single option
+    // remains invalid because it presents no real choice.
+    if (value.options.length === 0) return question;
+    if (value.options.length < 2) return null;
     const options = value.options.map((entry) => typeof entry === 'string' ? entry.trim() : '');
     if (options.some((entry) => !entry || entry.length > 80) || new Set(options).size !== options.length) return null;
     question.options = options;

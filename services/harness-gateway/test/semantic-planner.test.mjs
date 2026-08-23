@@ -6,6 +6,7 @@ import {
   SEMANTIC_PLANNER_SCHEMA_VERSION,
   createDeepSeekSemanticPlanner,
   normalizeSemanticPlannerOutput,
+  semanticPlannerSystemPrompt,
 } from '../semantic-planner.mjs';
 
 const TASK_ID = 'ht-11111111-1111-4111-8111-111111111111';
@@ -30,9 +31,50 @@ test('strict semantic output accepts one fixed workflow or bounded clarification
     questions: [{ id: 'x_sort', field: 'sort', prompt: 'X 只能按最新发布搜索，是否接受？', options: ['接受', '改搜 Reddit 热门'] }],
   });
   assert.equal(clarification.ok, true);
+  const freeTextClarification = normalizeSemanticPlannerOutput({
+    schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION,
+    kind: 'clarification',
+    questions: [{ id: 'keyword', field: 'keyword', prompt: '请提供关键词。', options: [] }],
+  });
+  assert.equal(freeTextClarification.ok, true);
+  assert.equal('options' in freeTextClarification.value.questions[0], false);
+  assert.equal(normalizeSemanticPlannerOutput({
+    schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION,
+    kind: 'clarification',
+    questions: [{ id: 'count', field: 'count', prompt: '请选择数量。', options: ['1', '2', '3', '4', '5'] }],
+  }).code, 'PLANNER_OUTPUT_INVALID');
   assert.equal(normalizeSemanticPlannerOutput({ schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION, kind: 'plan', workflow: 'search_x', slots: {}, sql: 'select 1' }).code, 'PLANNER_OUTPUT_UNKNOWN_FIELD');
   assert.equal(normalizeSemanticPlannerOutput({ schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION, kind: 'plan', workflow: 'invented', slots: {} }).code, 'PLANNER_OUTPUT_WORKFLOW_INVALID');
   assert.equal(normalizeSemanticPlannerOutput({ schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION, kind: 'clarification', questions: Array(4).fill({ id: 'same', field: 'sort', prompt: 'x' }) }).code, 'PLANNER_OUTPUT_INVALID');
+});
+
+test('semantic prompt binds saved project evidence comparison to compare_project without search or writes', () => {
+  const prompt = semanticPlannerSystemPrompt();
+  assert.match(prompt, /existing\/saved evidence/);
+  assert.match(prompt, /use compare_project/);
+  assert.match(prompt, /Do not ask for a search keyword/);
+  assert.match(prompt, /impressions\/views\/plays\/exposure to metric=views/);
+  assert.match(prompt, /Only for a request that actually collects\/searches new X\/Twitter content/);
+});
+
+test('captured DeepSeek saved-evidence comparison plan remains read-only and exact', async () => {
+  const calls = [];
+  const semantic = createDeepSeekSemanticPlanner({
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION,
+        kind: 'plan',
+        workflow: 'compare_project',
+        slots: { metric: 'views', count: 5 },
+      }) } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  const output = await semantic('请查看当前项目中已保存的证据，找出展现量最高的 X 帖子。');
+  assert.deepEqual(output, { kind: 'plan', workflow: 'compare_project', slots: { metric: 'views', count: 5 } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tools, undefined);
+  assert.equal(calls[0].tool_choice, undefined);
 });
 
 test('DeepSeek adapter sends no tools and parses strict JSON response', async () => {

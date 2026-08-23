@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ams-harness-gateway:0.2.0-h2
+    image: ams-harness-gateway:0.7.0-conversation-v1
     container_name: ams-harness-gateway
     restart: unless-stopped
     read_only: true
@@ -18,10 +18,13 @@ services:
       HARNESS_WORKSPACE: /workspace
       HARNESS_HOME: /data/harness
       HARNESS_EVENT_FILE: /data/gateway/events.jsonl
+      HARNESS_CONVERSATION_JOURNAL: /data/gateway/conversations.jsonl
+      HARNESS_PROJECTOR_ACK_FILE: /data/gateway/projected-events.log
       AMS_GATEWAY_HMAC_SECRET_FILE: /run/secrets/ams_gateway_hmac_secret
       DEEPSEEK_API_KEY: internal-model-proxy
       DEEPSEEK_BASE_URL: http://model-proxy:8791
       AMS_TOOL_BRIDGE_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge
+      AMS_CONVERSATION_CALLBACK_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co
       AMS_TOOL_BRIDGE_SECRET_FILE: /run/secrets/ams_tool_bridge_secret
     secrets:
       - ams_gateway_hmac_secret
@@ -39,7 +42,7 @@ services:
       - tool_egress
 
   model-proxy:
-    image: ams-harness-gateway:0.2.0-h2
+    image: ams-harness-gateway:0.7.0-conversation-v1
     container_name: ams-harness-model-proxy
     restart: unless-stopped
     read_only: true

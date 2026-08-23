@@ -14,7 +14,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
-const CONTAINER = 'supabase_db_p19-op-workbench';
+const CONTAINER = process.env.AMS_SUPABASE_DB_CONTAINER || 'supabase_db_p19-op-workbench';
 
 function dockerReady() {
   try {
@@ -58,7 +58,9 @@ function bootstrap(dbName) {
   const ext = 'create extension if not exists pgcrypto with schema extensions;\n'
     + 'create extension if not exists "uuid-ossp" with schema extensions;\n'
     + 'create extension if not exists supabase_vault with schema vault;\n';
-  let result = psql(dbName, null, { stdin: dump });
+  let result = psql(dbName, 'create schema if not exists api; create schema if not exists ams_private;');
+  assert.equal(result.status, 0, `bootstrap schemas failed: ${result.stderr || result.stdout}`);
+  result = psql(dbName, null, { stdin: dump });
   assert.equal(result.status, 0, `bootstrap dump 应用失败：${result.stderr || result.stdout}`);
   result = psql(dbName, null, { stdin: ext });
   assert.equal(result.status, 0, `扩展引导失败：${result.stderr || result.stdout}`);
@@ -68,7 +70,7 @@ function replayAllMigrations(dbName) {
   const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
     .filter((name) => name.endsWith('.sql'))
     .sort();
-  assert.equal(migrations.length, 51, '迁移集必须包含 G1 生成执行层、P19 证据报价绑定、ACL 收尾与既有 Provider task 恢复，共 51 项');
+  assert.equal(migrations.length, 54, '迁移集必须包含 staging 已应用的 G3 历史与 Harness conversation contract，共 54 项');
   for (const name of migrations) {
     if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
       // P22 迁移需要 legacy 预留行前置（与 p19-sql-integration 同源）。
@@ -107,6 +109,12 @@ function replayG1Adversarial(dbName) {
   assert.equal(run.status, 0, `G1 对抗 SQL 失败：\n${run.stderr || run.stdout}`);
 }
 
+function replayConversationContract(dbName) {
+  const sql = readFileSync(join(REPO_ROOT, 'supabase', 'tests', 'harness_conversation_contract_v1.test.sql'), 'utf8');
+  const run = psql(dbName, null, { stdin: sql });
+  assert.equal(run.status, 0, `Harness conversation contract SQL failed:\n${run.stderr || run.stdout}`);
+}
+
 test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真实 PostgreSQL 17）', async () => {
   const docker = dockerReady();
   assert.ok(docker.ok, `基础设施失败：Docker CLI/daemon 不可用（${docker.version || '无法探测'}），无法回放真实 PostgreSQL 17 迁移`);
@@ -120,6 +128,21 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
     bootstrap(dbA);
     replayAllMigrations(dbA);
     replayG1Adversarial(dbA);
+    replayConversationContract(dbA);
+
+    const conversationSeed = psql(dbA, `
+      insert into auth.users (id,instance_id,aud,role,email,encrypted_password,created_at,updated_at)
+      values ('dddddddd-dddd-4ddd-8ddd-dddddddddddd','00000000-0000-0000-0000-000000000000','authenticated','authenticated','thread-concurrency@example.invalid','',now(),now());
+      select api.harness_create_thread_v1('dddddddd-dddd-4ddd-8ddd-dddddddddddd','ai-marketing-studio-staging',null,'concurrent-thread','Concurrency');`);
+    assert.equal(conversationSeed.status, 0, conversationSeed.stderr || conversationSeed.stdout);
+    const conversationThread = JSON.parse(conversationSeed.stdout.trim().split(/\r?\n/).at(-1)).threadId;
+    const generationClaims = await Promise.all(['generation-a', 'generation-b'].map((generationId) => psqlAsync(dbA,
+      `select api.harness_claim_generation_v1('dddddddd-dddd-4ddd-8ddd-dddddddddddd','${conversationThread}','${generationId}')::text;`)));
+    const claimed = generationClaims.map((run) => {
+      assert.equal(run.status, 0, run.stderr || run.stdout);
+      return JSON.parse(run.stdout.trim()).claimed;
+    });
+    assert.equal(claimed.filter(Boolean).length, 1, 'two real PostgreSQL sessions must yield exactly one generation claim');
 
     // 冒烟：注册表 + ACL + quote 往返（第一次回放）。
     const smoke = psql(dbA, `select
@@ -142,7 +165,7 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
       (select prosecdef and proconfig @> array['search_path=ams_private, public'] from pg_proc p where p.oid='ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)'::regprocedure);`);
     assert.equal(smoke.status, 0, smoke.stderr || smoke.stdout);
     assert.deepEqual(smoke.stdout.trim().split('|'),
-      ['3', 't', 't', 't', 'f', 't', 'f', 'f', 'f', 'f', 't', 'f', 'f', 'f', 't', 't', 't'],
+      ['6', 't', 't', 't', 'f', 't', 'f', 'f', 'f', 'f', 't', 'f', 'f', 'f', 't', 't', 't'],
       '第一次回放后注册表/表/函数/ACL（含内部 helper 权限收窄）/私有 bucket 必须精确');
 
     // ---- 并发同 key 提交：恰好 1 applied + 5 replayed + 1 行作业 ----
@@ -241,7 +264,7 @@ test('G1：两次干净迁移回放 + G1 对抗 SQL + 并发同 key 提交（真
       has_function_privilege('authenticated','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute'),
       has_function_privilege('service_role','ams_private.g1_resolve_evidence_binding(uuid,text,jsonb,jsonb,jsonb,jsonb)','execute');`);
     assert.equal(smokeB.status, 0, smokeB.stderr || smokeB.stdout);
-    assert.deepEqual(smokeB.stdout.trim().split('|'), ['3', '0', 't', 'f', 't', 'f', 'f', 't', 'f', 'f', 't'],
+    assert.deepEqual(smokeB.stdout.trim().split('|'), ['6', '0', 't', 'f', 't', 'f', 'f', 't', 'f', 'f', 't'],
       '第二次干净回放后注册表/空作业表/事件表/ACL（含内部 helper 权限收窄）必须精确');
   } finally {
     execFileSync('docker', ['exec', CONTAINER, 'dropdb', '-U', 'postgres', '--if-exists', dbA], { encoding: 'utf8', stdio: 'ignore' });

@@ -139,16 +139,27 @@ begin
 
   -- ---- 1. 固定 provider 注册表（服务端所有；三模式精确存在）----
   result := api.g1_get_provider_registry();
-  perform pg_temp.assert_true(jsonb_array_length(result) = 3, '注册表必须恰好 3 条（image/t2v/i2v）');
+  perform pg_temp.assert_true(
+    jsonb_array_length(result) = 4,
+    '注册表必须包含百炼三模式与 AutoDL 图片模式共 4 条；实际=' || left(result::text, 2000));
   perform pg_temp.assert_true(
     result @> '[{"provider_id":"bailian","mode":"image","model_name":"qwen-image-2.0"}]'
     and result @> '[{"provider_id":"bailian","mode":"video_t2v","model_name":"happyhorse-1.0-t2v"}]'
-    and result @> '[{"provider_id":"bailian","mode":"video_i2v","model_name":"happyhorse-1.0-i2v"}]',
-    '注册表必须包含 Baseline 指定的三个 model/mode');
+    and result @> '[{"provider_id":"bailian","mode":"video_i2v","model_name":"happyhorse-1.0-i2v"}]'
+    and result @> '[{"provider_id":"autodl-comfyui","mode":"image","model_name":"ams-g3-image-v1"}]',
+    '注册表必须包含百炼三模式与 AutoDL 图片模式');
 
   -- 引用素材列表：只返回已批准图片素材。
   result := api.g1_list_reference_assets(u1);
   perform pg_temp.assert_true(jsonb_array_length(result) = 1, '只应返回 1 个已批准引用素材');
+  perform pg_temp.assert_true(
+    not exists (
+      select 1
+      from ams_private.g1_generation_provider_registry_v1
+      where provider_id = 'autodl'
+        and (enabled is true or fallback_eligible is true or health_status <> 'unavailable')
+    ),
+    '历史 autodl 身份必须保留但不得继续参与路由或 fallback');
   select id::text into ref_asset_id from public.assets where user_id = u1 and name = 'G1 参考素材 A';
 
   -- ---- 2. P19 种子：项目 + 证据 + 知识卡 + 待审核 Brief ----

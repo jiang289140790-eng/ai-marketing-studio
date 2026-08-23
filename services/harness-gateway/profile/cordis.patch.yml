@@ -65,6 +65,16 @@
 - id: code-runtime
   disabled: true
 
+# Replace the stock one-shot runner with a session-aware append-only exporter.
+- id: headless-runner
+  disabled: true
+- insert:
+    - id: ams-conversation-runner
+      name: '@ams/conversation-runner'
+      inject: [headlessStartup]
+      config:
+        task: !!js ctx.headlessStartup.task
+
 - insert:
     - id: ams-harness-tools
       name: '@ams/harness-tools'

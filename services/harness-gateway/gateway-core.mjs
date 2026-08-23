@@ -917,6 +917,9 @@ export class HarnessTaskQueue {
       task.result = {
         final_response: boundedUtf8(output?.final_response, MAX_RESULT_BYTES),
         artifact_refs: Array.isArray(output?.artifact_refs) ? output.artifact_refs.slice(0, 50).map((value) => bounded(value, 500)) : [],
+        artifact_entities: Array.isArray(output?.artifact_entities) ? output.artifact_entities.slice(0, 50)
+          .filter((value) => value && typeof value.type === 'string' && typeof value.id === 'string')
+          .map((value) => ({ type: bounded(value.type, 80), id: bounded(value.id, 200) })) : [],
         presentation: derivePresentation(output?.final_response, task),
       };
       if (output?.result_data && typeof output.result_data === 'object' && !Array.isArray(output.result_data)) {

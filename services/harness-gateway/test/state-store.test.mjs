@@ -4,7 +4,18 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { appendTaskEvent, loadTaskSnapshots } from '../state-store.mjs';
+import { appendTaskEvent, loadTaskEvents, loadTaskSnapshots } from '../state-store.mjs';
+
+test('durable event log reloads every unacknowledged projection candidate after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ams-harness-event-replay-'));
+  const file = join(directory, 'events.jsonl');
+  try {
+    const base = { task_id: 'ht-00000000-0000-4000-8000-000000000099', user_id: 'user-a', request_id: 'request-a' };
+    appendTaskEvent(file, { ...base, event: 'planned', at: '2026-08-23T10:00:00Z', task: { id: base.task_id, state: 'planned' } });
+    appendTaskEvent(file, { ...base, event: 'step_state', at: '2026-08-23T10:00:01Z', task: { id: base.task_id, state: 'running' } });
+    assert.deepEqual((await loadTaskEvents(file)).map((event) => event.event), ['planned', 'step_state']);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test('append-only snapshots recover the latest complete task state and ignore a torn tail', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ams-harness-state-'));
@@ -112,6 +123,23 @@ test('audit events above the finite 512 KiB ceiling still fail closed', async ()
       () => appendTaskEvent(file, { event: 'succeeded', task_id: task.id, task }),
       (error) => error?.code === 'EVENT_TOO_LARGE',
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('append-only audit retains every transition beyond the former 8 MiB compaction boundary', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ams-harness-long-audit-'));
+  const file = join(directory, 'events.jsonl');
+  try {
+    const payload = 'x'.repeat(400 * 1024);
+    for (let index = 0; index < 22; index += 1) {
+      const task = { id: 'ht-00000000-0000-4000-8000-000000000009', state: 'running', sequence: index, result: { result_data: { payload } } };
+      appendTaskEvent(file, { event: `step-${index}`, task_id: task.id, user_id: 'user-a', at: `2026-08-23T10:00:${String(index).padStart(2, '0')}.000Z`, task });
+    }
+    const events = await loadTaskEvents(file);
+    assert.equal(events.length, 22);
+    assert.deepEqual(events.map((item) => item.event), Array.from({ length: 22 }, (_, index) => `step-${index}`));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

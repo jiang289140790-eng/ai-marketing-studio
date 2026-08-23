@@ -9,11 +9,12 @@ const home = process.env.HARNESS_HOME || '/data/harness';
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 const profileSource = join(appRoot, 'profile');
 const pluginSource = join(appRoot, 'plugins', 'ams-tools');
+const conversationPluginSource = join(appRoot, 'plugins', 'ams-conversation-runner');
 const vendorSource = join(appRoot, 'vendor');
 const homeLockdownSource = join(appRoot, 'home-lockdown.patch.yml');
 const target = join(home, 'profiles', 'ams');
 const marker = join(target, '.ams-profile-version');
-const version = 'ams-profile-v10';
+const version = 'ams-profile-v11';
 // The only plugins promoted from the isolated plugin lab, pinned by exact
 // version. Each entry maps a vendored directory (name) to its npm scope and
 // the exact published version the promotion is bound to; a mismatch aborts
@@ -24,7 +25,7 @@ const promotedPlugins = [
 ];
 // Symlinked peers the profile row resolution needs beyond the bundle rows:
 // dsh-visualize imports schemastery and dsh-skill directly at load time.
-const peerPackages = ['dsh-system-prompt', 'dsh-tools', 'dsh-skill', 'schemastery'];
+const peerPackages = ['dsh-agent', 'dsh-llm', 'dsh-session', 'dsh-system-prompt', 'dsh-tools', 'dsh-skill', 'schemastery'];
 
 async function current() {
   try { return (await readFile(marker, 'utf8')).trim(); } catch { return ''; }
@@ -36,12 +37,18 @@ await mkdir(join(home, 'profiles'), { recursive: true });
 // shell, filesystem, web, subagent, or arbitrary-code capabilities.
 await writeFile(join(home, 'cordis.patch.yml'), await readFile(homeLockdownSource), { mode: 0o600 });
 if (await current() !== version) {
-  await cp(profileSource, target, { recursive: true, force: true });
+  await mkdir(target, { recursive: true });
+  for (const filename of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
+    await cp(join(profileSource, filename), join(target, filename), { force: true });
+  }
   const scope = join(target, 'node_modules', '@ams');
   const plugin = join(scope, 'harness-tools');
   await mkdir(scope, { recursive: true });
   await rm(plugin, { recursive: true, force: true });
   await cp(pluginSource, plugin, { recursive: true, force: true });
+  const conversationPlugin = join(scope, 'conversation-runner');
+  await rm(conversationPlugin, { recursive: true, force: true });
+  await cp(conversationPluginSource, conversationPlugin, { recursive: true, force: true });
   const deepseekScope = join(target, 'node_modules', '@deepseek-ai');
   await mkdir(deepseekScope, { recursive: true });
   for (const peer of peerPackages) {
@@ -66,6 +73,7 @@ if (await current() !== version) {
   await writeFile(marker, `${version}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 await access(join(target, 'node_modules', '@ams', 'harness-tools', 'index.mjs'), constants.R_OK);
+await access(join(target, 'node_modules', '@ams', 'conversation-runner', 'index.mjs'), constants.R_OK);
 for (const peer of peerPackages) {
   await access(join(target, 'node_modules', '@deepseek-ai', peer), constants.R_OK);
 }

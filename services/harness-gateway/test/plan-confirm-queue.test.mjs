@@ -377,6 +377,25 @@ test('ambiguous paid outcome rejects retry with RETRY_UNSAFE', async () => {
   assert.equal(verdict.code, 'RETRY_UNSAFE');
 });
 
+test('ambiguous paid Provider call remains exactly once across failure, restart and repeated retry attempts', async () => {
+  const bridge = mockBridge({ ambiguousCollect: true });
+  const firstQueue = createQueue(bridge);
+  const planned = await firstQueue.plan(planRequest({ request_id: 'paid-once-across-restart' }), { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  const approvals = { paid_external_calls: true, online_writes: true, handoff_creation: false };
+  firstQueue.confirm(confirmRequest(planned.task.id, planned.task.plan.fingerprint, approvals), planned.task.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+  await firstQueue.whenIdle();
+  const partial = firstQueue.read(planned.task.id, planned.task.request.user_id).task;
+  assert.equal(bridge.calls.filter((operation) => operation === 'research.collect_url').length, 1);
+
+  const restarted = createQueue(bridge, { initialTasks: [partial] });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const retry = restarted.retry(retryRequest(partial.id, partial.plan.fingerprint, 'st-1', approvals), partial.request.user_id, { delegatedAuthorization: 'Bearer ' + 'a'.repeat(40) });
+    assert.equal(retry.code, 'RETRY_UNSAFE');
+  }
+  restarted.cancel(partial.id, partial.request.user_id);
+  assert.equal(bridge.calls.filter((operation) => operation === 'research.collect_url').length, 1, 'restart, retries and cancellation cannot resubmit an ambiguous paid call');
+});
+
 test('retry requires the exact failed step and the same plan fingerprint', async () => {
   const bridge = mockBridge({ failAnalysis: true });
   const queue = createQueue(bridge);

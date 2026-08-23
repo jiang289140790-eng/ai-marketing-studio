@@ -1637,7 +1637,11 @@ export async function executeConfirmedPlan({
           if (value) derived.terminal_results = { ...(derived.terminal_results || {}), [step.key]: value };
         }
         if (Array.isArray(result.artifact_refs)) refs.push(...result.artifact_refs);
-        stepProgress.completed_items.push({ item_index: itemIndex, reused: false, ref: result?.artifact_refs?.[0] || result?.entity?.id || null });
+        stepProgress.completed_items.push({
+          item_index: itemIndex, reused: false, ref: result?.artifact_refs?.[0] || result?.entity?.id || null,
+          entity: result?.entity && typeof result.entity.type === 'string' && typeof result.entity.id === 'string'
+            ? { type: result.entity.type, id: result.entity.id } : null,
+        });
         if (step.write === true) {
           // Every P19 mutation advances the project revision. Refresh after
           // each single-item write so the next fan-out item carries the exact
@@ -1776,10 +1780,14 @@ export async function executeConfirmedPlan({
     ? (hasTerminalGenerationFailure || validationFailure || !(succeeded.length > 0 && independentProgress) ? 'failed' : 'partial')
     : (generationPending ? 'running' : 'succeeded');
   const refs = [...new Set(plan.steps.flatMap((step) => stepStates[step.step]?.refs || []))].slice(0, 50);
+  const artifactEntities = [...new Map(plan.steps.flatMap((step) => stepStates[step.step]?.completed_items || [])
+    .map((item) => item?.entity).filter((entity) => entity?.id && entity?.type)
+    .map((entity) => [`${entity.type}:${entity.id}`, entity])).values()].slice(0, 50);
   const response = {
     outcome,
     final_response: buildSummary({ plan, stepStates }),
     artifact_refs: refs,
+    artifact_entities: artifactEntities,
     partial_completion: outcome === 'partial',
   };
   if (failed.some((entry) => stepError(entry).g1_needs_attention === true)) response.needs_attention = true;

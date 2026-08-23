@@ -43,6 +43,8 @@ test('Docker build makes the local plugin available before npm ci', async () => 
   assert.ok(install > copyPlugin);
   assert.equal(dockerfile.indexOf('COPY services/harness-gateway/plugins ./plugins', copyPlugin + 1), -1);
   assert.match(dockerfile, /COPY .*services\/harness-gateway\/planner\.mjs .*services\/harness-gateway\/deterministic-executor\.mjs .*services\/harness-gateway\/workflow-catalog\.mjs/);
+  assert.match(dockerfile, /COPY .*services\/harness-gateway\/conversation-runner\.mjs .*services\/harness-gateway\/server\.mjs/);
+  assert.match(dockerfile, /COPY .*services\/harness-gateway\/task-projector\.mjs .*services\/harness-gateway\/server\.mjs/);
   assert.match(dockerfile, /COPY package\.json \/package\.json/);
   assert.match(dockerfile, /COPY src \/src/);
   assert.match(dockerfile, /COPY supabase\/functions\/p22-research-assist\/assist-core\.mjs \/supabase\/functions\/p22-research-assist\/assist-core\.mjs/);
@@ -67,7 +69,7 @@ test('both profile layers fail closed before importing subprocess/node-pty', asy
 });
 
 test('persistent profile version advances for the corrected loader tree', async () => {
-  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v10';/);
+  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v11';/);
 });
 
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {
@@ -94,12 +96,12 @@ test('only the pinned dsh-genui 0.8.3 and dsh-visualize 0.1.2 are promoted into 
   assert.match(patch, /- id: genui\s*\r?\n\s+name: ['"]@omdsh-dev\/dsh-genui['"]/);
   assert.match(patch, /- id: dsh-visualize\s*\r?\n\s+name: ['"]@dsh-external\/dsh-visualize['"]/);
 
-  // The profile's plugin rows stay exactly the AMS tool plus the two promoted
-  // rendering plugins; every other plugin-lab package remains unpromoted.
+  // The profile's plugin rows stay exactly the two AMS boundary plugins plus
+  // the two promoted rendering plugins; every plugin-lab package remains unpromoted.
   const insertRows = [...patch.matchAll(/^\s*-\s+id:\s+(\S+)/gm)].map((match) => match[1]);
   const pluginRows = [...patch.matchAll(/name:\s+(['"]@[^'"]+['"])/g)].map((match) => match[1]);
-  assert.deepEqual(insertRows.filter((id) => id.startsWith('ams-') || id === 'genui' || id === 'dsh-visualize').sort(), ['ams-harness-tools', 'dsh-visualize', 'genui']);
-  assert.deepEqual(pluginRows.sort(), ["'@ams/harness-tools'", "'@dsh-external/dsh-visualize'", "'@omdsh-dev/dsh-genui'"]);
+  assert.deepEqual(insertRows.filter((id) => id.startsWith('ams-') || id === 'genui' || id === 'dsh-visualize').sort(), ['ams-conversation-runner', 'ams-harness-tools', 'dsh-visualize', 'genui']);
+  assert.deepEqual(pluginRows.sort(), ["'@ams/conversation-runner'", "'@ams/harness-tools'", "'@dsh-external/dsh-visualize'", "'@omdsh-dev/dsh-genui'"]);
 
   const dockerfile = await text('Dockerfile');
   assert.match(dockerfile, /COPY services\/harness-gateway\/vendor \.\/vendor/);

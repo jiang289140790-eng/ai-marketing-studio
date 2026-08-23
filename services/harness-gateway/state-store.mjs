@@ -1,7 +1,7 @@
 /* global Buffer, structuredClone */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 // A task snapshot can legitimately carry the bounded 12k-character intent in
@@ -10,7 +10,6 @@ import { dirname, join } from 'node:path';
 // complete valid envelope without turning the append log into an unbounded
 // persistence channel.
 const MAX_LINE_BYTES = 512 * 1024;
-const MAX_EVENT_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_RESUME_FILE_BYTES = 2 * 1024 * 1024;
 const RESUME_SCHEMA_VERSION = 'ams_harness_resume_store_v1';
 const RESUME_REF_SCHEMA_VERSION = 'ams_harness_resume_ref_v1';
@@ -149,13 +148,27 @@ export async function loadTaskSnapshots(path) {
   return [...latest.values()].map((task) => hydrateResumeOutputs(path, task));
 }
 
+export async function loadTaskEvents(path) {
+  if (!existsSync(path)) return [];
+  const events = [];
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event?.task_id && event?.at && event?.user_id && event?.task) events.push(event);
+    } catch {
+      // Ignore only a torn final record; appendTaskEvent writes one bounded line atomically.
+    }
+  }
+  return events;
+}
+
 export function appendTaskEvent(path, event) {
   mkdirSync(dirname(path), { recursive: true });
   const externalized = externalizeResumeOutputs(path, event);
   const line = JSON.stringify(externalized.event);
   if (Buffer.byteLength(line) > MAX_LINE_BYTES) throw Object.assign(new Error('Task event exceeds the persistence bound.'), { code: 'EVENT_TOO_LARGE' });
   appendFileSync(path, `${line}\n`, { encoding: 'utf8', flush: true });
-  if (statSync(path).size > MAX_EVENT_FILE_BYTES) compactTaskEvents(path);
   if (event?.event === 'pruned' && event.task_id) {
     try {
       rmSync(resumeTaskDirectory(path, event.task_id), { recursive: true, force: true });
@@ -172,22 +185,4 @@ export function appendTaskEvent(path, event) {
       // Cleanup is best-effort after the authoritative event is durable.
     }
   }
-}
-
-function compactTaskEvents(path) {
-  const latest = new Map();
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    if (!line || Buffer.byteLength(line) > MAX_LINE_BYTES) continue;
-    try {
-      const event = JSON.parse(line);
-      if (event?.event === 'pruned' && event.task_id) latest.delete(event.task_id);
-      else if (event?.task?.id && event.task_id === event.task.id) latest.set(event.task.id, event);
-    } catch {
-      // Ignore a torn tail and compact only complete events.
-    }
-  }
-  const temporary = `${path}.compact.tmp`;
-  const output = [...latest.values()].map((event) => JSON.stringify(event)).join('\n');
-  writeFileSync(temporary, output ? `${output}\n` : '', { encoding: 'utf8', flush: true });
-  renameSync(temporary, path);
 }

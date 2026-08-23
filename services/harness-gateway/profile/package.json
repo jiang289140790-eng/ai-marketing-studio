@@ -2,7 +2,8 @@
   "name": "dsh-profile-ams",
   "private": true,
   "dependencies": {
-    "@ams/harness-tools": "file:/app/plugins/ams-tools"
+    "@ams/harness-tools": "file:/app/plugins/ams-tools",
+    "@ams/conversation-runner": "file:/app/plugins/ams-conversation-runner"
   },
   "dsh": {
     "profile": {

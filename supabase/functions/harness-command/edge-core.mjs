@@ -2,6 +2,8 @@
 const TASK_ID = /^ht-[0-9a-f-]{36}$/;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const PROJECT_ID = /^prj-[0-9a-f]{24}$/;
+const THREAD_ID = /^thr_[0-9a-f-]{36}$/;
+const MESSAGE_CURSOR = /^\d{1,19}$/;
 const MAX_INTENT = 12_000;
 const ROLE_RANK = Object.freeze({ viewer: 0, reviewer: 1, operator: 2, admin: 3 });
 
@@ -30,12 +32,42 @@ function plainObject(value) {
 
 export function validateEdgeRequest(input, { userId, accessRole } = {}) {
   if (!plainObject(input)) return fail('INVALID_REQUEST');
-  const allowed = new Set(['schema_version', 'action', 'request_id', 'project_id', 'intent', 'approval', 'task_id', 'plan_fingerprint', 'step_id', 'limit']);
+  const allowed = new Set(['schema_version', 'action', 'request_id', 'project_id', 'workspace_id', 'title', 'thread_id', 'content', 'attachments', 'client_message_id', 'cursor', 'intent', 'approval', 'task_id', 'plan_fingerprint', 'step_id', 'limit']);
   const unknown = Object.keys(input).find((key) => !allowed.has(key));
   if (unknown) return fail('UNKNOWN_FIELD', unknown);
   if (input.schema_version !== EDGE_SCHEMA_VERSION) return fail('SCHEMA_VERSION_MISMATCH', 'schema_version');
   if (typeof userId !== 'string' || !userId) return fail('AUTH_REQUIRED');
   if (!Object.hasOwn(ROLE_RANK, accessRole)) return fail('STAGING_ROLE_DENIED');
+  const threadActions = new Set(['thread_create', 'thread_get', 'thread_send', 'thread_messages', 'thread_events', 'thread_stop']);
+  if (threadActions.has(input.action)) {
+    if (input.action === 'thread_create') {
+      if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
+      if (!REQUEST_ID.test(String(input.request_id || ''))) return fail('REQUEST_ID_INVALID', 'request_id');
+      if (input.workspace_id !== 'ai-marketing-studio-staging') return fail('WORKSPACE_ACCESS_DENIED', 'workspace_id');
+      if (input.project_id != null && !PROJECT_ID.test(String(input.project_id))) return fail('PROJECT_ID_INVALID', 'project_id');
+      if (input.title != null && (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200)) return fail('TITLE_INVALID', 'title');
+      return { ok: true, contract: 'thread_create', body: { request_id: input.request_id, workspace_id: input.workspace_id, project_id: input.project_id ?? null, title: input.title?.trim() || null } };
+    }
+    if (!THREAD_ID.test(String(input.thread_id || ''))) return fail('THREAD_ID_INVALID', 'thread_id');
+    if (input.action === 'thread_send') {
+      if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
+      if (!REQUEST_ID.test(String(input.request_id || ''))) return fail('REQUEST_ID_INVALID', 'request_id');
+      if (typeof input.content !== 'string' || !input.content.trim() || input.content.length > 32_000) return fail('CONTENT_INVALID', 'content');
+      if (input.client_message_id != null && !REQUEST_ID.test(String(input.client_message_id))) return fail('CLIENT_MESSAGE_ID_INVALID', 'client_message_id');
+      if (!Array.isArray(input.attachments ?? []) || (input.attachments ?? []).length > 10) return fail('ATTACHMENTS_INVALID', 'attachments');
+      for (const attachment of input.attachments ?? []) {
+        if (!plainObject(attachment) || attachment.bucket !== 'harness-thread-attachments'
+          || typeof attachment.path !== 'string' || !attachment.path.startsWith(`${userId}/${input.thread_id}/`)
+          || typeof attachment.name !== 'string' || !attachment.name || attachment.name.length > 200
+          || !Number.isSafeInteger(attachment.size) || attachment.size < 1 || attachment.size > 25 * 1024 * 1024) return fail('ATTACHMENT_INVALID', 'attachments');
+      }
+      return { ok: true, contract: 'thread_send', body: { thread_id: input.thread_id, request_id: input.request_id, content: input.content.trim(), attachments: input.attachments ?? [], client_message_id: input.client_message_id ?? null } };
+    }
+    if (input.cursor != null && !MESSAGE_CURSOR.test(String(input.cursor))) return fail('CURSOR_INVALID', 'cursor');
+    const limit = input.limit == null ? 100 : input.limit;
+    if ((input.action === 'thread_messages' || input.action === 'thread_events') && (!Number.isSafeInteger(limit) || limit < 1 || limit > 200)) return fail('LIMIT_INVALID', 'limit');
+    return { ok: true, contract: input.action, body: { thread_id: input.thread_id, cursor: Number(input.cursor || 0), limit } };
+  }
   if (!['submit', 'plan', 'confirm', 'retry_failed_step', 'read', 'list', 'cancel'].includes(input.action)) return fail('ACTION_DENIED', 'action');
   if (input.action === 'submit' || input.action === 'plan') {
     if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
@@ -113,4 +145,32 @@ export async function signGatewayRequest(secret, { method, path, userId, timesta
   const message = `${method.toUpperCase()}\n${path.split('?')[0]}\n${userId}\n${timestamp}\n${authorizationDigest}\n${rawBody}`;
   const signature = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message)))].map((value) => value.toString(16).padStart(2, '0')).join('');
   return { signature, authorizationDigest };
+}
+
+export async function verifyGatewayCallback(secret, { method, path, userId, timestamp, rawBody, signature, now = Date.now() }) {
+  if (!/^\d{13}$/.test(String(timestamp || '')) || Math.abs(now - Number(timestamp)) > 60_000
+    || !/^[0-9a-f]{64}$/.test(String(signature || ''))) return false;
+  const expected = await signGatewayRequest(secret, { method, path, userId, timestamp, rawBody, delegatedAuthorization: '' });
+  const left = new TextEncoder().encode(expected.signature);
+  const right = new TextEncoder().encode(signature);
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
+  return difference === 0;
+}
+
+export function reduceGenerationOutcome(current, frame) {
+  const outcome = current || { state: 'completed', code: null };
+  if (frame?.type === 'gateway_completed' && frame.ok === false) return { state: 'failed', code: frame.code || 'GENERATION_FAILED' };
+  if (frame?.type === 'conversation_completed' || (frame?.type === 'session_event' && frame.event?.type === 'conversation_completed')) {
+    const completed = frame.type === 'conversation_completed' ? frame : frame.event;
+    const reason = completed?.data?.reason?.kind || completed?.data?.reason || completed?.reason?.kind || completed?.reason;
+    if (['aborted', 'stopped', 'cancelled'].includes(reason)) return { state: 'stopped', code: 'GENERATION_STOPPED' };
+  }
+  return outcome;
+}
+
+export function isAcceptedMessageReplay(message, claim) {
+  return message?.replayed === true && claim?.claimed === false
+    && ['generation_active', 'generation_replayed'].includes(claim?.reason);
 }

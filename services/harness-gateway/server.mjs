@@ -1,13 +1,15 @@
 /* global Buffer, setTimeout, URL */
 import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { HarnessTaskQueue, runWithIsolatedTaskView, runWithTaskTimeout, validateDelegatedAuthorization, verifySignedRequest } from './gateway-core.mjs';
 import { createHarnessRunner, harnessReadiness } from './harness-runner.mjs';
-import { appendTaskEvent, loadTaskSnapshots } from './state-store.mjs';
+import { appendTaskEvent, loadTaskEvents, loadTaskSnapshots } from './state-store.mjs';
 import { createPlanner } from './planner.mjs';
 import { createBridgeStateReader, executeConfirmedPlan } from './deterministic-executor.mjs';
 import { createToolClient } from './tool-client.mjs';
+import { createConversationRunner } from './conversation-runner.mjs';
+import { createTaskProjector } from './task-projector.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -18,6 +20,7 @@ const BRIDGE_SECRET = process.env.AMS_TOOL_BRIDGE_SECRET_FILE
   ? readFileSync(process.env.AMS_TOOL_BRIDGE_SECRET_FILE, 'utf8').trim()
   : '';
 const EVENT_FILE = process.env.HARNESS_EVENT_FILE || '/data/gateway/events.jsonl';
+const PROJECTOR_ACK_FILE = process.env.HARNESS_PROJECTOR_ACK_FILE || '/data/gateway/projected-events.log';
 const MAX_BODY = 64 * 1024;
 const TASK_TIMEOUT_MS = Number(process.env.HARNESS_TASK_TIMEOUT_MS || 600_000);
 const TOOL_WINDOW_MS = 150_000;
@@ -58,19 +61,31 @@ function createDeterministicRunner() {
 }
 
 const initialTasks = await loadTaskSnapshots(EVENT_FILE);
+const unacknowledgedCandidates = await loadTaskEvents(EVENT_FILE);
+const taskProjector = createTaskProjector({
+  callbackBase: process.env.AMS_CONVERSATION_CALLBACK_URL || '',
+  secret: SECRET,
+  ackFile: PROJECTOR_ACK_FILE,
+});
+for (const event of unacknowledgedCandidates) taskProjector.enqueue(event);
 const queue = new HarnessTaskQueue({
   runner: createHarnessRunner(),
   deterministicRunner: createDeterministicRunner(),
   planner: createPlanner(),
   capacity: QUEUE_CAPACITY,
   initialTasks,
-  onEvent: (event) => appendTaskEvent(EVENT_FILE, event),
+  onEvent: (event) => {
+    const durableEvent = { ...event, event_id: `gev_${randomUUID()}` };
+    appendTaskEvent(EVENT_FILE, durableEvent);
+    taskProjector.enqueue(durableEvent);
+  },
   validateRuntimeContext: (runtimeContext, context) => validateDelegatedAuthorization(runtimeContext, {
     minimumValidityMs: context.phase === 'submit'
       ? ((context.position + 1) * TASK_TIMEOUT_MS) + TOOL_WINDOW_MS
       : TASK_TIMEOUT_MS + TOOL_WINDOW_MS,
   }),
 });
+const conversations = createConversationRunner({ timeoutMs: TASK_TIMEOUT_MS, journalFile: process.env.HARNESS_CONVERSATION_JOURNAL || '/data/gateway/conversations.jsonl' });
 
 function send(response, status, body) {
   const text = JSON.stringify(body);
@@ -95,7 +110,8 @@ const server = createServer(async (request, response) => {
   if (request.method === 'GET' && url.pathname === '/readyz') {
     const readiness = harnessReadiness();
     const queueStatus = queue.status();
-    const ready = SECRET.length >= 32 && readiness.executable_configured && readiness.model_credential_configured && readiness.workspace_configured
+    const ready = SECRET.length >= 32 && /^https:\/\//.test(process.env.AMS_CONVERSATION_CALLBACK_URL || '')
+      && readiness.executable_configured && readiness.model_credential_configured && readiness.workspace_configured
       && readiness.tool_bridge_configured && queueStatus.audit_healthy;
     return send(response, ready ? 200 : 503, { ok: ready, service: 'ams-harness-gateway', readiness, model_ready: readiness.model_credential_configured });
   }
@@ -122,6 +138,31 @@ const server = createServer(async (request, response) => {
     rawBody,
   });
   if (!signed) return send(response, 401, { ok: false, code: 'UNAUTHORIZED' });
+  const messageMatch = url.pathname.match(/^\/v1\/threads\/(thr_[0-9a-f-]{36})\/messages$/);
+  if (request.method === 'POST' && messageMatch) {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body.user_id !== userId) return send(response, 403, { ok: false, code: 'USER_BINDING_MISMATCH' });
+    if (body.thread_id !== messageMatch[1]) return send(response, 409, { ok: false, code: 'THREAD_BINDING_MISMATCH' });
+    response.writeHead(200, {
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    const result = await conversations.run(body, userId, {
+      onFrame: (frame) => response.write(`${JSON.stringify(frame)}\n`),
+    });
+    response.end(`${JSON.stringify({ type: 'gateway_completed', ...result })}\n`);
+    return;
+  }
+  const stopMatch = url.pathname.match(/^\/v1\/threads\/(thr_[0-9a-f-]{36})\/stop$/);
+  if (request.method === 'POST' && stopMatch) {
+    const result = conversations.stop(userId, stopMatch[1]);
+    return send(response, result.ok ? 202 : 409, result);
+  }
   if (request.method === 'POST' && url.pathname === '/v1/tasks') {
     if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
       return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
@@ -190,6 +231,7 @@ server.listen(PORT, HOST, () => process.stderr.write(`ams-harness-gateway listen
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
+    taskProjector.close();
     queue.shutdown();
     server.close(async () => {
       await Promise.race([queue.whenIdle(), new Promise((resolve) => setTimeout(resolve, 7_000))]);

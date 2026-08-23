@@ -21,7 +21,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
-const CONTAINER = 'supabase_db_p19-op-workbench';
+const CONTAINER = process.env.AMS_SUPABASE_DB_CONTAINER || 'supabase_db_p19-op-workbench';
 
 /** Docker CLI/daemon 可用性（缺失时给出清晰基础设施失败，绝不静默跳过）。 */
 function dockerReady() {
@@ -117,7 +117,9 @@ test('SQL 集成：全新数据库回放 51 迁移 + SQL 测试 + 并发幂等�
     const ext = 'create extension if not exists pgcrypto with schema extensions;\n'
       + 'create extension if not exists "uuid-ossp" with schema extensions;\n'
       + 'create extension if not exists supabase_vault with schema vault;\n';
-    let result = psql(dbName, null, { stdin: dump });
+    let result = psql(dbName, 'create schema if not exists api; create schema if not exists ams_private;');
+    assert.equal(result.status, 0, `bootstrap schemas failed: ${result.stderr || result.stdout}`);
+    result = psql(dbName, null, { stdin: dump });
     assert.equal(result.status, 0, `bootstrap dump 应用失败：${result.stderr || result.stdout}`);
     result = psql(dbName, null, { stdin: ext });
     assert.equal(result.status, 0, `扩展引导失败：${result.stderr || result.stdout}`);
@@ -126,7 +128,7 @@ test('SQL 集成：全新数据库回放 51 迁移 + SQL 测试 + 并发幂等�
     const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort();
-    assert.equal(migrations.length, 51, '迁移集必须包含 G1 生成执行层、P19 证据报价绑定、ACL 收尾与既有 Provider task 恢复，共 51 项');
+    assert.equal(migrations.length, 54, '迁移集必须包含 staging 已应用的 G3 历史与 Harness conversation contract，共 54 项');
     for (const name of migrations) {
       if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
         const legacy = `insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at,is_sso_user,is_anonymous)

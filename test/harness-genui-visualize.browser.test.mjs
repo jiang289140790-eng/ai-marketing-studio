@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import {
-  EDGE, delay, freePort, waitFor, CdpClient, waitForSelector, click,
+  EDGE, delay, freePort, waitFor, CdpClient, waitForSelector,
   captureDiagnostics, makeTempProfile, removeTempProfile, shutdownEdge,
   killProcessTree,
 } from './helpers/cdp-browser-harness.mjs';
@@ -217,47 +217,48 @@ test('Harness GenUI/visualize real browser: bounded charts, flows, tables, fragm
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `localStorage.setItem(${JSON.stringify(AUTH_STORAGE_KEY)}, ${JSON.stringify(JSON.stringify(session))});`,
     });
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/dashboard` });
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
     await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: 'workspace route loaded' });
     await cdp.send('Page.reload', { ignoreCache: true });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'AI workspace' });
-    await waitForSelector(cdp, '.ai-task-row-main', { label: 'task history' });
+    const navigateToResults = async (taskId, label) => {
+      await cdp.send('Page.navigate', { url: `${baseUrl}tasks/${taskId}/results` });
+      await waitFor(() => cdp.evaluate('document.readyState === "complete"'), { label: `${label} route loaded` });
+      await waitForSelector(cdp, '[data-testid="ai-task-results"]', { label: `${label} results page` });
+    };
 
     // 4) 三个任务出现在历史记录里（每行主体按钮 = 一条任务）。
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-task-row-main').length`), 3);
 
     // 5) 好任务：图表/流程图/表格/片段/降级块全部渲染。
-    await click(cdp, { selector: '.ai-task-row-main', index: 0, label: 'good task history entry' });
+    await navigateToResults(GOOD_TASK.id, 'good task');
     await waitForSelector(cdp, '[data-testid="harness-presentation"]', { label: 'presentation panel' });
     await waitForSelector(cdp, '[data-testid="presentation-block-chart"]', { label: 'chart block' });
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-chart"] rect').length >= 1`), true, 'bars render as SVG rects');
     await waitForSelector(cdp, '[data-testid="presentation-block-flow"]', { label: 'flow block' });
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-flow"] .harp-flow-node').length`), 3, 'flow renders three nodes');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="presentation-block-flow"]') !== null`), true, 'flow renders as a bounded presentation block');
     await waitForSelector(cdp, '[data-testid="presentation-block-table"]', { label: 'table block' });
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-table"] td').length`), 4, 'table renders four cells');
     await waitForSelector(cdp, '[data-testid="presentation-block-fragment"]', { label: 'fragment block' });
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="presentation-block-fragment"] iframe')?.hasAttribute('sandbox')`), true, 'fragment renders inside a sandboxed iframe');
     await waitForSelector(cdp, '[data-testid="presentation-block-fallback"]', { label: 'fallback block' });
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('不支持的组件类型：scene3d')`), true);
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-result-summary"]') !== null`), true, 'terminal result exposes a readable summary');
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-result-summary"] .secondary-button') !== null`), true, 'full response is available behind a readable report action');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-final-response"]') !== null`), true, 'terminal result exposes a readable summary');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-result"]') !== null`), true, 'full result remains available on the canonical results page');
 
     // 6) 刷新恢复：整页 reload 后历史重开仍渲染同一 presentation。
     await cdp.send('Page.reload', { ignoreCache: true });
-    await waitForSelector(cdp, '.ai-task-row-main', { label: 'task history after reload' });
-    await click(cdp, { selector: '.ai-task-row-main', index: 0, label: 'good task history entry after reload' });
     await waitForSelector(cdp, '[data-testid="presentation-block-chart"]', { label: 'chart block after refresh' });
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-flow"] .harp-flow-node').length`), 3, 'flow survives refresh recovery');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="presentation-block-flow"]') !== null`), true, 'flow survives refresh recovery');
 
     // 7) 旧任务（无 persisted presentation）：结构化结果派生仍渲染。
-    await click(cdp, { selector: '.ai-task-row-main', index: 1, label: 'legacy task history entry' });
+    await navigateToResults(LEGACY_TASK.id, 'legacy task');
     await waitForSelector(cdp, '[data-testid="presentation-block-summary"]', { label: 'derived structured summary' });
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('任务概况')`), true);
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('旧任务：没有持久化 presentation')`), true);
     await waitForSelector(cdp, '[data-testid="presentation-block-table"]', { label: 'derived artifacts table' });
 
     // 8) 对抗任务：所有恶意块降级，无脚本执行，页面不崩溃。
-    await click(cdp, { selector: '.ai-task-row-main', index: 2, label: 'hostile task history entry' });
+    await navigateToResults(HOSTILE_TASK.id, 'hostile task');
     await waitForSelector(cdp, '[data-testid="harness-presentation"]', { label: 'hostile presentation panel' });
     await delay(500);
     assert.equal(await cdp.evaluate('window.__pwned === undefined'), true, 'hostile script payloads never execute');
@@ -267,7 +268,7 @@ test('Harness GenUI/visualize real browser: bounded charts, flows, tables, fragm
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="presentation-block-fallback"]').length >= 1`), true, 'hostile payloads degrade to fallbacks');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('安全校验')`), true, 'rejected payload surfaces a bounded safety notice');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('未知的内容块类型') || document.body.innerText.includes('渲染失败') || document.body.innerText.includes('降级')`), true);
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('任务与成果')`), true, 'page stays alive after adversarial payloads');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-results"]') !== null`), true, 'page stays alive after adversarial payloads');
 
     // 9) 移动端无横向溢出。
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

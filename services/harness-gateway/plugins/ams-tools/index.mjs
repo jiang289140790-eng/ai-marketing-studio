@@ -31,6 +31,9 @@ async function loadClient() {
 }
 
 function apply(ctx) {
+  // Conversation Q&A is deliberately tool-free. Task intents are diverted to
+  // the existing deterministic plan/confirm chain before this child starts.
+  if (process.env.AMS_CONVERSATION_MODE === 'qa') return;
   let requiredFailure = null;
   ctx.systemPrompt.section({
     name: 'ams:operator',

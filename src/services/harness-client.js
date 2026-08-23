@@ -4,6 +4,7 @@ import { PROJECT_ID_PATTERN } from './p19-contracts.js';
 export const HARNESS_EDGE_SCHEMA_VERSION = 'ams_harness_edge_v1';
 export const HARNESS_ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
 export const HARNESS_DEMO_USER_KEY = 'ams_harness_demo_user_v1';
+export const HARNESS_THREAD_SCHEMA_VERSION = 1;
 
 const CAPABILITY_QUERY_PATTERN = /^(?:你)?(?:现在|目前|当前)?(?:能|可以|能够)?(?:做|干|处理|完成)(?:哪些|什么|啥)(?:事情|任务|工作|功能)?[？?。!！]*$/u;
 
@@ -50,6 +51,14 @@ export function createHarnessClient({
   edgeBase = demoEdgeBase,
   demoUser = null,
 } = {}) {
+  async function accessToken(refresh = false) {
+    if (!client) return demoUser || '';
+    const { data, error } = refresh ? await client.auth.refreshSession() : await client.auth.getSession();
+    const token = data?.session?.access_token;
+    if (error || !token) throw boundedError('AUTH_REQUIRED', '请先登录后再使用 AI 工作区。');
+    return token;
+  }
+
   async function invoke(body) {
     if (client) {
       const sessionResult = ['plan', 'confirm', 'retry_failed_step'].includes(body.action)
@@ -105,6 +114,69 @@ export function createHarnessClient({
   // direct /v1/tasks submit action is deliberately not exposed here so no
   // browser code path can bypass the authoritative plan.
   return Object.freeze({
+    createThread({ workspaceId, projectId = null, requestId, title = null }) {
+      return invoke({ action: 'thread_create', workspace_id: workspaceId, project_id: projectId, request_id: requestId, title });
+    },
+    getThread(threadId) { return invoke({ action: 'thread_get', thread_id: threadId }); },
+    sendMessage({ threadId, requestId, content, attachments = [], clientMessageId = null }) {
+      return invoke({ action: 'thread_send', thread_id: threadId, request_id: requestId, content, attachments, client_message_id: clientMessageId });
+    },
+    listMessages(threadId, cursor = 0, limit = 100) {
+      return invoke({ action: 'thread_messages', thread_id: threadId, cursor: String(cursor), limit });
+    },
+    stopGeneration(threadId) { return invoke({ action: 'thread_stop', thread_id: threadId }); },
+    async uploadAttachment({ threadId, requestId, file }) {
+      if (!client) throw boundedError('ATTACHMENT_UPLOAD_UNAVAILABLE', '附件上传仅在已认证的 staging 工作区可用。');
+      const { data, error } = await client.auth.getSession();
+      const userId = data?.session?.user?.id;
+      if (error || !userId) throw boundedError('AUTH_REQUIRED', '请先登录后再上传附件。');
+      const safeName = String(file?.name || 'attachment').normalize('NFKC').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120) || 'attachment';
+      const path = `${userId}/${threadId}/${requestId}/${safeName}`;
+      const uploaded = await client.storage.from('harness-thread-attachments').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
+      if (uploaded.error) throw boundedError('ATTACHMENT_UPLOAD_FAILED', uploaded.error.message);
+      return { bucket: 'harness-thread-attachments', path, name: file.name, size: file.size, mimeType: file.type || 'application/octet-stream' };
+    },
+    async streamThreadEvents({ threadId, cursor = 0, signal, onEvent, onStatus }) {
+      let nextCursor = Number(cursor) || 0;
+      while (!signal?.aborted) {
+        onStatus?.('connecting');
+        const token = await accessToken(false);
+        const base = client?.supabaseUrl || String(edgeBase).replace(/\/$/, '');
+        if (!base) throw boundedError('HARNESS_NOT_CONFIGURED', 'AI 工作区尚未连接 staging。');
+        const target = `${base}/functions/v1/harness-command/threads/${encodeURIComponent(threadId)}/events?cursor=${nextCursor}&limit=200`;
+        let response;
+        try {
+          response = await fetchImpl(target, { method: 'GET', redirect: 'error', headers: { authorization: `Bearer ${token}`, apikey: client?.supabaseKey || '' }, signal });
+        } catch (error) {
+          if (signal?.aborted) return nextCursor;
+          onStatus?.('disconnected');
+          throw boundedError('EVENT_STREAM_DISCONNECTED', error?.message);
+        }
+        if (!response.ok || !response.body) throw boundedError('EVENT_STREAM_UNAVAILABLE', `事件流连接失败（${response.status}）`);
+        onStatus?.('connected');
+        const reader = response.body.getReader();
+        const decoder = new globalThis.TextDecoder();
+        let pending = '';
+        while (!signal?.aborted) {
+          const { done, value } = await reader.read();
+          pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+          const frames = pending.split(/\r?\n\r?\n/); pending = frames.pop() || '';
+          for (const frame of frames) {
+            if (!frame || frame.startsWith(':')) continue;
+            const lines = frame.split(/\r?\n/);
+            const id = lines.find((line) => line.startsWith('id:'))?.slice(3).trim();
+            const type = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
+            const dataLine = lines.find((line) => line.startsWith('data:'))?.slice(5).trim();
+            if (!dataLine) continue;
+            const event = JSON.parse(dataLine);
+            if (id && Number.isSafeInteger(Number(id))) nextCursor = Math.max(nextCursor, Number(id));
+            onEvent?.({ type, event, cursor: nextCursor });
+          }
+          if (done) break;
+        }
+      }
+      return nextCursor;
+    },
     plan({ requestId, projectId = null, intent }) {
       return invoke({ action: 'plan', request_id: requestId, project_id: projectId, intent });
     },

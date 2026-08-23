@@ -615,7 +615,7 @@ test('fan-out failure preserves completed writes and retry skips their exact ite
   assert.equal(failed.executed_count, 1);
   assert.equal(failed.item_count, 1);
   assert.equal(failed.refs.length, 1);
-  assert.deepEqual(failed.completed_items, [{ item_index: 0, reused: false, ref: failed.refs[0] }]);
+  assert.deepEqual(failed.completed_items, [{ item_index: 0, reused: false, ref: failed.refs[0], entity: { type: 'evidence', id: failed.refs[0] } }]);
 
   failSecond = false;
   taskView.retry_target = { step_id: saveStep.step, plan_fingerprint: plan.fingerprint };

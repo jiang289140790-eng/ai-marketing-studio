@@ -5,7 +5,7 @@ COPY services/harness-gateway/package.json services/harness-gateway/package-lock
 COPY services/harness-gateway/plugins ./plugins
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force
-COPY services/harness-gateway/gateway-core.mjs services/harness-gateway/harness-runner.mjs services/harness-gateway/model-proxy.mjs services/harness-gateway/state-store.mjs services/harness-gateway/server.mjs services/harness-gateway/tool-contract.mjs services/harness-gateway/tool-client.mjs services/harness-gateway/init-profile.mjs services/harness-gateway/start.mjs services/harness-gateway/home-lockdown.patch.yml services/harness-gateway/planner.mjs services/harness-gateway/deterministic-executor.mjs services/harness-gateway/workflow-catalog.mjs ./
+COPY services/harness-gateway/gateway-core.mjs services/harness-gateway/harness-runner.mjs services/harness-gateway/conversation-runner.mjs services/harness-gateway/task-projector.mjs services/harness-gateway/model-proxy.mjs services/harness-gateway/state-store.mjs services/harness-gateway/server.mjs services/harness-gateway/tool-contract.mjs services/harness-gateway/tool-client.mjs services/harness-gateway/init-profile.mjs services/harness-gateway/start.mjs services/harness-gateway/home-lockdown.patch.yml services/harness-gateway/planner.mjs services/harness-gateway/deterministic-executor.mjs services/harness-gateway/workflow-catalog.mjs ./
 COPY services/harness-gateway/profile ./profile
 COPY services/harness-gateway/vendor ./vendor
 COPY services/harness-gateway/presentation ./presentation

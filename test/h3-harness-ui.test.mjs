@@ -129,14 +129,16 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /任务目标与附件文本合计不能超过 12000 个字符/);
   assert.match(page, /data-testid="ai-command-center"/);
   assert.match(page, /按需展开 5 个常用模板/);
-  assert.match(page, /const businessPlugins = \[/);
+  // 业务插件菜单只存在于侧栏唯一注册源；工作台页面不得再渲染重复插件栏。
+  assert.doesNotMatch(page, /const businessPlugins = \[/);
+  assert.doesNotMatch(page, /ai-plugin-rail|harness-plugin-\$\{plugin\.id\}/);
+  const navigation = await readFile(new URL('../src/data/navigation.js', import.meta.url), 'utf8');
   for (const plugin of ['研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库']) {
-    assert.match(page, new RegExp(plugin), `Harness business plugin ${plugin} remains discoverable`);
+    assert.match(navigation, new RegExp(plugin), `Harness business plugin ${plugin} remains registered once in the shared config`);
   }
-  assert.match(page, /onNavigate\?\.\(plugin\.route \|\| plugin\.id, '', plugin\.routeParams \|\| \{\}\)/);
-  assert.match(page, /routeParams: \{ focus: 'collect' \}[\s\S]*label: 'Evidence'/);
-  assert.match(page, /routeParams: \{ focus: 'outputs' \}[\s\S]*label: 'Brief 审核'/);
-  assert.match(page, /data-testid=\{`harness-plugin-\$\{plugin\.id\}`\}/);
+  assert.match(navigation, /routeParams: \{ focus: 'collect' \}/);
+  assert.match(navigation, /routeParams: \{ focus: 'outputs' \}/);
+  assert.match(navigation, /testId: 'harness-plugin-/);
   assert.match(page, /最近任务与成果/);
   assert.match(page, /默认收起/);
   assert.match(page, /history\.slice\(0, 6\)/);
@@ -150,13 +152,16 @@ test('AI workspace renders the immutable server plan, exact approvals, truthful 
   assert.match(page, /data-testid="harness-confirm"/);
   assert.match(page, /harnessClient\.retryFailedStep/);
   assert.match(page, /snapshot\?\.error\?\.retry_unsafe !== true/);
-  assert.match(page, /partial: '部分完成'/);
+  // 状态映射唯一权威源：工作台不再自带第二份状态标签表。
+  const model = await readFile(new URL('../src/services/harness-task-model.js', import.meta.url), 'utf8');
+  assert.match(model, /partial: '部分完成'/);
+  assert.doesNotMatch(page, /const stateLabels = \{/);
   assert.match(app, /default:\s*return <AIWorkspacePage/);
   assert.match(app, /sidebarCollapsed/);
   assert.match(app, /ams-sidebar-collapsed/);
   assert.match(app, /onCollapsedChange=\{updateSidebarCollapsed\}/);
   assert.doesNotMatch(sidebar, /PRIMARY_NAV_IDS/);
-  assert.match(sidebar, /const corePlugins = \[/);
+  assert.match(sidebar, /const corePlugins = harnessPlugins/);
   assert.match(sidebar, /secondarySections\.map/);
   assert.match(sidebar, /data-testid=\{plugin\.testId\}/);
   assert.match(sidebar, /aria-expanded=\{expanded\}/);

@@ -597,14 +597,14 @@ test('路由：App.jsx 保留既有页面并以 AI 工作台为默认入口', ()
 
 test('Sidebar exposes core Harness plugins plus the complete secondary operations map', () => {
   const sidebarSource = readSource('src/components/Sidebar.jsx');
-  assert.ok(sidebarSource.includes('const corePlugins = ['));
+  assert.ok(sidebarSource.includes('const corePlugins = harnessPlugins'));
   assert.ok(sidebarSource.includes('secondarySections.map((section) =>'));
   assert.ok(sidebarSource.includes('更多工具'));
   assert.ok(sidebarSource.includes('aria-expanded={expanded}'));
   assert.ok(sidebarSource.includes('hidden={!expanded && !collapsed}'));
   assert.ok(sidebarSource.includes('sidebar-collapse-toggle'));
   assert.ok(!sidebarSource.includes('PRIMARY_NAV_IDS'));
-  assert.equal(navigationItems.length, 22);
+  assert.equal(navigationItems.length, 20);
   for (const id of ['publish', 'accounts', 'analytics', 'dailyreport', 'workflows', 'health']) {
     assert.ok(navigationItems.some((item) => item.id === id), `operations navigation is missing ${id}`);
   }

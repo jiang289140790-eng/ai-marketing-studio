@@ -29,12 +29,11 @@ const AIWorkspacePage = lazy(() => import('./pages/AIWorkspacePage').then((modul
 const TaskExecutionPage = lazy(() => import('./pages/TaskExecutionPage').then((module) => ({ default: module.TaskExecutionPage })));
 const TaskResultsPage = lazy(() => import('./pages/TaskResultsPage').then((module) => ({ default: module.TaskResultsPage })));
 
-const PRIMARY_WORKSPACE_PAGES = new Set(['ai', 'ai-execution', 'ai-results', 'research', 'generation', 'knowledge', 'connections']);
+const PRIMARY_WORKSPACE_PAGES = new Set(['tasks', 'ai', 'research', 'generation', 'knowledge', 'connections']);
 
 const pageTitles = {
   ai: 'AI 工作台',
-  'ai-execution': '任务执行详情',
-  'ai-results': '任务结果与审核',
+  tasks: { new: 'AI 工作台', execution: '任务执行详情', results: '任务结果与审核' },
   dashboard: 'AI 工作台',
   campaigns: '运营活动',
   plan: '内容计划',
@@ -73,7 +72,7 @@ const auxiliaryPageDescriptions = {
 };
 
 export default function App() {
-  const { page: activePage, detailId, routeParams, navigate } = useAppRoute();
+  const { page: activePage, detailId, routeParams, view: routeView, navigate } = useAppRoute();
   const { error: authError, loading: authLoading, session, userId } = useAuth();
   const campaignState = useCampaignContext();
   const contextPages = new Set(['campaigns', 'plan', 'workspace', 'intelligence', 'assets', 'publish', 'data-analytics', 'analytics']);
@@ -118,12 +117,12 @@ export default function App() {
     };
 
     switch (activePage) {
+      case 'tasks':
+        if (routeView === 'execution') return <TaskExecutionPage {...props} />;
+        if (routeView === 'results') return <TaskResultsPage {...props} />;
+        return <AIWorkspacePage {...props} />;
       case 'ai':
         return <AIWorkspacePage {...props} />;
-      case 'ai-execution':
-        return <TaskExecutionPage {...props} />;
-      case 'ai-results':
-        return <TaskResultsPage {...props} />;
       case 'campaigns':
         return <CampaignStrategyPage {...props} />;
       case 'plan':
@@ -163,7 +162,11 @@ export default function App() {
       default:
         return <AIWorkspacePage {...props} />;
     }
-  }, [activePage, auxiliaryMode, auxiliaryScope, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, userId]);
+  }, [activePage, auxiliaryMode, auxiliaryScope, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, routeView, userId]);
+
+  const pageTitle = typeof pageTitles[activePage] === 'object' && pageTitles[activePage] !== null
+    ? pageTitles[activePage][routeView] || pageTitles.dashboard
+    : pageTitles[activePage] || pageTitles.dashboard;
 
   return (
     <div className={`app-shell harness-app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -173,13 +176,14 @@ export default function App() {
         onCollapsedChange={updateSidebarCollapsed}
         onNavigate={navigate}
         routeParams={routeParams}
+        routeView={routeView}
       />
       <div className="main-shell">
-        <Header description={auxiliaryDescription} title={pageTitles[activePage] || pageTitles.dashboard} />
+        <Header description={auxiliaryDescription} title={pageTitle} />
         {userId && contextPages.has(activePage) && !auxiliaryDescription && <CampaignContextBar onNavigate={navigate} />}
         {authLoading && <div className="notice">正在恢复登录状态...</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
-        <PageErrorBoundary resetKey={`${activePage}:${detailId || ''}`} onNavigate={navigate}>
+        <PageErrorBoundary resetKey={`${activePage}:${routeView || ''}:${detailId || ''}`} onNavigate={navigate}>
           <Suspense fallback={<div className="notice">正在加载页面...</div>}>
             {useAuxiliaryFrame ? (
               <AuxiliaryPageFrame
@@ -190,7 +194,7 @@ export default function App() {
                 onNavigate={navigate}
                 onScopeChange={setAuxiliaryScope}
               >
-                <div key={`${activePage}:${auxiliaryScope}:${campaignState.activeCampaignId}`}>{page}</div>
+                <div key={`${activePage}:${routeView || ''}:${auxiliaryScope}:${campaignState.activeCampaignId}`}>{page}</div>
               </AuxiliaryPageFrame>
             ) : page}
           </Suspense>

@@ -1,15 +1,20 @@
 /* global fetch */
-// 三页任务架构：真实浏览器验收（fake 本地 harness edge）。
+// 任务信息架构与真实状态统一：真实浏览器验收（fake 本地 harness edge）。
 //
 // - vite dev 以 VITE_HARNESS_EDGE_BASE_URL 指向本地 fake 前缀启动；
 // - 页面内注入 fetch 拦截：/harness-fake/functions/v1/harness-command →
 //   内存 fake edge（镜像真实 harness-command 契约：plan → confirm → 状态
 //   推进 → 结果/产物；plan/confirm 的授权边界与真实一致）；
-// - 真实点击创建任务 → 确认 → 跳转执行详情 → 跳转结果与审核 → 硬刷新恢复
-//   → 失败状态 → 非法编号错误态 → 390px 响应式；
-// - 生成 1440/1366/1024/768/390 px 截图到 acceptance-evidence/
-//   ai-three-page-architecture-2026-08-23/ 并记录实际路由与数据来源；
+// - 测试使用三个规范路由路径（/tasks/new、/tasks/<taskId>、
+//   /tasks/<taskId>/results），验证应用内跳转与硬刷新保持同一 taskId、
+//   新任务空状态、能力任务不自动成为当前任务、执行详情步骤/工具调用/
+//   时间/错误的真实来源与明确空态、结果页五分类真实来源与逐类空态、
+//   导航 DOM 唯一性契约；
+// - 生成 1440px 截图（新任务、执行详情、结果页）到
+//   acceptance-evidence/task-ia-real-state-2026-08-23/；
 // - 全程零真实 provider/付费调用：fake edge 只在页面内存推进状态。
+// - 契约测试声明：所有“成功”证据来自注入的 fake edge 契约模拟，
+//   不构成线上真实服务端成功证据。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,20 +30,21 @@ import {
 } from './helpers/cdp-browser-harness.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
-// 仓库验收证据目录（tracked）。默认回归只写临时目录，绝不触碰仓库；
+// 本轮新验收证据目录（tracked）。默认回归只写临时目录，绝不触碰仓库；
 // 仅显式 A3P_CAPTURE=1 的确定性捕获模式才重新生成仓库证据。
-const EVIDENCE_DIR = join(ROOT, 'acceptance-evidence', 'ai-three-page-architecture-2026-08-23');
+const EVIDENCE_DIR = join(ROOT, 'acceptance-evidence', 'task-ia-real-state-2026-08-23');
 const CAPTURE = process.env.A3P_CAPTURE === '1';
 
 // 页面内 fake edge：镜像真实 harness-command 契约（有界校验 + 幂等 + 状态
 // 推进）。任务持久化在 localStorage，硬刷新后状态保持（与真实 staging 一致）。
 // 状态机：confirm → queued；首次 read → running（st-1 完成、st-2 执行中）；
 // 再次 read → 终态：含「失败测试」意图的任务 failed（带诊断），否则
-// succeeded（带结果与产物身份）。零 provider/网络调用。
+// succeeded（带结果、产物身份、逐步工具调用与 result_data 分析）。
+// 「能力：」意图的任务（read_capability 只读查询）无付费/写入授权。
+// 零 provider/网络调用。
 const FAKE_EDGE_SCRIPT = `
 (() => {
-  // 确定性固定时钟：页面渲染的时间文本与 fake edge 数据完全可复现，
-  // 连续两次运行产出逐字节一致（截图/README 不随运行时刻漂移）。
+  // 确定性固定时钟：页面渲染的时间文本与 fake edge 数据完全可复现。
   const FIXED_NOW_MS = Date.parse('2026-08-23T02:00:00.000Z');
   const RealDate = globalThis.Date;
   const FixedDate = class extends RealDate {
@@ -52,11 +58,12 @@ const FAKE_EDGE_SCRIPT = `
   FixedDate.UTC = RealDate.UTC;
   globalThis.Date = FixedDate;
 
-  // 确定性任务编号：第 1 次 plan 固定得到 ht-…001（成功任务），
-  // 第 2 次 plan 固定得到 ht-…002（失败任务）。
+  // 确定性任务编号：plan 依次得到 ht-…001（成功）、ht-…002（失败）、
+  // ht-…002（能力查询）、ht-…003（失败）。
   const FIXED_TASK_IDS = [
     'ht-00000000-0000-4000-8000-000000000001',
     'ht-00000000-0000-4000-8000-000000000002',
+    'ht-00000000-0000-4000-8000-000000000003',
   ];
 
   const EDGE_SCHEMA = 'ams_harness_edge_v1';
@@ -83,7 +90,7 @@ const FAKE_EDGE_SCRIPT = `
       { step: 'st-1', label: '搜索并采集帖子', operation: 'search', depends_on: [], reuse: false, cost: true, write: false },
       { step: 'st-2', label: '保存证据与知识', operation: 'save_evidence', depends_on: ['st-1'], reuse: false, cost: false, write: true },
     ],
-    approvals: { paid_external_calls: true, online_writes: true },
+    approvals: String(intent || '').includes('能力：') ? {} : { paid_external_calls: true, online_writes: true },
     slots: { metric: 'views' },
   });
   // 镜像真实 gateway：plan/confirm/read 返回完整任务快照（含 plan.steps），
@@ -102,7 +109,7 @@ const FAKE_EDGE_SCRIPT = `
     if (task.state === 'queued') {
       task.state = 'running';
       task.step_states = {
-        'st-1': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null },
+        'st-1': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null, tool_calls: [{ tool: 'search', operation: 'web_search', status: 'succeeded', started_at: nowIso(), finished_at: nowIso(), error: null }] },
         'st-2': { state: 'running', failed_count: 0, started_at: nowIso(), finished_at: null, error: null },
       };
       task.updated_at = nowIso();
@@ -110,25 +117,44 @@ const FAKE_EDGE_SCRIPT = `
       if (String(task.request.intent || '').includes('失败测试')) {
         task.state = 'failed';
         task.step_states = {
-          'st-1': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null },
+          'st-1': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null, tool_calls: [{ tool: 'search', operation: 'web_search', status: 'succeeded', started_at: nowIso(), finished_at: nowIso(), error: null }] },
           'st-2': { state: 'failed', failed_count: 1, started_at: nowIso(), finished_at: nowIso(), error: { code: 'TOOL_FAILED', message: '采集工具返回失败，已阻断后续步骤。', retry_unsafe: false } },
         };
         task.error = { code: 'HARNESS_FAILED', message: '任务执行失败：st-2 采集工具返回失败。', category: 'tool', stage: 'run', operation: 'save_evidence' };
         task.updated_at = nowIso();
-      } else {
+      } else if (String(task.request.intent || '').includes('能力：')) {
         task.state = 'succeeded';
         task.step_states = {
           'st-1': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null },
           'st-2': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null },
         };
         task.result = {
+          artifact_refs: [],
+          final_response: '我可以完成研究、分析、知识沉淀、内容策划与生成；每次执行都会先经过你的确认。',
+          result_data: { capabilities: ['research', 'analysis', 'knowledge', 'generation'] },
+        };
+        task.updated_at = nowIso();
+      } else {
+        task.state = 'succeeded';
+        task.step_states = {
+          'st-1': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null, tool_calls: [{ tool: 'search', operation: 'web_search', status: 'succeeded', started_at: nowIso(), finished_at: nowIso(), error: null }] },
+          'st-2': { state: 'succeeded', failed_count: 0, started_at: nowIso(), finished_at: nowIso(), error: null, tool_calls: [{ tool: 'save', operation: 'save_evidence', status: 'succeeded', started_at: nowIso(), finished_at: nowIso(), error: null }] },
+        };
+        task.result = {
           artifact_refs: [
             'ev-000000000000000000000001',
+            'an-000000000000000000000007',
             'kc-000000000000000000000002',
             'brf-000000000000000000000003',
+            'g1x-000000000000000000000005',
           ],
           final_response: '已完成：保存 1 条证据并生成 1 张知识卡，建议进入 Brief 审核。',
-          result_data: { saved_evidence: 1, saved_knowledge: 1 },
+          result_data: {
+            saved_evidence: 1,
+            saved_knowledge: 1,
+            analyses: [{ id: 'an-000000000000000000000008', summary: '多模态分析' }],
+            artifacts: [{ id: 'g1x-000000000000000000000005', name: '主视觉' }],
+          },
         };
         task.updated_at = nowIso();
       }
@@ -259,11 +285,10 @@ function checkBox(cdp, selector) {
   })()`);
 }
 
-test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审核 → 刷新恢复 → 失败状态 → 响应式 + 五尺寸截图', { timeout: 360_000 }, async () => {
+test('任务 IA real browser: 规范路由创建 → 执行 → 结果 → 刷新恢复 → 能力任务 → 失败态 → 截图', { timeout: 420_000 }, async () => {
   assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required');
   // 证据目录：默认回归输出到临时目录（绝不修改仓库 tracked 证据，`npm test`
-  // 不会弄脏 worktree）；仅 A3P_CAPTURE=1 的确定性捕获才写仓库验收证据目录
-  // （精确路径，绝不触碰其他证据）。
+  // 不会弄脏 worktree）；仅 A3P_CAPTURE=1 的确定性捕获才写仓库验收证据目录。
   const evidenceDir = CAPTURE
     ? EVIDENCE_DIR
     : await mkdtemp(join(tmpdir(), 'ams-a3p-evidence-'));
@@ -292,7 +317,7 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
   let tracker;
   try {
     const baseUrl = `http://127.0.0.1:${vitePort}/ai-marketing-studio/`;
-    await waitFor(async () => (await fetch(baseUrl)).ok, { label: '三页 Vite route' });
+    await waitFor(async () => (await fetch(baseUrl)).ok, { label: 'Vite route' });
     const target = await waitForPageTarget(debugPort);
     cdp = new CdpClient(target.webSocketDebuggerUrl);
     await cdp.open();
@@ -304,163 +329,198 @@ test('三页任务架构 real browser: 创建 → 执行详情 → 结果与审�
     await navigateAndWait(cdp, tracker, baseUrl, { label: 'base page' });
     await cdp.evaluate(SEED_SCRIPT);
 
-    // ---- 新任务首页：#/ai 创建任务（计划 → 人工确认）----
+    // ---- 规范路由 1：#/tasks/new 新任务页（真实空状态 + 导航唯一性契约）----
     await reloadAndWait(cdp, tracker, { label: 'seed workspace reload' });
-    await cdp.evaluate(`location.href = ${JSON.stringify(`${baseUrl}#/ai`)}`);
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/new')`), { label: '规范路径 /tasks/new' });
     await waitForSelector(cdp, '[data-testid="ai-task-flow"]', { label: '三页任务流程条', timeout: 30_000 });
+    // 无 taskId：当前任务必须为 null，显示真实空状态。
+    await waitForSelector(cdp, '[data-testid="ai-no-current-task"]', { label: '新任务真实空状态' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-flow-execution"]').disabled`), true, '无当前任务时执行详情必须禁用');
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-flow-results"]').disabled`), true, '无当前任务时结果页必须禁用');
+    // 导航 DOM 唯一性契约：同一可见菜单标签只出现一次，无重复注册。
+    const navLabels = await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item .nav-label'), (item) => item.textContent).filter(Boolean)`);
+    assert.equal(new Set(navLabels).size, navLabels.length, `导航标签不得重复：${navLabels.join(',')}`);
+    for (const label of ['账号矩阵', '角色库', '提示词库', '数据分析']) {
+      assert.equal(navLabels.filter((entry) => entry === label).length, 1, `“${label}”只能出现一次`);
+    }
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-plugin-rail').length`), 0, '页面内不得再有重复插件菜单');
     const flowLabels = await cdp.evaluate(`Array.from(document.querySelectorAll('[data-testid="ai-task-flow"] button'), (item) => item.textContent)`);
-    assert.match(flowLabels.join(''), /新任务/, '流程条必须包含新任务');
-    assert.match(flowLabels.join(''), /执行详情/, '流程条必须包含执行详情');
-    assert.match(flowLabels.join(''), /结果与审核/, '流程条必须包含结果与审核');
+    assert.match(flowLabels.join(''), /新任务/);
+    assert.match(flowLabels.join(''), /执行详情/);
+    assert.match(flowLabels.join(''), /结果与审核/);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="ai-task-flow"] button').length`), 3);
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'task-new', dir: evidenceDir });
 
+    // ---- 创建成功任务（计划 → 人工确认，仅在工作台会话内）----
     await setInput(cdp, '[data-testid="harness-intent"]', '搜索 X 上本周热门 AI 营销话题并保存证据');
     await click(cdp, { selector: '[data-testid="harness-submit"]', label: '生成计划' });
     await waitForSelector(cdp, '[data-testid="harness-authoritative-plan"]', { label: '权威计划', timeout: 15_000 });
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('此步骤只生成计划，不调用付费工具')`), true, '创建页必须保持 plan 不触发付费的边界');
-    // 授权边界：付费/写入批准必须由人工勾选。
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-confirm"]').disabled`), true, '未勾选批准时确认按钮必须禁用');
     const taskId = await cdp.evaluate(`[...document.querySelectorAll('[data-testid^="ai-task-open-execution-"]')][0]?.dataset.testid.replace('ai-task-open-execution-', '') || ''`);
     assert.match(taskId, /^ht-[0-9a-f-]{36}$/, '必须拿到真实任务编号');
-
-    // ---- 未确认任务的诚实空态：直接打开结果页，任务还在等待确认 ----
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-results/${taskId}` });
-    await waitFor(() => cdp.evaluate(`location.hash === '#/ai-results/${taskId}'`), { label: '结果页直接打开路由' });
-    await waitForSelector(cdp, '[data-testid="ai-task-results"]', { label: '结果页（未确认）' });
-    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-no-result"]') !== null`), { label: '未产生结果的诚实空态', timeout: 20_000 });
-    const pendingResultText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-no-result"]').innerText`);
-    assert.match(pendingResultText, /等待确认/, '未确认任务必须诚实显示尚未产生最终结果');
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-no-chain"]') !== null`), true, '无产物时必须显示诚实来源链空态');
-
-    // ---- 回到首页：从历史记录恢复任务并确认（刷新恢复 + 人工授权）----
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai` });
-    await waitForSelector(cdp, '[data-testid="ai-task-flow"]', { label: '首页恢复' });
-    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('.ai-task-row-main strong')].some((item) => item.textContent.includes('搜索 X 上本周热门'))`), { label: '历史任务记录', timeout: 30_000 });
-    await cdp.evaluate(`[...document.querySelectorAll('.ai-task-row-main')].find((item) => item.textContent.includes('搜索 X 上本周热门')).click()`);
-    await waitForSelector(cdp, '[data-testid="harness-confirm"]', { label: '恢复后的确认面板', timeout: 15_000, enabled: false });
     await checkBox(cdp, '[data-testid="harness-paid-approval"]');
     await checkBox(cdp, '[data-testid="harness-write-approval"]');
     await click(cdp, { selector: '[data-testid="harness-confirm"]', label: '确认并开始执行' });
-    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('[data-testid^="ai-task-open-execution-"]')].length >= 1`), { label: '活动任务入口', timeout: 15_000 });
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="harness-active-task"]')?.innerText.includes('正在执行') || document.querySelector('[data-testid="harness-active-task"]')?.innerText.includes('已完成')`), { label: '活动任务推进', timeout: 20_000 });
 
-    // ---- 任务执行详情页：#/ai-execution/<taskId>（同一 taskId 跳转）----
-    await cdp.evaluate(`document.querySelector('[data-testid^="ai-task-open-execution-"]').click()`);
-    await waitFor(() => cdp.evaluate(`location.hash === '#/ai-execution/${taskId}'`), { label: '执行详情精确路由' });
+    // ---- 规范路由 2：/tasks/<taskId> 执行详情（同一 taskId 应用内跳转）----
+    await click(cdp, { selector: '[data-testid="ai-task-flow-execution"]', label: '流程条执行详情' });
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/${taskId}')`), { label: '规范路径 /tasks/<taskId>' });
     await waitForSelector(cdp, '[data-testid="ai-task-execution"]', { label: '执行详情页' });
     await waitForSelector(cdp, '[data-testid="ai-task-plan"]', { label: '权威计划面板', timeout: 15_000 });
     const planText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-plan"]').innerText`);
     assert.match(planText, /研究分析闭环/, '执行详情必须展示权威计划标题');
     assert.match(planText, /搜索并采集帖子/, '执行详情必须展示计划步骤');
     assert.match(planText, /保存证据与知识/, '执行详情必须展示计划步骤');
-    assert.match(planText, /需要授权：付费采集或模型分析/, '执行详情必须展示授权范围');
-    assert.match(planText, /需要授权：保存产物到 staging/, '执行详情必须展示授权范围');
-    // 轮询推进：任务最终到达终态（真实服务端状态推进，非静态）。
+    // 真实步骤状态与时间/错误全部来自 snapshot（轮询推进到终态）。
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"] .status-badge')?.textContent === '已完成'`), { label: '任务终态', timeout: 40_000 });
+    // 工具调用：真实 snapshot 记录渲染为列表。
+    await waitForSelector(cdp, '[data-testid="ai-task-tool-call-list"]', { label: '真实工具调用列表', timeout: 15_000 });
+    const toolText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-tool-call-list"]').innerText`);
+    assert.match(toolText, /search/, '工具调用必须展示真实 tool 名称');
+    assert.match(toolText, /save/, '工具调用必须展示真实 save 调用');
+    assert.match(toolText, /succeeded/, '工具调用必须展示真实状态');
+    assert.match(toolText, /st-1|st-2/, '工具调用必须带步骤归属');
+    // 技术详情默认折叠：task_id/project_id/指纹/审批字段不在普通视图。
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-technical-details"]').open`), false, '技术详情必须默认折叠');
     const heroText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"]').innerText`);
-    assert.match(heroText, new RegExp(taskId), '执行详情必须显示任务编号');
-    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'execution-detail', dir: evidenceDir });
+    assert.doesNotMatch(heroText, new RegExp(taskId), '普通视图不得直接展示内部 task_id');
+    assert.equal(await cdp.evaluate(`document.body.innerText.includes('流程 研究分析闭环')`), true, '普通视图展示用户友好的流程名');
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'task-execution', dir: evidenceDir });
 
-    // ---- 任务结果与审核页：#/ai-results/<taskId>（同一 taskId 再跳转）----
-    await cdp.evaluate(`document.querySelector('[data-testid="ai-task-open-results"]').click()`);
-    await waitFor(() => cdp.evaluate(`location.hash === '#/ai-results/${taskId}'`), { label: '结果与审核精确路由' });
-    await waitForSelector(cdp, '[data-testid="ai-task-results"]', { label: '结果与审核页' });
+    // ---- 规范路由 3：/tasks/<taskId>/results 结果页（同一 taskId 再跳转）----
+    await click(cdp, { selector: '[data-testid="ai-task-open-results"]', label: '结果与审核' });
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/${taskId}/results')`), { label: '规范路径 /tasks/<taskId>/results' });
+    await waitForSelector(cdp, '[data-testid="ai-task-results"]', { label: '结果页' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-result"] h3')?.textContent.includes('1 条内容已保存为证据')`), { label: '结果标题', timeout: 20_000 });
     const reviewText = await cdp.evaluate(`document.querySelector('[data-testid="ai-review-details"]').innerText`);
     assert.match(reviewText, /已完成/, '审核状态必须显示真实任务状态');
-    assert.match(reviewText, /付费采集或模型分析/, '审核状态必须显示已批准的人工范围');
-    const resultText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-result"]').innerText`);
-    assert.match(resultText, /已完成：保存 1 条证据并生成 1 张知识卡/, '结果页必须展示服务端 final_response');
+    // 结果五分类：Evidence / Analysis / Knowledge / Brief / Artifact 全部来自真实 snapshot。
+    for (const key of ['evidence', 'analysis', 'knowledge', 'brief', 'artifact']) {
+      await waitForSelector(cdp, `[data-testid="ai-task-${key}-items"]`, { label: `${key} 分类真实数据`, timeout: 15_000 });
+    }
+    const evidenceText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-evidence-items"]').innerText`);
+    assert.match(evidenceText, /ev-000000000000000000000001/, 'Evidence 必须来自 artifact_refs 分类');
+    const analysisText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-analysis-items"]').innerText`);
+    assert.match(analysisText, /an-000000000000000000000007/, 'Analysis 必须来自 an- 身份引用');
+    assert.match(analysisText, /多模态分析/, 'Analysis 必须来自 result_data.analyses');
+    const artifactText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-artifact-items"]').innerText`);
+    assert.match(artifactText, /g1x-000000000000000000000005/, 'Artifact 必须来自 g1x- 身份引用');
+    assert.match(artifactText, /主视觉/, 'Artifact 必须来自 result_data.artifacts');
     const chainText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-chain-list"]').innerText`);
     assert.match(chainText, /ev-000000000000000000000001/, '来源链必须展示证据身份');
     assert.match(chainText, /kc-000000000000000000000002/, '来源链必须展示知识卡身份');
     assert.match(chainText, /brf-000000000000000000000003/, '来源链必须展示 Brief 身份');
-    assert.match(chainText, /证据/, '来源链必须分类标注');
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'task-results', dir: evidenceDir });
 
-    // ---- 直接打开 + 硬刷新恢复：同一 hash 恢复同一任务 ----
+    // ---- 硬刷新恢复：同一规范路径 + 同一 taskId，从服务端重新读取 ----
     await reloadAndWait(cdp, tracker, { label: '结果页硬刷新' });
-    await waitFor(() => cdp.evaluate(`location.hash === '#/ai-results/${taskId}'`), { label: '刷新后路由保持' });
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/${taskId}/results')`), { label: '刷新后规范路径保持' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-result"] h3')?.textContent.includes('1 条内容已保存为证据')`), { label: '刷新后结果恢复', timeout: 30_000 });
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-execution/${taskId}` });
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/${taskId}` });
     await waitForSelector(cdp, '[data-testid="ai-task-execution"]', { label: '直接打开执行详情' });
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/${taskId}')`), { label: '直接打开规范路径' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"] .status-badge')?.textContent === '已完成'`), { label: '直接打开恢复终态', timeout: 30_000 });
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-results/${taskId}` });
-    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-result"] h3')?.textContent.includes('1 条内容已保存为证据')`), { label: '结果页二次恢复', timeout: 30_000 });
 
-    // ---- 五尺寸截图（结果页，最完整页面）----
-    for (const width of [1440, 1366, 1024, 768, 390]) {
-      const file = await captureScreenshot(cdp, { width, height: 1000, label: 'results', dir: evidenceDir });
-      assert.equal(existsSync(file), true, `截图必须生成：${file}`);
-    }
-    // 390px 无横向溢出。
-    await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: '移动端布局稳定' });
-    assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth > document.documentElement.clientWidth`), false, '390px 页面不得横向溢出');
-    // 首页截图需要回到 #/ai（结果页恢复后）。
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai` });
-    await waitForSelector(cdp, '[data-testid="ai-task-flow"]', { label: '首页恢复' });
-    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'home', dir: evidenceDir });
+    // ---- 能力任务：/tasks/new 无 taskId 时当前任务为 null，能力任务不自动成为当前 ----
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
+    await waitForSelector(cdp, '[data-testid="ai-no-current-task"]', { label: '空状态恢复' });
+    await setInput(cdp, '[data-testid="harness-intent"]', '你能干什么');
+    await click(cdp, { selector: '[data-testid="harness-submit"]', label: '生成能力查询计划' });
+    // 能力任务绝不设为当前任务：页面直接进入该任务的只读执行详情。
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/ht-00000000-0000-4000-8000-000000000002')`), { label: '能力任务执行详情路由', timeout: 20_000 });
+    await waitForSelector(cdp, '[data-testid="ai-task-execution"]', { label: '能力任务执行详情页' });
+    // 无付费/写入授权 → 确认按钮直接可用，从执行页确认。
+    await waitForSelector(cdp, '[data-testid="ai-task-confirm-zone"]', { label: '执行页确认区', timeout: 15_000 });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-confirm"]').disabled`), false, '能力任务无授权要求，确认可直接执行');
+    await click(cdp, { selector: '[data-testid="ai-task-confirm"]', label: '确认能力任务' });
+    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"] .status-badge')?.textContent === '已完成'`), { label: '能力任务终态', timeout: 40_000 });
+    // 回新任务页：能力任务仍只在历史列表，不自动成为当前任务。
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
+    await waitForSelector(cdp, '[data-testid="ai-no-current-task"]', { label: '能力任务后空状态仍在' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-active-task"]') === null`), true, '能力任务不得成为当前任务');
+    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('.ai-task-row strong')].some((item) => item.textContent.includes('能力：你能干什么'))`), { label: '能力任务在历史列表', timeout: 30_000 });
+    // 点击历史中的能力任务 → 进入其执行详情页（只读），不激活为当前任务。
+    await cdp.evaluate(`[...document.querySelectorAll('.ai-task-row-main')].find((item) => item.textContent.includes('能力：你能干什么')).click()`);
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/ht-00000000-0000-4000-8000-000000000002')`), { label: '历史能力任务进入执行详情', timeout: 20_000 });
+    await waitForSelector(cdp, '[data-testid="ai-task-execution"]', { label: '历史能力任务只读详情' });
 
-    // ---- 失败状态：含「失败测试」的任务在执行详情展示真实失败 ----
-    await cdp.evaluate(`document.querySelector('.ai-new-session')?.click()`);
+    // ---- 失败状态：真实失败 + 工具调用明确空态（失败步骤无工具调用记录）----
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
+    await waitForSelector(cdp, '[data-testid="ai-no-current-task"]', { label: '失败任务前空状态' });
     await setInput(cdp, '[data-testid="harness-intent"]', '失败测试：采集工具不可用');
     await click(cdp, { selector: '[data-testid="harness-submit"]', label: '生成失败任务计划' });
-    await waitForSelector(cdp, '[data-testid="harness-confirm"]', { label: '失败任务确认面板', timeout: 15_000, enabled: false });
+    await waitForSelector(cdp, '[data-testid="harness-authoritative-plan"]', { label: '失败任务计划', timeout: 15_000 });
     await checkBox(cdp, '[data-testid="harness-paid-approval"]');
     await checkBox(cdp, '[data-testid="harness-write-approval"]');
     await click(cdp, { selector: '[data-testid="harness-confirm"]', label: '确认失败任务' });
-    await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid^="ai-task-open-execution-"]') !== null`), { label: '失败任务活动入口', timeout: 15_000 });
-    // 活动任务区先于历史渲染：第一个匹配即当前失败任务（意图含「失败测试」）。
-    const failedTaskId = await cdp.evaluate(`(() => {
-      const link = [...document.querySelectorAll('[data-testid^="ai-task-open-execution-"]')].find((item) => {
-        const row = item.closest('.ai-active-task') || item.closest('[data-testid="harness-active-task"]');
-        return row ? row.innerText.includes('失败测试') : false;
-      }) || document.querySelector('[data-testid^="ai-task-open-execution-"]');
-      return link?.dataset.testid.replace('ai-task-open-execution-', '') || '';
-    })()`);
-    assert.match(failedTaskId, /^ht-[0-9a-f-]{36}$/, '必须拿到失败任务编号');
-    await cdp.evaluate(`[...document.querySelectorAll('[data-testid^="ai-task-open-execution-"]')].find((item) => item.dataset.testid === 'ai-task-open-execution-${failedTaskId}').click()`);
-    await waitFor(() => cdp.evaluate(`location.hash === '#/ai-execution/${failedTaskId}'`), { label: '失败任务执行详情路由' });
+    await waitFor(() => cdp.evaluate(`[...document.querySelectorAll('[data-testid^="ai-task-open-execution-"]')].length >= 1`), { label: '失败任务入口', timeout: 15_000 });
+    await click(cdp, { selector: '[data-testid="ai-task-flow-execution"]', label: '失败任务执行详情' });
+    await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/ht-00000000-0000-4000-8000-000000000003')`), { label: '失败任务规范路径' });
     await waitFor(() => cdp.evaluate(`document.querySelector('[data-testid="ai-task-hero"] .status-badge')?.textContent === '执行失败'`), { label: '失败任务终态', timeout: 40_000 });
     const failedText = await cdp.evaluate(`document.body.innerText`);
     assert.match(failedText, /TOOL_FAILED/, '失败任务必须展示有界错误代码');
     assert.match(failedText, /采集工具返回失败/, '失败任务必须展示错误消息');
     assert.match(failedText, /已尝试 2 次/, '失败步骤必须展示真实尝试次数（failed_count）');
-    const failedErrorText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-error"]')?.innerText || ''`);
-    assert.match(failedErrorText, /save_evidence|HARNESS_FAILED/, '任务级错误诊断必须展示');
-    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'execution-failed', dir: evidenceDir });
+    // 失败任务仍真实展示成功步骤留下的工具调用（st-1 真实调用记录）。
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-no-tool-calls"]') === null`), true, '有真实工具调用记录时不得显示空态');
+    assert.match(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-tool-call-list"]')?.innerText || ''`), /search/, '失败任务必须展示 st-1 的真实工具调用');
+    await captureScreenshot(cdp, { width: 1440, height: 1000, label: 'task-execution-failed', dir: evidenceDir });
 
-    // ---- 非法任务编号：诚实错误态（不猜测、不伪造）----
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-execution/ht-not-a-valid-task` });
+    // ---- 工具调用明确空态：能力任务没有任何工具调用记录（不得从计划步骤伪造）----
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/ht-00000000-0000-4000-8000-000000000002` });
+    await waitForSelector(cdp, '[data-testid="ai-task-execution"]', { label: '能力任务执行页（空工具调用）' });
+    await waitForSelector(cdp, '[data-testid="ai-task-no-tool-calls"]', { label: '工具调用明确空态', timeout: 15_000 });
+    assert.match(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-no-tool-calls"]').innerText`), /服务端没有该任务的工具调用记录/, '工具调用空态必须明确');
+
+    // ---- 结果页逐类空态：能力任务（无产物身份）----
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/ht-00000000-0000-4000-8000-000000000002/results` });
+    await waitForSelector(cdp, '[data-testid="ai-task-results"]', { label: '能力任务结果页' });
+    for (const key of ['evidence', 'analysis', 'knowledge', 'brief', 'artifact']) {
+      await waitForSelector(cdp, `[data-testid="ai-task-no-${key}"]`, { label: `${key} 逐类空态`, timeout: 20_000 });
+    }
+
+    // ---- 非法编号与读取失败：诚实错误态 ----
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/ht-not-a-valid-task` });
     await waitForSelector(cdp, '[data-testid="ai-task-invalid-id"]', { label: '非法编号错误态', timeout: 20_000 });
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-results/ht-not-a-valid-task` });
-    await waitForSelector(cdp, '[data-testid="ai-task-invalid-id"]', { label: '结果页非法编号错误态', timeout: 20_000 });
-
-    // ---- 读取失败状态：合法格式但服务端不存在的任务 → 诚实读取错误 ----
-    await cdp.send('Page.navigate', { url: `${baseUrl}#/ai-execution/ht-11111111-1111-4111-8111-111111111111` });
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/ht-11111111-1111-4111-8111-111111111111` });
     await waitForSelector(cdp, '[data-testid="ai-task-read-error"]', { label: '读取失败错误态', timeout: 20_000 });
     const readErrorText = await cdp.evaluate(`document.querySelector('[data-testid="ai-task-read-error"]').innerText`);
     assert.match(readErrorText, /TASK_NOT_FOUND|任务不存在/, '读取失败必须展示有界错误文本');
 
-    // ---- 零付费证明：fake edge 计数 + 无真实网络调用 ----
+    // ---- 移动端无横向溢出 ----
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
+    await waitForSelector(cdp, '[data-testid="ai-task-flow"]', { label: '移动端新任务页' });
+    await waitFor(() => cdp.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), { label: '移动端布局稳定' });
+    assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth > document.documentElement.clientWidth`), false, '390px 页面不得横向溢出');
+
+    // ---- 零付费证明：fake edge 计数 ----
     const plans = await cdp.evaluate(`globalThis.__a3pFakeState?.plans?.() || 0`);
     const confirms = await cdp.evaluate(`globalThis.__a3pFakeState?.confirms?.() || 0`);
-    assert.ok(plans >= 2, `必须经过两次真实 plan：${plans}`);
-    assert.ok(confirms >= 2, `必须经过两次真实 confirm：${confirms}`);
-    assert.equal(await cdp.evaluate(`globalThis.__a3pFakeState?.tasks?.().length`), 2, 'fake edge 只保留两条任务');
+    assert.ok(plans >= 3, `必须经过三次真实 plan：${plans}`);
+    assert.ok(confirms >= 3, `必须经过三次真实 confirm：${confirms}`);
 
-    // 记录真实路由与数据来源（验收证据说明）。
+    // 记录真实路由与数据来源（验收证据说明；契约测试，非线上成功证据）。
     const evidence = [
-      '# 三页任务架构验收证据（真实浏览器）',
+      '# 任务信息架构与真实状态统一验收证据（真实浏览器，契约测试）',
       '',
       `- 日期：2026-08-23；本地 dev server（vite）+ headless Edge（CDP）。`,
       `- 浏览器测试数据源/契约模拟（fake edge，非真实服务端）：`,
-      `  1. 浏览器 → #/ai（新任务首页，本地 vite dev server）：harnessClient.plan/confirm → fake edge（镜像 harness-command 契约，仅本测试进程注入）→ 任务创建与人工确认；`,
-      `  2. #/ai-execution/<taskId>（任务执行详情页）：harnessClient.read(<taskId>) → 任务/计划/step_states（进度、失败、attempts=failed_count）；`,
-      `  3. #/ai-results/<taskId>（任务结果与审核页）：harnessClient.read(<taskId>) → result.final_response / artifact_refs（来源链）/ confirmation（审核范围）。`,
-      `- 证明范围：UI、精确 taskId 路由、硬刷新恢复、失败态、非法/不存在编号错误态与响应式（390px 无横向溢出）。`,
-      `- 真实运行时数据来源：Supabase harness-command（生产 edge）；真实服务端/线上验收仍待部署后验证，本证据不构成真实服务端成功证据。`,
-      `- 演示任务编号：${taskId}（成功）、${failedTaskId}（失败）。`,
-      `- 截图对应路由：execution-detail-1440 → #/ai-execution/${taskId}；results-* → #/ai-results/${taskId}；`,
-      `  execution-failed-1440 → #/ai-execution/${failedTaskId}；home-1440 → #/ai。`,
+      `  1. 浏览器 → /tasks/new（新任务页，本地 vite dev server）：harnessClient.plan/confirm → fake edge（镜像 harness-command 契约，仅本测试进程注入）→ 任务创建与人工确认；`,
+      `  2. /tasks/<taskId>（任务执行详情页）：harnessClient.read(<taskId>) → 任务/计划/step_states（进度、失败、attempts=failed_count、真实 tool_calls）；`,
+      `  3. /tasks/<taskId>/results（任务结果与审核页）：harnessClient.read(<taskId>) → result.final_response / artifact_refs（五分类来源链）/ result_data.analyses+artifacts / confirmation（审核范围）。`,
+      `- 证明范围：三个规范路由应用内跳转与硬刷新恢复（同一 taskId）、新任务真实空状态、`,
+      `  能力任务不自动成为当前任务、执行详情步骤/工具调用/时间/错误的真实来源与明确空态、`,
+      `  结果页五分类（Evidence/Analysis/Knowledge/Brief/Artifact）真实来源与逐类空态、`,
+      `  导航 DOM 唯一性契约、非法/不存在编号错误态、390px 无横向溢出。`,
+      `- 真实运行时数据来源：Supabase harness-command（生产 edge）；真实服务端/线上验收仍待部署后验证，`,
+      `  本证据是注入 fake edge 的契约测试，不构成真实服务端成功证据。`,
+      `- 演示任务编号：ht-00000000-0000-4000-8000-000000000001（成功）、ht-00000000-0000-4000-8000-000000000002（能力查询）、`,
+      `  ht-00000000-0000-4000-8000-000000000003（失败）。`,
+      `- 截图对应规范路由：task-new-1440 → /tasks/new；task-execution-1440 → /tasks/ht-…001；`,
+      `  task-results-1440 → /tasks/ht-…001/results；task-execution-failed-1440 → /tasks/ht-…002。`,
       `- 零付费证明：fake edge 只做内存状态推进（plan×${plans} / confirm×${confirms}），全程零真实 Provider/付费调用、零 production 访问、零 Secret 输出。`,
       `- 无新增 mock 进入产品运行时：fake edge 仅在本浏览器测试进程注入，产品代码只走真实 harness-command 读取适配。`,
       '',

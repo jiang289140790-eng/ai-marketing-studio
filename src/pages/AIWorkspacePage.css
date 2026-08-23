@@ -376,96 +376,6 @@
   padding: 18px clamp(12px, 1.5vw, 24px) 44px;
 }
 
-.ai-harness-shell {
-  display: grid;
-  grid-template-columns: 238px minmax(0, 1fr);
-  min-height: calc(100vh - 126px);
-  overflow: hidden;
-  border: 1px solid #dfe7e3;
-  border-radius: 22px;
-  background: #f7faf8;
-  color: #18241f;
-  box-shadow: 0 24px 80px rgba(3, 18, 12, .18);
-}
-
-.ai-plugin-rail {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-width: 0;
-  padding: 20px 14px;
-  border-right: 1px solid #e2e9e5;
-  background: #f1f6f3;
-}
-
-.ai-plugin-brand {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 2px 8px 10px;
-}
-
-.ai-plugin-brand > div,
-.ai-plugin-safety > div { display: grid; gap: 1px; }
-.ai-plugin-brand strong { font-size: 14px; }
-.ai-plugin-brand small,
-.ai-plugin-safety small { color: #718078; font-size: 11px; }
-.ai-plugin-mark {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 10px;
-  background: #146c43;
-  color: white;
-  font-weight: 900;
-}
-
-.ai-new-session {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #cfdcd5;
-  border-radius: 12px;
-  background: white;
-  color: #21332a;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.ai-new-session:hover { border-color: #6daa8c; background: #f8fffb; }
-.ai-plugin-heading { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 0; color: #74827b; font-size: 11px; font-weight: 700; }
-.ai-plugin-heading small { color: #97a49d; }
-.ai-plugin-list { display: grid; gap: 5px; }
-.ai-plugin-list button {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  padding: 9px 8px;
-  border: 1px solid transparent;
-  border-radius: 11px;
-  background: transparent;
-  color: #34433b;
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
-}
-.ai-plugin-list button:hover { background: #e7f1eb; }
-.ai-plugin-list button.active { border-color: #c9dfd2; background: #dff0e6; color: #145c3c; }
-.ai-plugin-list button > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
-.ai-plugin-list b { font-size: 12px; }
-.ai-plugin-list small { overflow: hidden; color: #77857e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.ai-plugin-list i { color: #91a098; font-style: normal; }
-.ai-plugin-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: rgba(20, 108, 67, .08); color: #146c43; }
-.ai-plugin-safety { display: flex; gap: 10px; align-items: center; margin-top: auto; padding: 12px; border: 1px solid #d7e4dd; border-radius: 12px; background: white; }
-.ai-plugin-safety b { font-size: 11px; }
-
 .ai-harness-main {
   display: grid;
   align-content: start;
@@ -545,58 +455,22 @@
 .ai-harness-main .ai-artifacts code { background: #edf5f0; color: #146c43; }
 .ai-harness-main .ai-history-body { border-color: #dfe7e3; }
 
-@media (max-width: 1180px) {
-  .ai-harness-shell { grid-template-columns: 78px minmax(0, 1fr); }
-  .ai-plugin-brand { justify-content: center; padding-inline: 0; }
-  .ai-plugin-brand > div,
-  .ai-new-session:not(:hover) { font-size: 0; }
-  .ai-new-session span { font-size: 18px; }
-  .ai-plugin-heading { justify-content: center; }
-  .ai-plugin-heading span,
-  .ai-plugin-heading small,
-  .ai-plugin-list button > span:nth-child(2),
-  .ai-plugin-list button i,
-  .ai-plugin-safety div { display: none; }
-  .ai-plugin-list button { grid-template-columns: 1fr; justify-items: center; padding: 8px; }
-  .ai-plugin-safety { justify-content: center; }
-}
-
 @media (max-width: 760px) {
   .ai-workspace { padding: 8px; }
-  .ai-harness-shell { display: block; border-radius: 16px; }
-  .ai-plugin-rail { display: block; padding: 10px; border-right: 0; border-bottom: 1px solid #e2e9e5; }
-  .ai-plugin-brand, .ai-new-session, .ai-plugin-heading, .ai-plugin-safety { display: none; }
-  .ai-plugin-list { display: flex; overflow-x: auto; gap: 7px; padding-bottom: 2px; }
-  .ai-plugin-list button { flex: 0 0 auto; grid-template-columns: auto auto; width: auto; padding: 7px 10px; }
-  .ai-plugin-list button > span:nth-child(2) { display: block; }
-  .ai-plugin-list button small, .ai-plugin-list button i { display: none; }
   .ai-harness-main { padding: 12px; }
   .ai-harness-main .ai-hero { grid-template-columns: 1fr; }
   .ai-harness-main .ai-hero-status { min-width: 0; }
 }
 
 /* The Harness shell now belongs to App. AIWorkspacePage contributes only the
-   conversation canvas, avoiding the previous page-inside-a-page layout. */
+   conversation canvas, avoiding the previous page-inside-a-page layout.
+   （页面内插件栏已删除：业务插件菜单只存在于侧栏唯一注册源。） */
 .ai-workspace {
   width: min(1380px, calc(100% - 48px));
   max-width: none;
   margin: 0 auto;
   padding: 38px 0 56px;
   color: #1c2922;
-}
-
-.ai-harness-shell {
-  display: block;
-  min-height: 0;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.ai-plugin-rail {
-  display: none;
 }
 
 .ai-harness-main {

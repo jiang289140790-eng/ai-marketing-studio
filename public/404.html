@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Marketing Studio</title>
+    <script>
+      // GitHub Pages 不会为 SPA 路径重写 index.html：未知路径（含规范任务路由
+      // /tasks/new、/tasks/<taskId>、/tasks/<taskId>/results）一律返回 404.html。
+      // 这里把规范任务路径无损重写为哈希形式（#/tasks/...），应用加载后再由
+      // app-route.js 恢复成规范路径 URL —— 硬刷新后同一 taskId 全程保持。
+      // 部署路径固定为 /ai-marketing-studio/（vite.config base 与仓库名一致）。
+      function redirectTarget(pathname, search) {
+        var base = '/ai-marketing-studio/';
+        if (pathname.indexOf(base) === 0) {
+          var remainder = pathname.slice(base.length).replace(/\/+$/, '');
+          if (remainder === 'tasks' || remainder.indexOf('tasks/') === 0) {
+            return base + '#/' + remainder + (search || '');
+          }
+        }
+        return pathname + (search || '');
+      }
+      (function () {
+        var target = redirectTarget(window.location.pathname, window.location.search);
+        if (target !== window.location.pathname + (window.location.search || '')) {
+          window.location.replace(target);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <p>
+      页面正在加载，如果没有自动跳转，请
+      <a href="/ai-marketing-studio/#/tasks/new">前往 AI 工作台</a>。
+    </p>
+  </body>
+</html>

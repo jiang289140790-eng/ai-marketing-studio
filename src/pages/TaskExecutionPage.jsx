@@ -5,10 +5,7 @@ import {
   APPROVAL_REQUIREMENTS,
   isValidHarnessTaskId,
   normalizeTaskSnapshot,
-  requiredApprovals,
-  stateLabel,
-  stepExecutionView,
-  taskErrorText,
+  taskSnapshotView,
 } from '../services/harness-task-model.js';
 import './ai-task-pages.css';
 
@@ -26,12 +23,13 @@ function formatTime(value) {
 const POLL_INTERVAL_MS = 1500;
 
 /**
- * 任务执行详情页：`#/ai-execution/<taskId>`。
+ * 任务执行详情页：规范路由 `/tasks/<taskId>`（旧 `#/ai-execution/<taskId>` 兼容重定向）。
  *
- * 只读取真实服务端任务快照（harness read），展示权威计划、逐步执行
- * 进度（attempt/event/failure 由 step_states 的真实字段派生）、失败诊断与
- * 重试。确认/重试仍走既有 plan → 人工授权边界；本页任何操作都不静默
- * 触发付费 Provider。没有数据时展示诚实错误/空态。
+ * 只读取真实服务端任务快照（harness read），从同一个 taskId 的同一个
+ * snapshot 派生顶部汇总、任务卡片、步骤/工具调用、错误与技术详情（单一
+ * snapshot view model）。轮询更新原子替换整个 snapshot，绝不局部拼接。
+ * 步骤与 tool calls 只展示服务端存在的数据；缺失即明确空态，绝不从计划
+ * 步骤伪造成已调用工具。没有数据时展示诚实错误/空态。
  */
 export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessClient: providedHarnessClient }) {
   const harnessClient = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
@@ -70,7 +68,8 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // 活动任务有界轮询：queued/running 期间每 1.5s 读取真实状态，终态自动停止。
+  // 活动任务有界轮询：queued/running 期间每 1.5s 读取真实状态，
+  // 每次原子替换整个 snapshot，终态自动停止。
   useEffect(() => {
     if (!task || !['queued', 'running'].includes(task.state)) return undefined;
     const timer = globalThis.setInterval(async () => {
@@ -103,14 +102,44 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
     setAllowHandoff(false);
   }, [task?.id, task?.state, task?.plan?.fingerprint]);
 
-  const steps = useMemo(() => (task ? stepExecutionView(task) : []), [task]);
-  const approvals = useMemo(() => requiredApprovals(task), [task]);
+  const view = useMemo(() => taskSnapshotView(task), [task]);
+  const steps = view?.steps || [];
+  const toolCalls = view?.toolCalls || { present: false, calls: [] };
+  const approvals = view?.approvals || {};
+  const technical = view?.technical || null;
   const approvalsReady = (!approvals.paid_external_calls || allowPaid)
     && (!approvals.online_writes || allowWrites)
     && (!approvals.handoff_creation || allowHandoff);
   const phase = task?.state === 'planned' ? 'planned'
     : ['queued', 'running'].includes(task?.state) ? 'active'
       : ['partial', 'failed', 'blocked'].includes(task?.state) ? 'attention' : 'terminal';
+
+  async function confirmPlan() {
+    if (!task?.plan || submitting || !approvalsReady) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const response = await harnessClient.confirm({
+        taskId: task.id,
+        planFingerprint: task.plan.fingerprint,
+        approval: {
+          paid_external_calls: approvals.paid_external_calls === true,
+          online_writes: approvals.online_writes === true,
+          handoff_creation: approvals.handoff_creation === true,
+        },
+      });
+      const next = normalizeTaskSnapshot(response?.task);
+      if (!next) throw new Error('确认入口没有返回任务记录。');
+      setTask(next);
+      setAllowPaid(false);
+      setAllowWrites(false);
+      setAllowHandoff(false);
+    } catch (caught) {
+      setError(boundedMessage(caught));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   async function cancelTask() {
     if (!task || submitting) return;
@@ -120,7 +149,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
       const response = await harnessClient.cancel(task.id);
       const next = normalizeTaskSnapshot(response?.task);
       if (next) setTask(next);
-      else setTask((current) => ({ ...current, state: 'cancelled' }));
+      else setError('取消结果未被服务端确认，任务快照未改变。');
     } catch (caught) {
       setError(boundedMessage(caught));
     } finally {
@@ -157,14 +186,12 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
     }
   }
 
-  const taskError = task ? taskErrorText(task) : '';
-
   return (
     <main className="ai-task-page" data-testid="ai-task-execution">
       <div className="ai-task-head">
         <div>
           <p className="eyebrow">任务执行详情</p>
-          <h2>{task?.request?.intent ? '执行中的任务' : '任务执行详情'}</h2>
+          <h2>{view?.intent ? '执行中的任务' : '任务执行详情'}</h2>
           <p>从真实服务端读取任务、计划与逐步执行状态；直接打开或刷新本页都会恢复到同一任务。</p>
         </div>
         <div className="button-row">
@@ -191,16 +218,10 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
         <>
           <section className="ai-task-hero" data-testid="ai-task-hero">
             <div className="ai-task-identity">
-              <span className={`status-badge ${task.state}`}>{stateLabel(task.state)}</span>
-              <code title={task.id}>{task.id}</code>
-              <small>更新于 {formatTime(task.updated_at)}</small>
+              <span className={`status-badge ${task.state}`}>{view.stateLabel}</span>
             </div>
-            {task.request?.intent && <p className="ai-task-intent">{task.request.intent}</p>}
-            <div className="ai-task-meta">
-              <span>项目 {task.request?.project_id || '未绑定'}</span>
-              {task.plan && <span>计划 {task.plan.fingerprint ? `${task.plan.fingerprint.slice(0, 12)}…` : '—'}</span>}
-              {task.plan && <span>流程 {task.plan.workflow_title || '—'}</span>}
-            </div>
+            {view.intent && <p className="ai-task-intent">{view.intent}</p>}
+            {view.workflowTitle && <div className="ai-task-meta"><span>流程 {view.workflowTitle}</span></div>}
             {['planned', 'queued', 'running'].includes(task.state) && (
               <div className="ai-task-actions">
                 <button className="secondary-button" type="button" disabled={submitting} data-testid="ai-task-cancel" onClick={cancelTask}>取消任务</button>
@@ -210,8 +231,29 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
           {phase === 'planned' && task.plan && (
             <div className="notice" data-testid="ai-task-pending-confirm">
-              权威计划已生成，等待人工确认。请回到新任务首页完成“确认并开始执行”；确认授权范围见下方计划。
+              权威计划已生成，等待人工确认。确认授权范围见下方计划。
             </div>
+          )}
+
+          {phase === 'planned' && task.plan && (
+            <section className="ai-task-panel" data-testid="ai-task-confirm-zone">
+              <div className="ai-task-panel-head">
+                <div>
+                  <p className="eyebrow">人工确认</p>
+                  <h3>确认计划后才会执行</h3>
+                </div>
+              </div>
+              {Object.keys(approvals).length > 0 && (
+                <div className="ai-approvals ai-confirm-approvals">
+                  {approvals.paid_external_calls && <label><input type="checkbox" data-testid="ai-task-paid-approval" checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />允许本计划中的付费采集或模型分析</label>}
+                  {approvals.online_writes && <label><input type="checkbox" data-testid="ai-task-write-approval" checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />允许把本计划产物保存到 staging</label>}
+                  {approvals.handoff_creation && <label><input type="checkbox" data-testid="ai-task-handoff-approval" checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />允许本计划创建交接包</label>}
+                </div>
+              )}
+              <button className="primary-button" type="button" data-testid="ai-task-confirm" disabled={!approvalsReady || submitting} onClick={confirmPlan}>
+                {submitting ? '正在确认…' : '确认并开始执行'}
+              </button>
+            </section>
           )}
 
           {task.plan && (
@@ -221,7 +263,6 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                   <p className="eyebrow">权威执行计划 · 不可编辑</p>
                   <h3>{task.plan.workflow_title || '执行计划'}</h3>
                 </div>
-                <code title={task.plan.fingerprint}>{task.plan.fingerprint ? `${task.plan.fingerprint.slice(0, 12)}…` : '无指纹'}</code>
               </div>
               {Object.keys(approvals).length > 0 && (
                 <div className="ai-task-approvals" data-testid="ai-task-approvals">
@@ -267,13 +308,47 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
             </section>
           )}
 
-          {taskError && (
+          {task.plan && (
+            <section className="ai-task-panel" data-testid="ai-task-tool-calls">
+              <div className="ai-task-panel-head">
+                <div>
+                  <p className="eyebrow">真实执行记录</p>
+                  <h3>工具调用</h3>
+                </div>
+              </div>
+              {!toolCalls.present ? (
+                <div className="ai-task-empty" data-testid="ai-task-no-tool-calls">
+                  服务端没有该任务的工具调用记录；计划步骤不等于已调用的工具。
+                </div>
+              ) : (
+                <ul className="ai-tool-calls" data-testid="ai-task-tool-call-list">
+                  {toolCalls.calls.map((call, index) => (
+                    <li key={`${call.step || 'task'}-${call.tool || 'tool'}-${index}`} data-testid={`ai-task-tool-call-${index}`}>
+                      <div className="ai-tool-call-copy">
+                        <strong>{call.tool || call.operation || '工具调用'}</strong>
+                        {call.operation && <small>{call.operation}</small>}
+                        {call.step && <small>步骤 {call.step}</small>}
+                      </div>
+                      <div className="ai-step-badges">
+                        <span className={`ai-tool-status ${call.status}`}>{call.status}</span>
+                        {call.started_at && <time title={formatTime(call.started_at)}>开始 {formatTime(call.started_at)}</time>}
+                        {call.finished_at && <time title={formatTime(call.finished_at)}>结束 {formatTime(call.finished_at)}</time>}
+                      </div>
+                      {call.error && <p className="ai-step-error">{call.error.code} · {call.error.message}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {view?.errorText && (
             <div className="notice error" data-testid="ai-task-error" role="alert">
-              {taskError}
+              {view.errorText}
             </div>
           )}
 
-          {!task.plan && !taskError && (
+          {!task.plan && !view?.errorText && (
             <div className="ai-task-empty" data-testid="ai-task-no-plan">
               该任务还没有权威计划，暂时没有可展示的执行信息。
             </div>
@@ -282,6 +357,24 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
           <div className="ai-task-nav">
             <button className="ghost-button" type="button" onClick={() => onNavigate?.('ai-results', task.id)}>查看结果与审核 →</button>
           </div>
+
+          {technical && (
+            <details className="ai-technical-details" data-testid="ai-task-technical-details">
+              <summary>技术详情</summary>
+              <dl className="ai-task-technical">
+                <div><dt>task_id</dt><dd><code>{technical.task_id}</code></dd></div>
+                <div><dt>project_id</dt><dd><code>{technical.project_id || '未绑定'}</code></dd></div>
+                {technical.request_id && <div><dt>request_id</dt><dd><code>{technical.request_id}</code></dd></div>}
+                {technical.plan_fingerprint && <div><dt>计划指纹</dt><dd><code>{technical.plan_fingerprint}</code></dd></div>}
+                {technical.request_fingerprint && <div><dt>请求指纹</dt><dd><code>{technical.request_fingerprint}</code></dd></div>}
+                <div><dt>内部状态</dt><dd>{technical.state || '—'}</dd></div>
+                <div><dt>created_at</dt><dd>{formatTime(technical.created_at)}</dd></div>
+                <div><dt>updated_at</dt><dd>{formatTime(technical.updated_at)}</dd></div>
+                {technical.retry_target && <div><dt>retry_target</dt><dd><code>{technical.retry_target}</code></dd></div>}
+                <div><dt>审批字段</dt><dd><code>{JSON.stringify(technical.confirmation_approvals)}</code></dd></div>
+              </dl>
+            </details>
+          )}
         </>
       )}
 

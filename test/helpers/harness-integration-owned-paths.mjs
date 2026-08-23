@@ -127,6 +127,10 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   // （Brief gate 契约对齐 p19-workspace-command + 固定时钟/编号/证据临时目录），
   // 仅该测试文件本身，无通配；业务代码零改动。
   'test/content-creation-modes.browser.test.mjs',
+  // 任务信息架构与真实状态统一（本里程碑）：规范路由 /tasks/...、SPA 404
+  // 恢复文件与新验收证据目录。
+  'public/404.html',
+  'acceptance-evidence/task-ia-real-state-2026-08-23/**',
 ]);
 
 // Strict revision-2 contract with glob support (`/**` matches a directory and
@@ -217,6 +221,9 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'acceptance-evidence/ai-three-page-architecture-2026-08-23/**',
   // REVIEW repair 2：P30 内容创建模式浏览器测试确定性修复（严格门禁镜像）。
   'test/content-creation-modes.browser.test.mjs',
+  // 任务信息架构与真实状态统一（本里程碑，严格门禁镜像）。
+  'public/404.html',
+  'acceptance-evidence/task-ia-real-state-2026-08-23/**',
 ]);
 
 // Environment files the harness itself writes next to the worktree; they are

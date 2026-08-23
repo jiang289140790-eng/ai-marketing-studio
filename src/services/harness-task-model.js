@@ -22,6 +22,7 @@
 
 export const HARNESS_TASK_ID_PATTERN = /^ht-[0-9a-f-]{36}$/;
 export const EVIDENCE_REF_PATTERN = /^ev-[0-9a-f]{24}$/;
+export const ANALYSIS_REF_PATTERN = /^an-[0-9a-f]{24}$/;
 export const KNOWLEDGE_REF_PATTERN = /^(?:kc|card)-[0-9a-f]{24}$/;
 export const BRIEF_REF_PATTERN = /^brf-[0-9a-f]{24}$/;
 export const GENERATION_ARTIFACT_REF_PATTERN = /^g1x-[0-9a-f]{24}$/;
@@ -64,6 +65,9 @@ const MAX_REF_TEXT = 240;
 const MAX_STEPS = 50;
 const MAX_ARTIFACT_REFS = 50;
 const MAX_STATE_TEXT = 24;
+const MAX_TOOL_CALLS = 100;
+const MAX_SECTION_ITEMS = 50;
+const MAX_FINGERPRINT_TEXT = 64;
 
 export function isValidHarnessTaskId(value) {
   return typeof value === 'string' && HARNESS_TASK_ID_PATTERN.test(value);
@@ -125,6 +129,8 @@ export function normalizeTaskSnapshot(value) {
     project_id: typeof value.request.project_id === 'string' ? value.request.project_id.slice(0, 80) : null,
     request_id: typeof value.request.request_id === 'string' ? value.request.request_id.slice(0, 200) : null,
   } : null;
+  const requestFingerprint = typeof value.request_fingerprint === 'string' ? value.request_fingerprint.slice(0, MAX_FINGERPRINT_TEXT) : '';
+  const planFingerprint = typeof value.plan_fingerprint === 'string' ? value.plan_fingerprint.slice(0, MAX_FINGERPRINT_TEXT) : '';
   const plan = isPlainObject(value.plan) ? {
     fingerprint: typeof value.plan.fingerprint === 'string' ? value.plan.fingerprint.slice(0, 64) : '',
     workflow_title: boundedText(value.plan.workflow_title, 160),
@@ -163,9 +169,11 @@ export function normalizeTaskSnapshot(value) {
           message: boundedText(raw.error.message, MAX_ERROR_TEXT),
           retry_unsafe: raw.error.retry_unsafe === true,
         } : null,
+        tool_calls: normalizeToolCallList(raw.tool_calls),
       };
     }
   }
+  const toolCalls = normalizeToolCallList(value.tool_calls);
   const result = isPlainObject(value.result) ? {
     artifact_refs: Array.isArray(value.result.artifact_refs)
       ? value.result.artifact_refs.slice(0, MAX_ARTIFACT_REFS).map((ref) => boundedText(ref, MAX_REF_TEXT))
@@ -189,14 +197,32 @@ export function normalizeTaskSnapshot(value) {
     created_at: typeof value.created_at === 'string' ? value.created_at.slice(0, 40) : '',
     updated_at: typeof value.updated_at === 'string' ? value.updated_at.slice(0, 40) : '',
     request,
+    request_fingerprint: requestFingerprint,
     plan,
+    plan_fingerprint: planFingerprint,
     confirmation,
     retry_target: typeof value.retry_target === 'string' ? value.retry_target.slice(0, 40) : null,
     step_states: stepStates,
+    tool_calls: toolCalls,
     result,
     error,
     invalid: false,
   };
+}
+
+function normalizeToolCallList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, MAX_TOOL_CALLS).map((call) => (isPlainObject(call) ? {
+    tool: boundedText(call.tool, 80),
+    operation: boundedText(call.operation, 80),
+    status: boundedText(call.status ?? call.state ?? '', MAX_STATE_TEXT) || 'unknown',
+    started_at: typeof call.started_at === 'string' ? call.started_at.slice(0, 40) : null,
+    finished_at: typeof call.finished_at === 'string' ? call.finished_at.slice(0, 40) : null,
+    error: isPlainObject(call.error) ? {
+      code: boundedText(call.error.code, 80),
+      message: boundedText(call.error.message, MAX_ERROR_TEXT),
+    } : null,
+  } : null)).filter(Boolean);
 }
 
 /** 产物身份分类：返回 { kind, id, label }；无法识别时 kind='other'。 */
@@ -204,6 +230,7 @@ export function classifyArtifactRef(ref) {
   const text = String(ref ?? '');
   const match = text.split('/').filter(Boolean).at(-1) || text;
   if (EVIDENCE_REF_PATTERN.test(match)) return { kind: 'evidence', id: match, label: '证据' };
+  if (ANALYSIS_REF_PATTERN.test(match)) return { kind: 'analysis', id: match, label: '分析' };
   if (KNOWLEDGE_REF_PATTERN.test(match)) return { kind: 'knowledge', id: match, label: '知识卡' };
   if (BRIEF_REF_PATTERN.test(match)) return { kind: 'brief', id: match, label: 'Brief' };
   if (GENERATION_ARTIFACT_REF_PATTERN.test(match)) return { kind: 'generation', id: match, label: '生成产物' };
@@ -215,8 +242,8 @@ export function classifyArtifactRef(ref) {
  * 字段，去重保序）。只展示存在的数据；无产物时返回空数组。
  */
 export function buildSourceChain(task) {
-  if (!task) return { project_id: null, evidence: [], knowledge: [], brief: [], generation: [], other: [] };
-  const chain = { project_id: task.request?.project_id || null, evidence: [], knowledge: [], brief: [], generation: [], other: [] };
+  if (!task) return { project_id: null, evidence: [], analysis: [], knowledge: [], brief: [], generation: [], other: [] };
+  const chain = { project_id: task.request?.project_id || null, evidence: [], analysis: [], knowledge: [], brief: [], generation: [], other: [] };
   const seen = new Set();
   for (const ref of task.result?.artifact_refs || []) {
     const classified = classifyArtifactRef(ref);
@@ -283,4 +310,148 @@ export function taskErrorText(task) {
 /** 计划确认/执行所需的人工授权范围（来自权威计划，绝不缺省放大）。 */
 export function requiredApprovals(task) {
   return task?.plan?.approvals || {};
+}
+
+/** “能力：…”只读能力查询任务：仅可存在于历史任务列表，绝不自动成为当前任务。 */
+export function isCapabilityIntent(intent) {
+  return /^能力：/u.test(String(intent ?? '').trim());
+}
+
+/**
+ * 工具调用视图：只来自真实服务端快照的 tool_calls 字段（任务级或逐步级）。
+ * 服务端没有记录时 present=false，页面展示明确空状态；绝不从计划步骤伪造
+ * “已调用工具”。
+ */
+export function toolCallsView(task) {
+  if (!task) return { present: false, calls: [] };
+  const calls = [];
+  for (const call of task.tool_calls || []) {
+    if (!isPlainObject(call)) continue;
+    calls.push({ step: '', ...call });
+  }
+  if (isPlainObject(task.step_states)) {
+    for (const [stepId, state] of Object.entries(task.step_states)) {
+      if (!Array.isArray(state.tool_calls)) continue;
+      for (const call of state.tool_calls) {
+        if (!isPlainObject(call)) continue;
+        calls.push({ ...call, step: stepId });
+      }
+    }
+  }
+  return { present: calls.length > 0, calls: calls.slice(0, MAX_TOOL_CALLS) };
+}
+
+/**
+ * 结果五分类视图：Evidence / Analysis / Knowledge / Brief / Artifact。
+ * 全部由同一快照的 result/result_data/artifact_refs 派生；缺失即逐类空态。
+ */
+export function resultSections(task) {
+  const empty = { present: false, items: [] };
+  if (!task) {
+    return { evidence: empty, analysis: empty, knowledge: empty, brief: empty, artifact: empty };
+  }
+  const chain = buildSourceChain(task);
+  const evidence = chain.evidence.map((id) => ({ kind: 'evidence', id }));
+  const analysis = chain.analysis.map((id) => ({ kind: 'analysis', id }));
+  const knowledge = chain.knowledge.map((id) => ({ kind: 'knowledge', id }));
+  const brief = chain.brief.map((id) => ({ kind: 'brief', id }));
+  const artifact = chain.generation.map((id) => ({ kind: 'artifact', id }));
+  const rows = isPlainObject(task.result?.result_data) ? task.result.result_data : null;
+  if (rows) {
+    if (Array.isArray(rows.analyses)) {
+      for (const row of rows.analyses.slice(0, MAX_SECTION_ITEMS)) {
+        if (!isPlainObject(row)) continue;
+        const id = boundedText(row.id ?? row.analysis_id ?? '', 80);
+        const summary = boundedText(row.summary ?? row.title ?? row.label ?? '', 200);
+        if (id || summary) analysis.push({ kind: 'analysis', id, summary });
+      }
+    }
+    if (Array.isArray(rows.artifacts)) {
+      for (const row of rows.artifacts.slice(0, MAX_SECTION_ITEMS)) {
+        if (!isPlainObject(row)) continue;
+        const id = boundedText(row.id ?? row.artifact_id ?? '', 80);
+        const name = boundedText(row.name ?? row.type ?? '', 120);
+        if (id || name) artifact.push({ kind: 'artifact', id, name });
+      }
+    }
+    if (isPlainObject(rows.artifact)) {
+      artifact.push({
+        kind: 'artifact',
+        id: boundedText(rows.artifact.id ?? rows.artifact.artifact_id ?? '', 80),
+        name: boundedText(rows.artifact.name ?? rows.artifact.type ?? '', 120),
+      });
+    }
+  }
+  const dedupe = (items) => [...new Map(items.map((item) => [item.id, item])).values()].slice(0, MAX_SECTION_ITEMS);
+  const section = (items) => ({ present: items.length > 0, items: dedupe(items) });
+  return {
+    evidence: section(evidence),
+    analysis: section(analysis),
+    knowledge: section(knowledge),
+    brief: section(brief),
+    artifact: section(artifact),
+  };
+}
+
+/**
+ * 结果摘要标题：由同一快照派生（证据优先，其次成果数，最后按状态给出
+ * 诚实结论）。绝不存在“静态 completed 覆盖 running”的文案。
+ */
+export function resultHeadline(task) {
+  const chain = buildSourceChain(task);
+  const evidenceCount = chain.evidence.length;
+  const total = evidenceCount + chain.analysis.length + chain.knowledge.length + chain.brief.length + chain.generation.length;
+  if (evidenceCount > 0) return `${evidenceCount} 条内容已保存为证据`;
+  if (total > 0) return `${total} 项成果已生成`;
+  if (isTaskTerminal(task?.state)) {
+    return task?.state === 'failed' || task?.state === 'blocked' ? '任务未产生成果' : '任务已完成';
+  }
+  return '任务尚未产生结果';
+}
+
+/**
+ * 技术详情（默认折叠展示）：task_id、project_id、request_id、计划/请求指纹、
+ * 内部 state、时间戳、审批字段与重试目标。普通视图只展示用户目标、
+ * 用户友好状态、进度/结果和错误。
+ */
+export function technicalDetails(task) {
+  return {
+    task_id: task?.id || '',
+    project_id: task?.request?.project_id || '',
+    request_id: task?.request?.request_id || '',
+    request_fingerprint: task?.request_fingerprint || '',
+    plan_fingerprint: task?.plan?.fingerprint || task?.plan_fingerprint || '',
+    state: task?.state || '',
+    created_at: task?.created_at || '',
+    updated_at: task?.updated_at || '',
+    retry_target: task?.retry_target || '',
+    confirmation_approvals: task?.confirmation?.approval || {},
+    required_approvals: task?.plan?.approvals || {},
+  };
+}
+
+/**
+ * 单一任务快照视图模型：页面所有可见信息（顶部汇总、任务卡片、步骤、
+ * 工具调用、结果、技术详情）都从同一个 taskId 的同一个 snapshot 派生。
+ * 轮询更新必须整体替换 snapshot（页面 setTask(whole)），不得局部拼接。
+ */
+export function taskSnapshotView(task) {
+  if (!task) return null;
+  return {
+    task,
+    state: task.state,
+    stateLabel: stateLabel(task.state),
+    phase: taskPhase(task),
+    intent: task.request?.intent || '',
+    projectId: task.request?.project_id || null,
+    workflowTitle: task.plan?.workflow_title || null,
+    steps: stepExecutionView(task),
+    toolCalls: toolCallsView(task),
+    approvals: requiredApprovals(task),
+    errorText: taskErrorText(task),
+    headline: resultHeadline(task),
+    chain: buildSourceChain(task),
+    sections: resultSections(task),
+    technical: technicalDetails(task),
+  };
 }

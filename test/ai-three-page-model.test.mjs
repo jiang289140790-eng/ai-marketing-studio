@@ -7,14 +7,20 @@ import {
   APPROVAL_LABELS,
   buildSourceChain,
   classifyArtifactRef,
+  isCapabilityIntent,
   isValidHarnessTaskId,
   normalizeTaskSnapshot,
   requiredApprovals,
+  resultHeadline,
+  resultSections,
   reviewSummary,
   stateLabel,
   stepExecutionView,
   taskErrorText,
   taskPhase,
+  taskSnapshotView,
+  technicalDetails,
+  toolCallsView,
 } from '../src/services/harness-task-model.js';
 
 const TASK_ID = 'ht-00000000-0000-4000-8000-000000000001';
@@ -98,6 +104,7 @@ test('normalizeTaskSnapshot：真实快照被有界化且字段精确保留', ()
     started_at: '2026-08-23T01:02:00.000Z',
     finished_at: '2026-08-23T01:03:00.000Z',
     error: null,
+    tool_calls: [],
   });
   assert.equal(view.result.artifact_refs.length, 3);
   assert.equal(view.result.final_response, '已完成分析。');
@@ -161,7 +168,142 @@ test('buildSourceChain：来源链去重、分类并保留项目绑定', () => {
   const empty = buildSourceChain(normalizeTaskSnapshot(sampleTask({ result: null })));
   assert.equal(empty.evidence.length, 0);
   assert.equal(empty.project_id, 'prj-000000000000000000000001');
-  assert.deepEqual(buildSourceChain(null), { project_id: null, evidence: [], knowledge: [], brief: [], generation: [], other: [] });
+  assert.deepEqual(buildSourceChain(null), { project_id: null, evidence: [], analysis: [], knowledge: [], brief: [], generation: [], other: [] });
+});
+
+test('classifyArtifactRef：an- 分析身份参与分类，来源链包含分析桶', () => {
+  assert.deepEqual(classifyArtifactRef('an-000000000000000000000007'), { kind: 'analysis', id: 'an-000000000000000000000007', label: '分析' });
+  const task = normalizeTaskSnapshot(sampleTask({ result: { artifact_refs: ['ev-000000000000000000000001', 'an-000000000000000000000007', 'kc-000000000000000000000002'] } }));
+  const chain = buildSourceChain(task);
+  assert.deepEqual(chain.evidence, ['ev-000000000000000000000001']);
+  assert.deepEqual(chain.analysis, ['an-000000000000000000000007']);
+  assert.deepEqual(chain.knowledge, ['kc-000000000000000000000002']);
+});
+
+test('isCapabilityIntent：只识别“能力：…”只读能力查询', () => {
+  assert.equal(isCapabilityIntent('能力：你能干什么'), true);
+  assert.equal(isCapabilityIntent('能力：你现在能做哪些事情'), true);
+  assert.equal(isCapabilityIntent(' 能力：目前可以完成什么任务？ '), true);
+  assert.equal(isCapabilityIntent('分析这个 X 帖子'), false);
+  assert.equal(isCapabilityIntent(''), false);
+  assert.equal(isCapabilityIntent(null), false);
+});
+
+test('toolCallsView：缺失时明确空态，绝不从计划步骤伪造', () => {
+  const task = normalizeTaskSnapshot(sampleTask());
+  assert.deepEqual(toolCallsView(task), { present: false, calls: [] });
+  assert.deepEqual(toolCallsView(null), { present: false, calls: [] });
+  // 任务级真实 tool_calls 记录。
+  const withTaskCalls = normalizeTaskSnapshot(sampleTask({
+    tool_calls: [
+      { tool: 'search', operation: 'web_search', status: 'succeeded', started_at: '2026-08-23T01:02:00.000Z', finished_at: '2026-08-23T01:02:30.000Z', error: null },
+      { tool: 'save', operation: 'save_evidence', status: 'failed', error: { code: 'TOOL_FAILED', message: '保存失败' } },
+    ],
+  }));
+  const taskView = toolCallsView(withTaskCalls);
+  assert.equal(taskView.present, true);
+  assert.equal(taskView.calls.length, 2);
+  assert.equal(taskView.calls[0].tool, 'search');
+  assert.equal(taskView.calls[0].status, 'succeeded');
+  assert.equal(taskView.calls[1].error.code, 'TOOL_FAILED');
+  // 逐步级真实 tool_calls 记录（带步骤归属）。
+  const withStepCalls = normalizeTaskSnapshot(sampleTask({
+    step_states: {
+      'st-1': { state: 'succeeded', tool_calls: [{ tool: 'search', status: 'succeeded' }] },
+      'st-2': { state: 'running' },
+    },
+  }));
+  const stepView = toolCallsView(withStepCalls);
+  assert.equal(stepView.present, true);
+  assert.equal(stepView.calls[0].step, 'st-1');
+  // 非对象记录被丢弃；有界。
+  const messy = normalizeTaskSnapshot(sampleTask({ tool_calls: [null, 'junk', { tool: 'x' }] }));
+  assert.equal(toolCallsView(messy).calls.length, 1);
+});
+
+test('resultSections：五分类全部来自真实 snapshot，缺失逐类空态', () => {
+  const task = normalizeTaskSnapshot(sampleTask({
+    result: {
+      artifact_refs: ['ev-000000000000000000000001', 'an-000000000000000000000007', 'kc-000000000000000000000002', 'brf-000000000000000000000004', 'g1x-000000000000000000000005', 'refs/ev-000000000000000000000006'],
+      final_response: 'ok',
+      result_data: {
+        analyses: [{ id: 'an-000000000000000000000008', summary: '多模态分析' }, { id: 'an-000000000000000000000009' }],
+        artifacts: [{ id: 'g1x-00000000000000000000000a', name: '主视觉' }],
+        artifact: { id: 'g1x-00000000000000000000000b', name: '封面' },
+      },
+    },
+  }));
+  const sections = resultSections(task);
+  assert.equal(sections.evidence.present, true);
+  assert.deepEqual(sections.evidence.items.map((item) => item.id), ['ev-000000000000000000000001', 'ev-000000000000000000000006']);
+  assert.equal(sections.analysis.present, true);
+  assert.equal(sections.analysis.items.length, 3, 'an- 引用 + result_data.analyses 行');
+  assert.equal(sections.knowledge.present, true);
+  assert.equal(sections.knowledge.items[0].id, 'kc-000000000000000000000002');
+  assert.equal(sections.brief.present, true);
+  assert.equal(sections.brief.items[0].id, 'brf-000000000000000000000004');
+  assert.equal(sections.artifact.present, true);
+  assert.equal(sections.artifact.items.length, 3, 'g1x- 引用 + artifacts 数组 + artifact 对象');
+  // 无任何结果 → 五类全部缺失（逐类空态）。
+  const empty = resultSections(normalizeTaskSnapshot(sampleTask({ result: null })));
+  for (const key of ['evidence', 'analysis', 'knowledge', 'brief', 'artifact']) {
+    assert.equal(empty[key].present, false, `${key} 必须为空态`);
+    assert.deepEqual(empty[key].items, []);
+  }
+  assert.equal(resultSections(null).evidence.present, false);
+});
+
+test('resultHeadline：由同一 snapshot 派生，绝不存在静态 completed 覆盖 running', () => {
+  const running = normalizeTaskSnapshot(sampleTask({ state: 'running', result: null }));
+  assert.equal(resultHeadline(running), '任务尚未产生结果');
+  const planned = normalizeTaskSnapshot(sampleTask({ state: 'planned', result: null }));
+  assert.equal(resultHeadline(planned), '任务尚未产生结果');
+  const succeededEmpty = normalizeTaskSnapshot(sampleTask({ state: 'succeeded', result: null }));
+  assert.equal(resultHeadline(succeededEmpty), '任务已完成', '终态且无成果 → 任务已完成（由状态派生，非静态覆盖）');
+  const failed = normalizeTaskSnapshot(sampleTask({ state: 'failed', result: null }));
+  assert.equal(resultHeadline(failed), '任务未产生成果');
+  const succeededWithEvidence = normalizeTaskSnapshot(sampleTask({ state: 'succeeded', result: { artifact_refs: ['ev-000000000000000000000001'] } }));
+  assert.equal(resultHeadline(succeededWithEvidence), '1 条内容已保存为证据');
+  assert.equal(resultHeadline(null), '任务尚未产生结果');
+});
+
+test('technicalDetails：task_id/project_id/指纹/内部状态/审批字段齐备', () => {
+  const task = normalizeTaskSnapshot(sampleTask());
+  const technical = technicalDetails(task);
+  assert.equal(technical.task_id, TASK_ID);
+  assert.equal(technical.project_id, 'prj-000000000000000000000001');
+  assert.equal(technical.plan_fingerprint, 'b'.repeat(64));
+  assert.equal(technical.request_fingerprint, 'a'.repeat(64));
+  assert.equal(technical.state, 'running');
+  assert.equal(technical.updated_at, '2026-08-23T01:05:00.000Z');
+  assert.deepEqual(technical.confirmation_approvals, { paid_external_calls: true, online_writes: true });
+  assert.deepEqual(technical.required_approvals, { paid_external_calls: true, online_writes: true });
+  assert.deepEqual(technicalDetails(null), {
+    task_id: '', project_id: '', request_id: '', request_fingerprint: '', plan_fingerprint: '',
+    state: '', created_at: '', updated_at: '', retry_target: '', confirmation_approvals: {}, required_approvals: {},
+  });
+});
+
+test('taskSnapshotView：单一快照派生所有页面可见信息（同一状态映射）', () => {
+  const task = normalizeTaskSnapshot(sampleTask({
+    state: 'failed',
+    error: { code: 'HARNESS_FAILED', message: '任务执行失败：st-2 工具失败。', category: 'tool', stage: 'run', operation: 'save_evidence' },
+    step_states: { 'st-2': { state: 'failed', failed_count: 1, error: { code: 'TOOL_FAILED', message: '工具失败', retry_unsafe: false } } },
+  }));
+  const view = taskSnapshotView(task);
+  assert.equal(view.stateLabel, '执行失败');
+  assert.equal(view.phase, 'attention');
+  assert.equal(view.intent, '分析表现最好的帖子并保存证据');
+  assert.equal(view.projectId, 'prj-000000000000000000000001');
+  assert.equal(view.workflowTitle, '研究分析闭环');
+  assert.equal(view.steps.length, 2);
+  assert.equal(view.toolCalls.present, false);
+  assert.deepEqual(view.approvals, { paid_external_calls: true, online_writes: true });
+  assert.equal(view.errorText.length > 0, true);
+  assert.equal(view.headline, '2 条内容已保存为证据', '失败前已保存的证据仍诚实展示（同一派生）');
+  assert.equal(view.technical.task_id, TASK_ID);
+  assert.equal(view.sections.evidence.present, true, 'result 中的证据身份仍保留');
+  assert.equal(taskSnapshotView(null), null);
 });
 
 test('reviewSummary：审核状态来自真实快照（计划确认范围 + 当前状态）', () => {

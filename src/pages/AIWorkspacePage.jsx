@@ -3,6 +3,15 @@ import { createHarnessClient, newHarnessRequestId, normalizeHarnessIntent, readH
 import { resolvePresentationBlocks } from '../services/harness-presentation.js';
 import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
 import { parseHarnessContextParams } from '../utils/app-route.js';
+import {
+  buildSourceChain,
+  isCapabilityIntent,
+  isTaskTerminal,
+  normalizeTaskSnapshot,
+  resultHeadline,
+  stateLabel,
+  stepStateLabel,
+} from '../services/harness-task-model.js';
 import './AIWorkspacePage.css';
 
 // Every visible preset must be a valid authoritative plan request exactly as
@@ -29,15 +38,6 @@ const TEXT_ATTACHMENT_TYPES = new Set([
   'application/json',
 ]);
 
-const businessPlugins = [
-  { id: 'research', label: '研究工作台', description: '采集来源、分析帖子与视频', icon: '⌕' },
-  { id: 'research-evidence', route: 'research', routeParams: { focus: 'collect' }, label: 'Evidence', description: '查看证据、版本与来源证明', icon: '◇' },
-  { id: 'knowledge', label: 'Knowledge', description: '复用已验证知识卡', icon: '◈' },
-  { id: 'research-brief', route: 'research', routeParams: { focus: 'outputs' }, label: 'Brief 审核', description: '审核、退回与交接', icon: '✓' },
-  { id: 'generation', label: '生成中心', description: '报价、确认、任务进度', icon: '✦' },
-  { id: 'assets', label: '成品库', description: '预览、下载与版本历史', icon: '▣' },
-];
-
 // The exact metric slot values are fixed server-side (compare_project);
 // these labels mirror them so the page always shows the requested metric
 // exactly as the plan will rank by.
@@ -46,21 +46,8 @@ const compareMetricLabels = {
   engagement: '互动（engagement）',
 };
 
-const stateLabels = {
-  planned: '等待确认',
-  queued: '等待执行',
-  running: '正在执行',
-  reused: '已复用',
-  succeeded: '已完成',
-  partial: '部分完成',
-  failed: '执行失败',
-  blocked: '已阻断',
-  skipped: '已跳过',
-  cancelled: '已取消',
-};
-
 function taskFromResponse(value) {
-  return value?.task && typeof value.task === 'object' ? value.task : null;
+  return normalizeTaskSnapshot(value?.task) || null;
 }
 
 export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: providedHarnessClient }) {
@@ -98,7 +85,8 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const refreshHistory = useCallback(async () => {
     try {
       const response = await harnessClient.list(30);
-      setHistory(Array.isArray(response.tasks) ? response.tasks : []);
+      // 历史记录同样走统一快照归一化：所有页面使用同一状态映射。
+      setHistory(Array.isArray(response.tasks) ? response.tasks.map((entry) => normalizeTaskSnapshot(entry)).filter(Boolean) : []);
     } catch (caught) {
       if (caught?.code !== 'AUTH_REQUIRED') setError(caught?.message || '无法读取任务记录。');
     }
@@ -144,15 +132,11 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const artifactRefs = Array.isArray(activeTask?.result?.artifact_refs)
     ? activeTask.result.artifact_refs
     : [];
-  const evidenceCount = artifactRefs.filter((ref) => /(^|\/)ev-[0-9a-f]{24}(?:$|\/)/.test(String(ref))).length;
-  const terminalTask = activeTask && ['succeeded', 'reused', 'partial', 'failed', 'blocked', 'cancelled'].includes(activeTask.state);
-  const resultHeadline = evidenceCount > 0
-    ? `${evidenceCount} 条内容已保存为证据`
-    : artifactRefs.length > 0
-      ? `${artifactRefs.length} 项成果已生成`
-      : activeTask?.state === 'succeeded' || activeTask?.state === 'reused'
-        ? '任务已完成'
-        : '任务已停止';
+  const evidenceCount = buildSourceChain(activeTask).evidence.length;
+  const terminalTask = activeTask && isTaskTerminal(activeTask.state);
+  // 结果摘要与详情页共用同一派生函数（同一 snapshot → 同一文案），
+  // 不存在“静态 completed 覆盖 running”的独立标题。
+  const resultHeadlineText = resultHeadline(activeTask);
   const authoritativePlan = activeTask?.plan || null;
   const requiredApprovals = authoritativePlan?.approvals || {};
   const approvalsReady = (!requiredApprovals.paid_external_calls || allowPaid)
@@ -197,6 +181,13 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       const task = taskFromResponse(response);
       if (!task) throw new Error('计划入口没有返回任务记录。');
       pendingSubmission.current = null;
+      if (isCapabilityIntent(task.request?.intent)) {
+        // “能力：…”只读能力查询：仅作为历史任务存在，绝不设为当前任务；
+        // 直接进入该任务的只读执行详情。
+        refreshHistory();
+        onNavigate?.('ai-execution', task.id);
+        return;
+      }
       activateTask(task);
       refreshHistory();
     } catch (caught) {
@@ -290,35 +281,6 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   return (
     <main className="ai-workspace" data-testid="harness-ai-workspace">
       <div className="ai-harness-shell">
-        <aside className="ai-plugin-rail" aria-label="Harness 业务插件">
-          <div className="ai-plugin-brand">
-            <span className="ai-plugin-mark">H</span>
-            <div><strong>AMS Harness</strong><small>业务插件</small></div>
-          </div>
-          <button className="ai-new-session" type="button" onClick={() => { setIntent(''); setAttachments([]); setActiveTask(null); setError(''); }}>
-            <span>＋</span> 新建会话
-          </button>
-          <div className="ai-plugin-heading"><span>工作区</span><small>{businessPlugins.length} 个插件</small></div>
-          <nav className="ai-plugin-list">
-            <button className="active" type="button" aria-current="page">
-              <span className="ai-plugin-icon">✦</span><span><b>AI 工作台</b><small>自然语言计划与执行</small></span>
-            </button>
-            {businessPlugins.map((plugin) => (
-              <button
-                key={plugin.id}
-                type="button"
-                data-testid={`harness-plugin-${plugin.id}`}
-                onClick={() => onNavigate?.(plugin.route || plugin.id, '', plugin.routeParams || {})}
-              >
-                <span className="ai-plugin-icon">{plugin.icon}</span>
-                <span><b>{plugin.label}</b><small>{plugin.description}</small></span>
-                <i>›</i>
-              </button>
-            ))}
-          </nav>
-          <div className="ai-plugin-safety"><span className="ai-live-dot" /><div><b>Staging 安全模式</b><small>计划 → 确认 → 执行</small></div></div>
-        </aside>
-
         <div className="ai-harness-main">
       <section className="ai-hero" data-testid="ai-workspace-hero">
         <div className="ai-hero-copy">
@@ -335,7 +297,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
       <nav className="ai-task-flow" aria-label="三页任务流程" data-testid="ai-task-flow">
         {[
-          ['新任务', '创建或进入任务', activeTask ? ['ai', activeTask.id] : null],
+          ['新任务', '创建或进入任务', ['ai', '']],
           ['执行详情', '计划、进度与失败', activeTask ? ['ai-execution', activeTask.id] : null],
           ['结果与审核', '结果、产物与来源链', activeTask ? ['ai-results', activeTask.id] : null],
         ].map(([label, description, target], index) => (
@@ -353,6 +315,12 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           </button>
         ))}
       </nav>
+
+      {!activeTask && (
+        <div className="ai-task-empty" data-testid="ai-no-current-task">
+          还没有当前任务。输入任务目标创建一条新任务，或从下方最近任务记录打开一条任务；执行与结果页会跟随同一任务编号。
+        </div>
+      )}
 
       <details className="ai-overview-disclosure">
         <summary><span>任务概览</span><b>{historySummary.running} 个执行中 · {historySummary.completed} 个已完成 · {historySummary.attention} 个待处理</b><i>展开</i></summary>
@@ -428,7 +396,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           <div className="ai-message ai-message-user"><span>你</span><p>{activeTask.request?.intent}</p></div>
           <article className="ai-message ai-message-assistant">
           <div className="ai-section-heading">
-            <div><span>AI 营销工作台</span><h2>{stateLabels[activeTask.state] || activeTask.state}</h2></div>
+            <div><span>AI 营销工作台</span><h2>{stateLabel(activeTask.state)}</h2></div>
             <div className="ai-active-task-actions">
               <button type="button" className="secondary-button" data-testid={`ai-task-open-execution-${activeTask.id}`} onClick={() => onNavigate?.('ai-execution', activeTask.id)}>执行详情</button>
               <button type="button" className="secondary-button" data-testid={`ai-task-open-results-${activeTask.id}`} onClick={() => onNavigate?.('ai-results', activeTask.id)}>结果与审核</button>
@@ -455,7 +423,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
                   const canRetry = snapshot?.state === 'failed' && snapshot?.error?.retry_unsafe !== true && ['partial', 'failed'].includes(activeTask.state);
                   return (
                     <li key={step.step} data-testid={`harness-step-${step.step}`} data-state={stepState}>
-                      <span className={`ai-step-state ${stepState}`}>{stateLabels[stepState] || stepState}</span>
+                      <span className={`ai-step-state ${stepState}`}>{stepStateLabel(stepState)}</span>
                       <div><strong>{step.label}</strong><small>{step.operation} · 前置：{step.depends_on.length ? step.depends_on.join('、') : '无'}</small></div>
                       <div className="ai-step-badges">
                         {step.reuse && <span>可精确复用</span>}
@@ -486,7 +454,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             <section className={`ai-result-summary ${activeTask.state}`} data-testid="harness-result-summary">
               <div className="ai-result-summary-copy">
                 <span>任务结果</span>
-                <h3>{resultHeadline}</h3>
+                <h3>{resultHeadlineText}</h3>
                 <p>{evidenceCount > 0 ? '内容已经进入当前研究项目，可继续分析、生成知识卡或整理 Brief。' : '成果已保留在当前工作区，可随时回来查看。'}</p>
               </div>
               <div className="ai-result-actions">
@@ -500,7 +468,11 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           {presentationBlocks.length > 0 && <PresentationPanel blocks={presentationBlocks} />}
           {!terminalTask && activeTask.result?.final_response && (presentationBlocks.length > 0 ? <details className="ai-raw-response"><summary>查看原始回复</summary><div className="ai-result-copy">{activeTask.result.final_response}</div></details> : <div className="ai-result-copy">{activeTask.result.final_response}</div>)}
           {activeTask.error && <div className="notice error" data-testid="harness-task-error">{activeTask.error.operation ? `${activeTask.error.operation} · ` : ''}{activeTask.error.tool_code || activeTask.error.message || activeTask.error.summary || activeTask.error.code}</div>}
-          {(activeTask.result?.result_data || artifactRefs.length > 0) && <details className="ai-technical-details"><summary>技术详情</summary>{activeTask.result?.result_data && <pre className="ai-result-copy">{JSON.stringify(activeTask.result.result_data, null, 2)}</pre>}{artifactRefs.length > 0 && <div className="ai-artifacts"><strong>产物身份</strong>{artifactRefs.map((ref) => <code key={ref}>{ref}</code>)}</div>}</details>}
+          <details className="ai-technical-details" data-testid="ai-task-technical-details"><summary>技术详情</summary>
+            <dl className="ai-task-technical"><div><dt>task_id</dt><dd><code>{activeTask.id}</code></dd></div><div><dt>project_id</dt><dd><code>{activeTask.request?.project_id || '未绑定'}</code></dd></div><div><dt>updated_at</dt><dd>{activeTask.updated_at || '—'}</dd></div><div><dt>内部状态</dt><dd>{activeTask.state}</dd></div></dl>
+            {activeTask.result?.result_data && <pre className="ai-result-copy">{JSON.stringify(activeTask.result.result_data, null, 2)}</pre>}
+            {artifactRefs.length > 0 && <div className="ai-artifacts"><strong>产物身份</strong>{artifactRefs.map((ref) => <code key={ref}>{ref}</code>)}</div>}
+          </details>
           </article>
         </section>
       )}
@@ -512,7 +484,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         </summary>
         <div className="ai-history-body">
           <div className="ai-section-heading"><div><span>任务与成果</span><h2>最近记录</h2><p>展开后先显示最近 6 条，需要时再查看全部。</p></div><button type="button" className="secondary-button" onClick={refreshHistory}>刷新</button></div>
-          {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <div className="ai-task-row" key={task.id}><button className="ai-task-row-main" type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); activateTask(taskFromResponse(response) || task); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabels[task.state] || task.state}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button><div className="ai-task-row-links"><button type="button" data-testid={`ai-task-open-execution-${task.id}`} onClick={() => onNavigate?.('ai-execution', task.id)}>执行详情</button><button type="button" data-testid={`ai-task-open-results-${task.id}`} onClick={() => onNavigate?.('ai-results', task.id)}>结果与审核</button></div></div>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
+          {history.length === 0 ? <div className="ai-empty">还没有 Harness 任务。你可以从上方的一句话开始。</div> : <><div className="ai-task-list">{visibleHistory.map((task) => <div className="ai-task-row" key={task.id}><button className="ai-task-row-main" type="button" onClick={async () => { try { const response = await harnessClient.read(task.id); const next = taskFromResponse(response) || task; if (isCapabilityIntent(next.request?.intent)) { onNavigate?.('ai-execution', next.id); return; } activateTask(next); } catch (caught) { setError(caught?.message || '无法读取完整任务记录。'); } }}><span className={`ai-task-state ${task.state}`}>{stateLabel(task.state)}</span><strong>{task.request?.intent || '未命名任务'}</strong><time>{task.updated_at ? new Date(task.updated_at).toLocaleString('zh-CN') : ''}</time></button><div className="ai-task-row-links"><button type="button" data-testid={`ai-task-open-execution-${task.id}`} onClick={() => onNavigate?.('ai-execution', task.id)}>执行详情</button><button type="button" data-testid={`ai-task-open-results-${task.id}`} onClick={() => onNavigate?.('ai-results', task.id)}>结果与审核</button></div></div>)}</div>{history.length > 6 && <button className="ai-history-toggle" type="button" onClick={() => setShowAllHistory((value) => !value)}>{showAllHistory ? '收起历史记录' : `查看全部 ${history.length} 条记录`}</button>}</>}
         </div>
       </details>
         </div>

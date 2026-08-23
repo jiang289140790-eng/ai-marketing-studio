@@ -104,17 +104,18 @@ function readSource(relativePath) {
 // ============================================================================
 // 路由测试
 // ============================================================================
-test('路由：旧 dashboard 收敛到 AI，research 与 knowledge 保持有效', async () => {
-  globalThis.window = { URLSearchParams: globalThis.URLSearchParams, location: { hash: '#/' } };
+test('路由：旧 dashboard 收敛到规范新任务路由，research 与 knowledge 保持有效', async () => {
+  globalThis.window = { URLSearchParams: globalThis.URLSearchParams, location: { hash: '#/', pathname: '/', search: '' } };
   try {
     const { parseAppRoute, buildAppHash } = await import('../src/utils/app-route.js');
 
-    assert.equal(parseAppRoute('#/dashboard').page, 'ai');
+    assert.equal(parseAppRoute('#/dashboard').page, 'tasks');
+    assert.equal(parseAppRoute('#/dashboard').view, 'new');
     assert.equal(parseAppRoute('#/research').page, 'research');
     assert.equal(parseAppRoute('#/knowledge').page, 'knowledge');
     assert.equal(parseAppRoute('#/intelligence').page, 'intelligence');
 
-    assert.equal(buildAppHash('dashboard'), '#/ai');
+    assert.equal(buildAppHash('dashboard'), '/tasks/new');
     assert.equal(buildAppHash('research'), '#/research');
     assert.equal(buildAppHash('knowledge'), '#/knowledge');
   } finally {

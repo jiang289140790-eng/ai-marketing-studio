@@ -248,6 +248,20 @@
   gap: 6px;
 }
 
+.ai-confirm-approvals {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.ai-confirm-approvals label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #d5ddec;
+  font-size: 13px;
+}
+
 .ai-task-retry-zone .ai-approvals label {
   display: flex;
   gap: 8px;
@@ -369,4 +383,154 @@
 
 .ai-task-page .ai-task-panel + .ai-task-panel {
   margin-top: 0;
+}
+
+/* 工具调用（真实服务端 tool_calls 记录；缺失显示明确空态） */
+.ai-tool-calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.ai-tool-calls li {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.ai-tool-call-copy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+}
+
+.ai-tool-call-copy strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ai-tool-call-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-tool-status.succeeded,
+.ai-tool-status.success {
+  background: rgba(40, 202, 139, .15);
+  color: #4ee5aa;
+}
+
+.ai-tool-status.failed {
+  background: rgba(239, 100, 114, .15);
+  color: #ff8b96;
+}
+
+.ai-tool-status.running {
+  background: rgba(128, 87, 255, .2);
+  color: #b9a6ff;
+}
+
+/* 结果五分类（Evidence / Analysis / Knowledge / Brief / Artifact） */
+.ai-result-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.ai-result-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.ai-result-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ai-result-section-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ai-result-section-head span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-section-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.ai-section-items li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ai-section-items code {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .05);
+  color: #b9c8dd;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-section-items span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* 技术详情（默认折叠）：task_id/project_id/指纹/内部状态/审批字段等 */
+.ai-task-technical {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.ai-task-technical > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.ai-task-technical dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-task-technical dd {
+  margin: 0;
+  min-width: 0;
+  color: #b9c8dd;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-task-technical code {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .05);
+  color: #71e4d4;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }

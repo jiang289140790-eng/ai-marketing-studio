@@ -1,25 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { navigationSections } from '../data/navigation';
+import { harnessPlugins, navigationSections } from '../data/navigation';
 
-const corePlugins = [
-  { id: 'ai', label: 'AI 工作台', icon: '✦', testId: 'harness-plugin-ai' },
-  { id: 'research', label: '研究工作台', icon: '⌕', testId: 'harness-plugin-research' },
-  { id: 'research-evidence', route: 'research', routeParams: { focus: 'collect' }, label: 'Evidence', icon: '◇', testId: 'harness-plugin-research-evidence' },
-  { id: 'knowledge', label: 'Knowledge', icon: '◈', testId: 'harness-plugin-knowledge' },
-  { id: 'research-brief', route: 'research', routeParams: { focus: 'outputs' }, label: 'Brief 审核', icon: '✓', testId: 'harness-plugin-research-brief' },
-  { id: 'generation', label: '生成中心', icon: '✦', testId: 'harness-plugin-generation' },
-  { id: 'assets', label: '成品库', icon: '▣', testId: 'harness-plugin-assets' },
-];
+// 侧栏核心插件与“更多工具”全部派生自 navigation.js 的唯一注册源
+// （harnessPlugins + navigationSections）；组件内不再复制第二份菜单配置。
+const corePlugins = harnessPlugins;
 
 const coreRouteIds = new Set(['ai', 'research', 'knowledge', 'generation', 'assets']);
 const secondarySections = navigationSections
   .map((section) => ({ ...section, items: section.items.filter((item) => !coreRouteIds.has(item.id)) }))
   .filter((section) => section.items.length > 0);
 
-export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeParams = {} }) {
+export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeParams = {}, routeView = '' }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
-  const activeNavigationId = activePage === 'dashboard' ? 'ai' : activePage;
+  // 规范任务路由 /tasks/... 高亮侧栏对应条目：新任务视图高亮 AI 工作台。
+  const activeNavigationId = activePage === 'tasks'
+    ? (routeView === 'new' ? 'ai' : activePage)
+    : activePage === 'dashboard' ? 'ai' : activePage;
   const activeSectionLabel = useMemo(
     () => navigationSections.find((section) => section.items.some((item) => item.id === activeNavigationId))?.label,
     [activeNavigationId],

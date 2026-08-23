@@ -14,7 +14,7 @@ const vendorSource = join(appRoot, 'vendor');
 const homeLockdownSource = join(appRoot, 'home-lockdown.patch.yml');
 const target = join(home, 'profiles', 'ams');
 const marker = join(target, '.ams-profile-version');
-const version = 'ams-profile-v11';
+const version = 'ams-profile-v12';
 // The only plugins promoted from the isolated plugin lab, pinned by exact
 // version. Each entry maps a vendored directory (name) to its npm scope and
 // the exact published version the promotion is bound to; a mismatch aborts

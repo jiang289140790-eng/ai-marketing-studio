@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
+import { extractAssistantTextDelta, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
 
 const userId = '00000000-0000-4000-8000-000000000101';
 const threadId = 'thr_00000000-0000-4000-8000-000000000201';
@@ -52,6 +52,12 @@ test('native stop and Gateway failure produce distinct deterministic terminal ou
   assert.deepEqual(reduceGenerationOutcome(initial, { type: 'session_event', event: { type: 'conversation_completed', reason: { kind: 'aborted' } } }), { state: 'stopped', code: 'GENERATION_STOPPED' });
   assert.deepEqual(reduceGenerationOutcome(initial, { type: 'gateway_completed', ok: false, code: 'HARNESS_EXIT_FAILED' }), { state: 'failed', code: 'HARNESS_EXIT_FAILED' });
   assert.deepEqual(reduceGenerationOutcome(initial, { type: 'gateway_completed', ok: true }), initial);
+});
+
+test('only final assistant text is projected; private reasoning never becomes a chat message', () => {
+  assert.equal(extractAssistantTextDelta({ type: 'text-delta', text: '真实回复' }), '真实回复');
+  assert.equal(extractAssistantTextDelta({ type: 'reasoning-delta', text: 'internal chain of thought' }), '');
+  assert.equal(extractAssistantTextDelta({ type: 'tool-call-delta', argumentsDelta: '{}' }), '');
 });
 
 test('same message request replay returns before confirmation processing in queued, running and terminal states', () => {

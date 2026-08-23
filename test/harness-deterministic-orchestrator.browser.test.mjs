@@ -29,6 +29,7 @@ function fixtureSource() {
     const pendingEvents = [];
     const calls = [];
     const messages = [];
+    const threadState = { status: 'active', currentTaskId: null, stopGeneration: false };
     const append = (value) => messages.push({ sequence: ++sequence, status: 'completed', ...value });
     const emit = (type, payload = {}) => {
       const value = { type, cursor: ++cursor, event: { cursor, type, task_id: taskId, payload } };
@@ -36,6 +37,7 @@ function fixtureSource() {
     };
     const client = {
       async createThread(value) { calls.push({ method: 'createThread', value }); return { threadId, currentTaskId: null, eventCursor: cursor }; },
+      async getThread() { return { thread: { id: threadId, status: threadState.status }, currentTaskId: threadState.currentTaskId, eventCursor: cursor, actions: { sendMessage: true, stopGeneration: threadState.stopGeneration } }; },
       async listMessages() { return { messages: structuredClone(messages) }; },
       async sendMessage(value) {
         calls.push({ method: 'sendMessage', value });
@@ -43,6 +45,7 @@ function fixtureSource() {
         if (value.content === '执行') {
           append({ id: 'progress', thread_id: threadId, task_id: taskId, role: 'system', kind: 'progress', content: '执行完成', structured_payload: { completed_steps: 3, total_steps: 3 } });
           append({ id: 'brief', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'brief', content: 'Brief 已生成，等待审核', structured_payload: { review_status: 'pending_review' } });
+          threadState.status = 'executing';
           queueMicrotask(() => emit('task_progress', { completed_steps: 3 }));
           queueMicrotask(() => emit('brief_result', { review_status: 'pending_review' }));
           queueMicrotask(() => emit('task_completed', { state: 'succeeded' }));
@@ -56,6 +59,8 @@ function fixtureSource() {
               { step: 'st-3', label: '生成 Brief', operation: 'workspace.brief.assemble' },
             ],
           } });
+          threadState.status = 'waiting_confirmation';
+          threadState.currentTaskId = taskId;
           queueMicrotask(() => emit('plan_created', {}));
         }
         return { ok: true, accepted: true, messageId: messages.at(-1).id };
@@ -72,6 +77,11 @@ function fixtureSource() {
     localStorage.clear();
     document.body.innerHTML = '<div id="root"></div>';
     createRoot(document.getElementById('root')).render(React.createElement(AIWorkspacePage, { harnessClient: client, onNavigate: () => {} }));
+    globalThis.__setGenerationActive = (active) => {
+      threadState.stopGeneration = active;
+      threadState.status = active ? 'executing' : 'waiting_confirmation';
+      emit(active ? 'task_progress' : 'plan_created', {});
+    };
     globalThis.__fixture = { calls, messages, threadId, taskId };
     return true;
   })()`;
@@ -108,6 +118,13 @@ test('real browser: authoritative plan and confirmation remain in one server-bac
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.conversation-card.kind-plan li').length`), 3);
     assert.equal(await cdp.evaluate(`document.querySelector('.conversation-card.kind-plan').textContent.includes('2 次付费调用')`), true);
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-flow-execution"]').disabled`), false);
+    const sendsBeforeActiveEnter = await cdp.evaluate(`globalThis.__fixture.calls.filter((call) => call.method === 'sendMessage').length`);
+    await cdp.evaluate(`globalThis.__setGenerationActive(true)`);
+    await waitForSelector(cdp, '.composer-stop', { label: 'authoritative stop action' });
+    await cdp.evaluate(`(() => { const input = document.querySelector('[data-testid="harness-intent"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'must not send'); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    assert.equal(await cdp.evaluate(`globalThis.__fixture.calls.filter((call) => call.method === 'sendMessage').length`), sendsBeforeActiveEnter, 'Enter cannot append an orphan message while generation is active');
+    await cdp.evaluate(`globalThis.__setGenerationActive(false)`);
+    await waitForSelector(cdp, '.conversation-card.kind-plan .primary', { label: 'plan confirmation restored' });
     await click(cdp, { selector: '.conversation-card.kind-plan .primary', label: 'confirm plan' });
     await waitForSelector(cdp, '.conversation-card.kind-brief', { label: 'Brief result' });
     assert.equal(await cdp.evaluate(`document.querySelector('.conversation-card.kind-progress') !== null`), true);

@@ -1,7 +1,8 @@
 /* global fetch */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import {
@@ -11,6 +12,7 @@ import {
 } from './helpers/cdp-browser-harness.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
+const SCREENSHOT_DIR = join(ROOT, 'acceptance-evidence', 'harness-conversation-20260823');
 
 test('real browser: conversation workspace route, empty state, composer, responsive layout and refresh', { timeout: 180_000 }, async () => {
   assert.equal(existsSync(EDGE), true, 'Microsoft Edge is required');
@@ -49,8 +51,13 @@ test('real browser: conversation workspace route, empty state, composer, respons
       await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
       const layout = await cdp.evaluate(`(() => { const box = document.querySelector('.conversation-workspace').getBoundingClientRect(); const composer = document.querySelector('.conversation-composer').getBoundingClientRect(); return { boxWidth: box.width, boxHeight: box.height, composerBottom: composer.bottom, viewport: innerHeight, overflow: document.documentElement.scrollWidth > innerWidth }; })()`);
       assert.equal(layout.overflow, false, `${width}px has no horizontal overflow`);
-      assert.ok(layout.boxHeight >= 540, `${width}px keeps the transcript as the primary workspace`);
+      assert.ok(layout.boxHeight >= 400, `${width}px keeps the empty workspace useful without a forced blank transcript`);
       assert.ok(layout.composerBottom <= layout.viewport + 420, `${width}px composer remains reachable without nested-page overflow`);
+      if (process.env.AMS_CAPTURE_ACCEPTANCE_SCREENSHOTS === '1') {
+        mkdirSync(SCREENSHOT_DIR, { recursive: true });
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(SCREENSHOT_DIR, `tasks-new-empty-${width}.png`), Buffer.from(screenshot.data, 'base64'));
+      }
     }
 
     await reloadAndWait(cdp, tracker, { label: 'conversation refresh' });

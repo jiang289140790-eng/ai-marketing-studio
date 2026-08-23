@@ -170,6 +170,13 @@ export function reduceGenerationOutcome(current, frame) {
   return outcome;
 }
 
+export function extractAssistantTextDelta(chunk) {
+  if (chunk?.type !== 'text-delta') return '';
+  return typeof chunk.text === 'string' ? chunk.text
+    : typeof chunk.delta === 'string' ? chunk.delta
+      : typeof chunk.delta?.text === 'string' ? chunk.delta.text : '';
+}
+
 export function isAcceptedMessageReplay(message, claim) {
   return message?.replayed === true && claim?.claimed === false
     && ['generation_active', 'generation_replayed'].includes(claim?.reason);

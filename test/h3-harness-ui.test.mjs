@@ -89,6 +89,9 @@ test('conversation workspace renders transcript, structured cards, fixed compose
   assert.match(page, /Brief/);
   assert.match(page, /Artifact/);
   assert.match(page, /event\.key === 'Enter' && !event\.shiftKey/);
+  assert.match(page, /thread\?\.actions\?\.stopGeneration === true \|\| thread\?\.actions\?\.sendMessage === false/);
+  assert.match(page, /acknowledgedClientIds\.has\(message\.id\)/);
+  assert.match(page, /setMessages\(\(current\) => reconcileMessages\(current, response\.messages\)\)/);
   assert.match(page, /client\.stopGeneration\(thread\.id\)/);
   assert.match(page, /client\.getThread\(threadId\)/);
   assert.match(page, /client\.listMessages\(threadId, 0, 200\)/);

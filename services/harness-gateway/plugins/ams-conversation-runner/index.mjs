@@ -21,7 +21,12 @@ function parseEnvelope(raw) {
 }
 
 function setupSelection(selection) {
-  return (agentCtx) => installModelSelection(agentCtx, { current: selection, assembled: undefined });
+  // Agent setup may optionally return a prepared transaction exposing
+  // `commit()`. Model selection installs directly into the agent context, so
+  // do not leak its disposer/return value into that transaction contract.
+  return (agentCtx) => {
+    installModelSelection(agentCtx, { current: selection, assembled: undefined });
+  };
 }
 
 async function run(ctx, raw, exit) {

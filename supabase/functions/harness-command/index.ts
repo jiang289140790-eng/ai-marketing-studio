@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
-import { fixedGatewayBase, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
+import { extractAssistantTextDelta, fixedGatewayBase, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
 
 const ALLOWED_ORIGINS = new Set([
   'https://jiang289140790-eng.github.io',
@@ -334,9 +334,7 @@ Deno.serve(async (request) => {
             const event = frame.event;
             if (event?.type === 'assistant/chunk') {
               const chunk = event.data?.chunk;
-              const delta = typeof chunk?.text === 'string' ? chunk.text
-                : typeof chunk?.delta === 'string' ? chunk.delta
-                : typeof chunk?.delta?.text === 'string' ? chunk.delta.text : '';
+              const delta = extractAssistantTextDelta(chunk);
               if (delta) { assistantText += delta; await appendEvent('assistant_text_delta', { delta, nativeSeq: event.seq }); }
             } else if (event?.type === 'assistant/message') {
               const content = (event.data?.message?.content || []).filter((block: any) => block?.type === 'text').map((block: any) => block.text).join('');

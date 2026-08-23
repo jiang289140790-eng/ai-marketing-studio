@@ -79,17 +79,17 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
     journal.set(requestKey, journalEntry);
     persist({ key: requestKey, state: 'started' });
     const child = spawn(executable, [...profileArgs, envelope], { cwd: workspace, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
-    active.set(activeKey, { child, generationId, requestId: request.request_id });
+    const force = { timer: null };
+    const terminate = () => {
+      if (child.exitCode != null || child.signalCode != null) return;
+      try { child.stdin.write(`${JSON.stringify({ action: 'stop' })}\n`); } catch { child.kill('SIGTERM'); return; }
+      if (!force.timer) force.timer = setTimeout(() => child.kill('SIGTERM'), 7_000);
+    };
+    active.set(activeKey, { child, generationId, requestId: request.request_id, terminate });
     onFrame?.({ type: 'generation_started', generationId, requestId: request.request_id });
     let buffer = '';
     let stderr = '';
     let timedOut = false;
-    const force = { timer: null };
-    const terminate = () => {
-      if (child.exitCode != null || child.signalCode != null) return;
-      child.stdin.write(`${JSON.stringify({ action: 'stop' })}\n`);
-      force.timer = setTimeout(() => child.kill('SIGTERM'), 7_000);
-    };
     const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
     child.stdout.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
@@ -137,7 +137,7 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
   function stop(userId, threadId) {
     const current = active.get(key(userId, threadId));
     if (!current) return { ok: false, code: 'NO_ACTIVE_GENERATION' };
-    current.child.stdin.write(`${JSON.stringify({ action: 'stop' })}\n`);
+    current.terminate();
     return { ok: true, generationId: current.generationId };
   }
 

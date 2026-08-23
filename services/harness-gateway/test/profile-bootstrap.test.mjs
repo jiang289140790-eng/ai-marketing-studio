@@ -35,6 +35,12 @@ test('AMS operator prompt binds persisted analysis to one exact Evidence per cal
   assert.match(plugin, /once per exact evidence_id, sequentially, with a distinct idempotency_key and stop on the first failure/);
 });
 
+test('conversation model selection does not leak a disposer as an agent setup transaction', async () => {
+  const plugin = await text('plugins/ams-conversation-runner/index.mjs');
+  assert.match(plugin, /return \(agentCtx\) => \{\s*installModelSelection\(agentCtx,/);
+  assert.doesNotMatch(plugin, /=>\s*installModelSelection\(agentCtx,/);
+});
+
 test('Docker build makes the local plugin available before npm ci', async () => {
   const dockerfile = await text('Dockerfile');
   const copyPlugin = dockerfile.indexOf('COPY services/harness-gateway/plugins ./plugins');
@@ -69,7 +75,7 @@ test('both profile layers fail closed before importing subprocess/node-pty', asy
 });
 
 test('persistent profile version advances for the corrected loader tree', async () => {
-  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v11';/);
+  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v12';/);
 });
 
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {

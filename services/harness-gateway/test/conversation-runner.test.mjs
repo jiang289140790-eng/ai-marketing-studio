@@ -33,6 +33,37 @@ test('exports native session frames without synthesizing text', async () => {
   assert.equal(frames.at(-1).reason.kind, 'completed');
 });
 
+test('native completion closes a child that keeps background handles alive', async () => {
+  const frames = [];
+  const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd(), timeoutMs: 2_000 });
+  const startedAt = Date.now();
+  const result = await runner.run(request('hang-after-completed', 'request-hanging-child'), userId, { onFrame: (frame) => frames.push(frame) });
+  assert.equal(result.ok, true);
+  assert.equal(frames.at(-1).type, 'conversation_completed');
+  assert.equal(frames.at(-1).reason.kind, 'completed');
+  assert.ok(Date.now() - startedAt < 1_000, 'completion must not wait for the Harness process timeout');
+  assert.equal(runner.hasActive(userId, threadId), false);
+});
+
+test('native error completion fails closed even when the child would hang', async () => {
+  const frames = [];
+  const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd(), timeoutMs: 2_000 });
+  const result = await runner.run(request('error-after-completed', 'request-error-child'), userId, { onFrame: (frame) => frames.push(frame) });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'HARNESS_CONVERSATION_FAILED');
+  assert.equal(frames.at(-1).reason.kind, 'error');
+  assert.equal(runner.hasActive(userId, threadId), false);
+});
+
+test('frames emitted after native completion are ignored', async () => {
+  const frames = [];
+  const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd(), timeoutMs: 2_000 });
+  const result = await runner.run(request('terminal-with-trailing-frame', 'request-trailing-frame'), userId, { onFrame: (frame) => frames.push(frame) });
+  assert.equal(result.ok, true);
+  assert.equal(frames.at(-1).type, 'conversation_completed');
+  assert.equal(frames.some((frame) => frame?.event?.seq === 2), false);
+});
+
 test('deduplicates concurrent generation and stop is independent of task cancel', async () => {
   const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd(), timeoutMs: 2_000 });
   const frames = [];

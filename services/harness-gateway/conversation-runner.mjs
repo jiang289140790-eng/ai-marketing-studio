@@ -90,6 +90,7 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
     let buffer = '';
     let stderr = '';
     let timedOut = false;
+    let terminalFrame = null;
     const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
     child.stdout.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
@@ -103,9 +104,18 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
         if (!line.trim()) continue;
         try {
           const frame = JSON.parse(line);
+          if (terminalFrame) continue;
           journalEntry.frames.push(frame);
           persist({ key: requestKey, state: 'frame', frame });
           onFrame?.(frame);
+          if (frame.type === 'conversation_completed') {
+            terminalFrame = frame;
+            // The native completion frame is authoritative. Some Harness
+            // profiles keep background handles alive after the turn has been
+            // flushed, so waiting for a natural process exit would leave the
+            // HTTP stream and generation lease open indefinitely.
+            if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM');
+          }
         } catch { child.kill('SIGTERM'); }
       }
     });
@@ -121,9 +131,11 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
       });
       child.once('exit', (code) => {
         clearTimeout(timer); if (force.timer) clearTimeout(force.timer); active.delete(activeKey);
-        const result = code === 0 ? { ok: true, generationId } : {
+        const terminalKind = terminalFrame?.reason?.kind;
+        const terminalSucceeded = ['completed', 'aborted'].includes(terminalKind);
+        const result = terminalSucceeded || (!terminalFrame && code === 0) ? { ok: true, generationId } : {
           ok: false,
-          code: timedOut ? 'HARNESS_TIMEOUT' : 'HARNESS_EXIT_FAILED',
+          code: timedOut ? 'HARNESS_TIMEOUT' : terminalFrame ? 'HARNESS_CONVERSATION_FAILED' : 'HARNESS_EXIT_FAILED',
           generationId,
           diagnostic: redactSensitive(stderr).slice(0, 240),
         };

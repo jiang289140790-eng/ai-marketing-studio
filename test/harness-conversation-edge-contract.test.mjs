@@ -89,10 +89,27 @@ test('ordinary capability questions and conversational follow-ups bypass task pl
   }
 });
 
+test('isolated Agent-first send is an explicit authenticated conversation contract', () => {
+  const result = validateEdgeRequest({
+    schema_version: EDGE_SCHEMA_VERSION,
+    action: 'thread_send_agent',
+    thread_id: threadId,
+    request_id: 'request-agent-1',
+    client_message_id: 'client-agent-1',
+    content: 'follow up in the same session',
+    attachments: [],
+  }, context);
+  assert.equal(result.ok, true);
+  assert.equal(result.contract, 'thread_send_agent');
+  assert.equal(result.body.content, 'follow up in the same session');
+});
+
 test('Edge source implements real SSE replay, heartbeat and no simulated model streaming', async () => {
   const source = await readFile(new globalThis.URL('../supabase/functions/harness-command/index.ts', import.meta.url), 'utf8');
   const migration = await readFile(new globalThis.URL('../supabase/migrations/20260823032957_harness_conversation_contract_v1.sql', import.meta.url), 'utf8');
   const recoveryMigration = await readFile(new globalThis.URL('../supabase/migrations/20260824005728_harness_expired_generation_recovery.sql', import.meta.url), 'utf8');
+  const agentStateMigration = await readFile(new globalThis.URL('../supabase/migrations/20260824091212_harness_agent_plan_thread_state.sql', import.meta.url), 'utf8');
+  const workspaceSource = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.match(source, /text\/event-stream/);
   assert.match(source, /last-event-id/);
   assert.match(source, /: heartbeat/);
@@ -117,4 +134,11 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /harness_fail_generation_delivery_v1/);
   assert.match(source, /GENERATION_DELIVERY_CONFIRMATION_UNKNOWN/);
   assert.match(source, /return 'confirmation_unknown'/);
+  assert.match(source, /agent_plan_created/);
+  assert.match(agentStateMigration, /v_current_task_id is not null then 'waiting_confirmation'/);
+  assert.match(agentStateMigration, /not \(p_event_type='generation_completed' and v_current_task_id is not null\)/);
+  assert.match(agentStateMigration, /then 'tool_call' else 'tool_result'/);
+  assert.match(agentStateMigration, /harness_append_message_v1/);
+  assert.match(workspaceSource, /ACTIVE_AGENT_THREAD_KEY/);
+  assert.match(workspaceSource, /payload\.state/);
 });

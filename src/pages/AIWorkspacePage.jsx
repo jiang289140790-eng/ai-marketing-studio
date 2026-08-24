@@ -4,6 +4,7 @@ import { parseHarnessContextParams } from '../utils/app-route.js';
 import './AIWorkspacePage.css';
 
 const ACTIVE_THREAD_KEY = 'ams_active_harness_thread_v1';
+const ACTIVE_AGENT_THREAD_KEY = 'ams_active_harness_agent_thread_v1';
 const WORKSPACE_ID = String(import.meta.env.VITE_AMS_WORKSPACE_ID || 'ai-marketing-studio-staging');
 const ACCEPT = 'image/*,video/mp4,application/pdf,text/plain,text/markdown,text/csv,application/json';
 const MAX_ATTACHMENTS = 10;
@@ -130,6 +131,8 @@ function MessageCard({ message, onNavigate, onCommand, canConfirm, currentTaskId
 export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: providedHarnessClient }) {
   const client = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
   const routeContext = useMemo(() => parseHarnessContextParams(routeParams), [routeParams]);
+  const agentFirst = routeParams?.agent === '1';
+  const activeThreadKey = agentFirst ? ACTIVE_AGENT_THREAD_KEY : ACTIVE_THREAD_KEY;
   const [thread, setThread] = useState(null);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState(routeContext.intent || '');
@@ -159,8 +162,8 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   useEffect(() => {
     let active = true;
     const restore = async () => {
-      if (routeParams?.new) globalThis.localStorage.removeItem(ACTIVE_THREAD_KEY);
-      const threadId = routeParams?.new ? '' : globalThis.localStorage.getItem(ACTIVE_THREAD_KEY) || '';
+      if (routeParams?.new) globalThis.localStorage.removeItem(activeThreadKey);
+      const threadId = routeParams?.new ? '' : globalThis.localStorage.getItem(activeThreadKey) || '';
       if (!threadId) return;
       setConnection('connecting');
       try {
@@ -172,13 +175,13 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         await loadHistory(threadId);
         if (active) setConnection(response.thread?.status === 'failed' ? 'failed' : response.thread?.status === 'blocked' ? 'blocked' : 'connected');
       } catch (caught) {
-        globalThis.localStorage.removeItem(ACTIVE_THREAD_KEY);
+        globalThis.localStorage.removeItem(activeThreadKey);
         if (active && caught?.code !== 'THREAD_NOT_FOUND') setError(caught?.message || '无法恢复会话。');
       }
     };
     restore();
     return () => { active = false; };
-  }, [client, loadHistory, refreshThread, routeParams?.new]);
+  }, [activeThreadKey, client, loadHistory, refreshThread, routeParams?.new]);
 
   useEffect(() => {
     if (!thread?.id) return undefined;
@@ -193,7 +196,13 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         if (type === 'assistant_text_delta') setLiveText((current) => `${current}${payload.delta || ''}`);
         if (type === 'assistant_text_completed') { setLiveText(''); loadHistory(thread.id); refreshThread(thread.id); }
         if (type === 'plan_created') { setThread((current) => current && { ...current, status: 'waiting_confirmation', currentTaskId: event.task_id || current.currentTaskId }); refreshThread(thread.id); }
-        if (type === 'task_progress') { setThread((current) => current && { ...current, status: 'executing', currentTaskId: event.task_id || current.currentTaskId }); refreshThread(thread.id); }
+        if (type === 'task_progress') {
+          const nextStatus = ['waiting_confirmation', 'executing', 'completed', 'failed', 'blocked', 'stopped'].includes(payload.state)
+            ? payload.state
+            : ['queued', 'running'].includes(payload.state) ? 'executing' : null;
+          if (nextStatus) setThread((current) => current && { ...current, status: nextStatus, currentTaskId: event.task_id || current.currentTaskId });
+          refreshThread(thread.id);
+        }
         if (type === 'generation_stopped') { setLiveText(''); setConnection('connected'); refreshThread(thread.id); loadHistory(thread.id); }
         if (type === 'error' || type === 'task_failed') { setLiveText(''); setConnection('failed'); setError(payload.message || 'AI 回复失败，请重试失败步骤。'); refreshThread(thread.id); }
         if (type === 'task_blocked') { setLiveText(''); setConnection('blocked'); refreshThread(thread.id); }
@@ -219,7 +228,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     if (thread?.id) return thread;
     const response = await client.createThread({ workspaceId: WORKSPACE_ID, projectId: readHarnessActiveProject(), requestId: `${requestId}:thread`, title: draft.slice(0, 80) || null });
     const next = { id: response.threadId, actions: { sendMessage: true, stopGeneration: false }, currentTaskId: response.currentTaskId, eventCursor: response.eventCursor, status: 'active' };
-    globalThis.localStorage.setItem(ACTIVE_THREAD_KEY, next.id);
+    globalThis.localStorage.setItem(activeThreadKey, next.id);
     setThread(next);
     return next;
   }
@@ -238,7 +247,10 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       const currentThread = await ensureThread(requestId);
       const uploaded = [];
       for (const attachment of attachments) uploaded.push(await client.uploadAttachment({ threadId: currentThread.id, requestId, file: attachment.file }));
-      await client.sendMessage({ threadId: currentThread.id, requestId, content, attachments: uploaded, clientMessageId });
+      const sendMessage = agentFirst && typeof client.sendAgentMessage === 'function'
+        ? client.sendAgentMessage.bind(client)
+        : client.sendMessage.bind(client);
+      await sendMessage({ threadId: currentThread.id, requestId, content, attachments: uploaded, clientMessageId });
       await refreshThread(currentThread.id);
       setAttachments([]);
       await loadHistory(currentThread.id);

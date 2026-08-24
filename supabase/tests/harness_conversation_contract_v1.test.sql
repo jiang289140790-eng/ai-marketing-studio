@@ -218,6 +218,33 @@ begin
       where d.thread_id=(created->>'threadId') and d.generation_id='generation-terminal') <> 'completed' then
     raise exception 'late callback regressed completed delivery';
   end if;
+
+  if not ((api.harness_claim_and_prepare_generation_v1(owner_id,thread_id,'generation-agent-plan','request-agent-plan'))->>'claimed')::boolean then
+    raise exception 'agent plan state generation claim failed';
+  end if;
+  perform api.harness_ack_generation_delivery_v1(owner_id,thread_id,'generation-agent-plan','request-agent-plan','gdl-agent-plan-test');
+  update ams_private.harness_threads_v1
+  set current_task_id='ht-00000000-0000-4000-8000-000000000301', status='waiting_confirmation'
+  where id=thread_id and user_id=owner_id;
+  perform api.harness_apply_generation_event_v1(owner_id,thread_id,'generation-agent-plan','request-agent-plan',
+    'event-agent-tool-call','tool_call_started',jsonb_build_object('name','ams_request_plan','operation','ams_request_plan','status','started','call',jsonb_build_object('name','ams_request_plan')));
+  perform api.harness_apply_generation_event_v1(owner_id,thread_id,'generation-agent-plan','request-agent-plan',
+    'event-agent-tool-result','tool_call_completed',jsonb_build_object('name','ams_request_plan','operation','ams_request_plan','status','completed','result',jsonb_build_object('accepted',true)));
+  perform api.harness_apply_generation_event_v1(owner_id,thread_id,'generation-agent-plan','request-agent-plan',
+    'event-agent-completed','generation_completed','{}'::jsonb);
+  if (select status from ams_private.harness_threads_v1 where id=thread_id) <> 'waiting_confirmation'
+    or (select current_task_id from ams_private.harness_threads_v1 where id=thread_id) <> 'ht-00000000-0000-4000-8000-000000000301' then
+    raise exception 'assistant completion overwrote the authoritative planned task state';
+  end if;
+  if (select count(*) from ams_private.harness_messages_v1 m
+      where m.thread_id=(created->>'threadId') and m.kind in ('tool_call','tool_result')) <> 2 then
+    raise exception 'tool call/result were not persisted into refreshable message history';
+  end if;
+  if exists (select 1 from ams_private.harness_messages_v1 m
+      where m.thread_id=(created->>'threadId') and m.kind in ('tool_call','tool_result')
+        and (m.structured_payload->>'name' is null or m.structured_payload->>'status' is null)) then
+    raise exception 'tool call/result history is missing renderer-readable top-level fields';
+  end if;
   if (select count(*) from ams_private.harness_generation_event_receipts_v1 r
       where r.thread_id=(created->>'threadId') and r.generation_id='generation-terminal') <> 2 then
     raise exception 'generation event receipts are not durable and idempotent';

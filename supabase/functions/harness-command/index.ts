@@ -82,7 +82,7 @@ Deno.serve(async (request) => {
     const generationEventTypes = new Set([
       'generation_started', 'assistant_text_delta', 'assistant_text_completed',
       'tool_call_started', 'tool_call_completed', 'generation_completed',
-      'generation_stopped', 'generation_failed',
+      'generation_stopped', 'generation_failed', 'agent_plan_created',
     ]);
     if (envelope?.schema_version !== 1 || event?.user_id !== userId
       || !/^thr_[0-9a-f-]{36}$/.test(String(event?.thread_id || ''))
@@ -91,6 +91,23 @@ Deno.serve(async (request) => {
       || !generationEventTypes.has(String(event?.event_type || ''))
       || !/^[A-Za-z0-9._:-]{1,240}$/.test(String(event?.event_id || ''))) {
       return json(request, { ok: false, code: 'GENERATION_EVENT_INVALID' }, 400);
+    }
+    if (event.event_type === 'agent_plan_created') {
+      const task = event.payload?.task;
+      if (!task || !/^ht-[0-9a-f-]{36}$/.test(String(task.id || '')) || task.state !== 'planned'
+        || task.request?.user_id !== userId || typeof task.updated_at !== 'string') {
+        return json(request, { ok: false, code: 'AGENT_PLAN_INVALID' }, 400);
+      }
+      const { error: bindError } = await serviceClient.schema('api').rpc('harness_set_thread_runtime_v1', {
+        p_user_id: userId, p_thread_id: event.thread_id, p_status: 'waiting_confirmation',
+        p_native_session_id: null, p_current_task_id: task.id, p_active_generation_id: event.generation_id,
+      });
+      if (bindError) return json(request, { ok: false, code: 'AGENT_PLAN_BIND_FAILED' }, 503);
+      const { data: projected, error: projectionError } = await serviceClient.schema('api').rpc('harness_project_task_event_v1', {
+        p_user_id: userId, p_task: task, p_gateway_event: 'planned', p_event_at: task.updated_at,
+      });
+      if (projectionError || !projected?.projected) return json(request, { ok: false, code: 'AGENT_PLAN_PROJECTION_FAILED' }, 503);
+      return json(request, { ok: true, ...projected });
     }
     const { data, error } = await serviceClient.schema('api').rpc('harness_apply_generation_event_v1', {
       p_user_id: userId, p_thread_id: event.thread_id, p_generation_id: event.generation_id,
@@ -225,7 +242,7 @@ Deno.serve(async (request) => {
       return json(request, { ok: response.ok, ...stop }, response.ok ? 202 : response.status);
     } catch { return json(request, { ok: false, code: 'STOP_FAILED' }, 503); }
   }
-  if (checked.contract === 'thread_send') {
+  if (checked.contract === 'thread_send' || checked.contract === 'thread_send_agent') {
     let thread: any;
     let message: any;
     const generationId = `edge_${checked.body.request_id}`;
@@ -318,11 +335,11 @@ Deno.serve(async (request) => {
           return true;
         }
 
-        // Existing deterministic planner is the authority for task intent. A
-        // recognized task is persisted as a plan and never reaches the model or
-        // a paid provider before confirmation. Only a genuinely unrecognized
-        // intent enters the native Harness Q&A session.
-        const explicitOrdinaryQuestion = isOrdinaryConversationIntent(checked.body.content);
+        // The isolated Agent-first route always enters the native Harness
+        // session. The legacy route retains its bounded compatibility split
+        // until Agent-first E2E and review allow the old mapper to be removed.
+        const explicitOrdinaryQuestion = checked.contract === 'thread_send_agent'
+          || isOrdinaryConversationIntent(checked.body.content);
         const planResponse = explicitOrdinaryQuestion ? null : await signedGatewayFetch('/v1/tasks/plan', {
           schema_version: 'ams_harness_gateway_v1', request_id: `${checked.body.request_id}:plan`,
           user_id: userId, project_id: thread.thread?.projectId || null, intent: checked.body.content,

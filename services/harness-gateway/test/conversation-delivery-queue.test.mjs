@@ -98,6 +98,92 @@ test('native aborted completion maps to stopped and tool payloads are recursivel
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('native Agent plan request creates one deterministic plan and projects it to the thread', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-agent-plan-'));
+  try {
+    const events = [];
+    const plans = [];
+    const task = { id: 'ht-00000000-0000-4000-8000-000000000301', state: 'planned', request: { user_id: userId, project_id: null } };
+    const queue = createConversationDeliveryQueue({
+      journalFile: join(dir, 'deliveries.jsonl'),
+      onEvent: (event) => events.push(event),
+      planTask: async (record, proposal) => { plans.push({ record, proposal }); return { ok: true, task }; },
+      runner: {
+        run: async (_request, _user, { onFrame }) => {
+          onFrame({ type: 'session_event', event: { type: 'tool/call', seq: 7, data: { callId: 'call-7', name: 'ams_request_plan', arguments: '{"intent":"search five recent posts"}' } } });
+          onFrame({ type: 'session_event', event: { type: 'tool/result', seq: 8, data: { message: { source: { kind: 'tool', callId: 'call-7' }, content: [{ type: 'tool-result', toolCallId: 'call-7', content: [{ type: 'text', text: '{"accepted":true}' }] }] } } } });
+          return { ok: true };
+        },
+      },
+    });
+    queue.enqueue({ ...request, request_id: 'request-agent-plan', generation_id: 'edge_request-agent-plan' }, userId);
+    await settle(); await settle();
+    assert.equal(plans.length, 1);
+    assert.equal(plans[0].proposal.intent, 'search five recent posts');
+    const toolCall = events.find((event) => event.event_type === 'tool_call_started');
+    const toolResult = events.find((event) => event.event_type === 'tool_call_completed');
+    assert.deepEqual({ name: toolCall.payload.name, operation: toolCall.payload.operation, status: toolCall.payload.status },
+      { name: 'ams_request_plan', operation: 'ams_request_plan', status: 'started' });
+    assert.deepEqual({ name: toolResult.payload.name, operation: toolResult.payload.operation, status: toolResult.payload.status },
+      { name: 'ams_request_plan', operation: 'ams_request_plan', status: 'completed' });
+    const projected = events.find((event) => event.event_type === 'agent_plan_created');
+    assert.equal(projected.payload.task.id, task.id);
+    assert.equal(events.at(-1).event_type, 'generation_completed');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('restart resumes an idempotent in-flight Agent plan without rerunning the model', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-agent-plan-recovery-'));
+  try {
+    const journalFile = join(dir, 'deliveries.jsonl');
+    const deliveryId = 'gdl_agent_plan_recovery_123456789';
+    const planning = { delivery_id: deliveryId, user_id: userId, state: 'planning', request,
+      plan_request: { intent: 'search five recent posts', nativeSeq: 7 }, result: { ok: true } };
+    writeFileSync(journalFile, `${JSON.stringify(planning)}\n`);
+    let modelCalls = 0;
+    let planCalls = 0;
+    const events = [];
+    const task = { id: 'ht-00000000-0000-4000-8000-000000000302', state: 'planned', request: { user_id: userId, project_id: null } };
+    createConversationDeliveryQueue({
+      journalFile,
+      onEvent: (event) => events.push(event),
+      runner: { run: async () => { modelCalls += 1; return { ok: true }; } },
+      planTask: async () => { planCalls += 1; return { ok: true, replayed: true, task }; },
+    });
+    await settle(); await settle();
+    assert.equal(modelCalls, 0);
+    assert.equal(planCalls, 1);
+    assert.equal(events.find((event) => event.event_type === 'agent_plan_created').payload.task.id, task.id);
+    assert.equal(events.at(-1).event_type, 'generation_completed');
+    assert.match(readFileSync(journalFile, 'utf8'), /"state":"completed"/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('restart reprojects a durably planned Agent task without model or planner duplication', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-agent-planned-recovery-'));
+  try {
+    const journalFile = join(dir, 'deliveries.jsonl');
+    const task = { id: 'ht-00000000-0000-4000-8000-000000000303', state: 'planned', request: { user_id: userId, project_id: null } };
+    const planned = { delivery_id: 'gdl_agent_planned_recovery_1234567', user_id: userId, state: 'planned', request,
+      plan_request: { intent: 'search five recent posts', nativeSeq: 7 }, planned_task: task, result: { ok: true } };
+    writeFileSync(journalFile, `${JSON.stringify(planned)}\n`);
+    let modelCalls = 0;
+    let planCalls = 0;
+    const events = [];
+    createConversationDeliveryQueue({
+      journalFile,
+      onEvent: (event) => events.push(event),
+      runner: { run: async () => { modelCalls += 1; return { ok: true }; } },
+      planTask: async () => { planCalls += 1; return { ok: true, task }; },
+    });
+    await settle(); await settle();
+    assert.equal(modelCalls, 0);
+    assert.equal(planCalls, 0);
+    assert.equal(events[0].event_type, 'agent_plan_created');
+    assert.equal(events.at(-1).event_type, 'generation_completed');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('terminal delivery journal reconstructs a missing terminal outbox event after restart', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-terminal-'));
   try {

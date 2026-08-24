@@ -31,9 +31,40 @@ async function loadClient() {
 }
 
 function apply(ctx) {
-  // Conversation Q&A is deliberately tool-free. Task intents are diverted to
-  // the existing deterministic plan/confirm chain before this child starts.
-  if (process.env.AMS_CONVERSATION_MODE === 'qa') return;
+  if (process.env.AMS_CONVERSATION_MODE === 'qa') {
+    const manifest = String(process.env.AMS_CAPABILITY_MANIFEST || '[]').slice(0, 24_000);
+    ctx.systemPrompt.section({
+      name: 'ams:conversation',
+      order: 40,
+      text: [
+        'You are the conversation and reasoning authority for AI Marketing Studio.',
+        'Answer ordinary questions directly and naturally. Use the complete prior session context for follow-ups.',
+        'Never map an unclear request to a default project read. Ask a concise clarification question instead.',
+        'Only when the user is asking the studio to perform an actionable capability, call ams_request_plan once.',
+        'The tool only requests a schema-validated deterministic plan; it never executes tools or incurs provider cost.',
+        'After requesting a plan, explain that the plan will be shown for review and that writes, paid calls, generation, and publishing still require their declared approvals.',
+        `Current reviewed capability catalog: ${manifest}`,
+      ].join('\n'),
+    });
+    ctx.tools.register(defineTool({
+      name: 'ams_request_plan',
+      description: 'Request a deterministic, schema-validated AMS execution plan for an actionable user goal. Never use for ordinary Q&A or ambiguous requests.',
+      parameters: {
+        intent: { type: 'string', required: true },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean' } } },
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+      },
+      async execute(args) {
+        const intent = String(args?.intent || '').trim();
+        if (!intent || intent.length > 12_000) throw Object.assign(new Error('Plan intent is invalid.'), { code: 'PLAN_INTENT_INVALID' });
+        return { accepted: true };
+      },
+      presentCall: () => ({ card: 'generic', title: 'Create safe execution plan', kind: 'action', rawInput: 'ams_request_plan' }),
+    }));
+    return;
+  }
   let requiredFailure = null;
   ctx.systemPrompt.section({
     name: 'ams:operator',

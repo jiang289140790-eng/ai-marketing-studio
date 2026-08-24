@@ -14,6 +14,7 @@ import { createTaskProjector } from './task-projector.mjs';
 import { createConversationProjector } from './conversation-projector.mjs';
 import { createConversationDeliveryQueue } from './conversation-delivery-queue.mjs';
 import { appendConversationEvent, loadConversationEvents } from './conversation-event-store.mjs';
+import { buildCapabilityManifest } from './capability-registry.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -97,7 +98,12 @@ const queue = new HarnessTaskQueue({
       : TASK_TIMEOUT_MS + TOOL_WINDOW_MS,
   }),
 });
-const conversations = createConversationRunner({ timeoutMs: TASK_TIMEOUT_MS, journalFile: process.env.HARNESS_CONVERSATION_JOURNAL || '/data/gateway/conversations.jsonl' });
+const capabilityManifest = buildCapabilityManifest();
+const conversations = createConversationRunner({
+  timeoutMs: TASK_TIMEOUT_MS,
+  journalFile: process.env.HARNESS_CONVERSATION_JOURNAL || '/data/gateway/conversations.jsonl',
+  capabilityManifest: capabilityManifest.capabilities,
+});
 const conversationProjector = createConversationProjector({
   callbackBase: process.env.AMS_CONVERSATION_CALLBACK_URL || '',
   secret: SECRET,
@@ -107,6 +113,13 @@ for (const event of loadConversationEvents(CONVERSATION_EVENT_FILE)) conversatio
 const conversationDeliveries = createConversationDeliveryQueue({
   journalFile: CONVERSATION_DELIVERY_FILE,
   runner: conversations,
+  planTask: (record, proposal) => queue.plan({
+    schema_version: 'ams_harness_gateway_v1',
+    request_id: `${record.request.request_id}:agent-plan`,
+    user_id: record.user_id,
+    project_id: record.request.project_id || null,
+    intent: proposal.intent,
+  }),
   onEvent: (event) => {
     appendConversationEvent(CONVERSATION_EVENT_FILE, event);
     conversationProjector.enqueue(event);

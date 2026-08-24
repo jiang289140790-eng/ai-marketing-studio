@@ -121,6 +121,9 @@ export function createHarnessClient({
     sendMessage({ threadId, requestId, content, attachments = [], clientMessageId = null }) {
       return invoke({ action: 'thread_send', thread_id: threadId, request_id: requestId, content, attachments, client_message_id: clientMessageId });
     },
+    sendAgentMessage({ threadId, requestId, content, attachments = [], clientMessageId = null }) {
+      return invoke({ action: 'thread_send_agent', thread_id: threadId, request_id: requestId, content, attachments, client_message_id: clientMessageId });
+    },
     listMessages(threadId, cursor = 0, limit = 100) {
       return invoke({ action: 'thread_messages', thread_id: threadId, cursor: String(cursor), limit });
     },

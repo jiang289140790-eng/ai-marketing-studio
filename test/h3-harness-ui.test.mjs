@@ -29,13 +29,14 @@ test('browser conversation client uses authenticated thread contracts and stable
   await harness.createThread({ workspaceId: 'ai-marketing-studio-staging', projectId: null, requestId: 'request-thread' });
   await harness.getThread(threadId);
   await harness.sendMessage({ threadId, requestId: 'request-message', clientMessageId: 'client-message', content: '你能做什么？' });
+  await harness.sendAgentMessage({ threadId, requestId: 'request-agent-message', clientMessageId: 'client-agent-message', content: 'follow up' });
   await harness.listMessages(threadId, 7, 100);
   await harness.stopGeneration(threadId);
-  assert.deepEqual(calls.map((entry) => entry.options.body.action), ['thread_create', 'thread_get', 'thread_send', 'thread_messages', 'thread_stop']);
+  assert.deepEqual(calls.map((entry) => entry.options.body.action), ['thread_create', 'thread_get', 'thread_send', 'thread_send_agent', 'thread_messages', 'thread_stop']);
   assert.equal(calls[0].options.body.schema_version, HARNESS_EDGE_SCHEMA_VERSION);
   assert.equal(calls[2].options.body.request_id, 'request-message');
   assert.equal(calls[2].options.body.client_message_id, 'client-message');
-  assert.equal(calls[3].options.body.cursor, '7');
+  assert.equal(calls[4].options.body.cursor, '7');
   for (const call of calls) {
     assert.equal(call.name, 'harness-command');
     assert.doesNotMatch(JSON.stringify(call), /service[_-]?role|hmac.secret|database_url/i);
@@ -79,6 +80,7 @@ test('SSE client replays from cursor and advances only from server event ids', a
 test('conversation workspace renders transcript, structured cards, fixed composer and server recovery', async () => {
   const page = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   const client = await readFile(new globalThis.URL('../src/services/harness-client.js', import.meta.url), 'utf8');
+  const app = await readFile(new globalThis.URL('../src/App.jsx', import.meta.url), 'utf8');
   assert.match(page, /data-testid="conversation-transcript"/);
   assert.match(page, /conversation-message/);
   assert.match(page, /conversation-card/);
@@ -96,6 +98,9 @@ test('conversation workspace renders transcript, structured cards, fixed compose
   assert.match(page, /client\.getThread\(threadId\)/);
   assert.match(page, /client\.listMessages\(threadId, 0, 200\)/);
   assert.match(page, /ACTIVE_THREAD_KEY/);
+  assert.match(page, /ACTIVE_AGENT_THREAD_KEY/);
+  assert.match(page, /agentFirst \? ACTIVE_AGENT_THREAD_KEY : ACTIVE_THREAD_KEY/);
+  assert.match(app, /key=\{routeParams\?\.agent === '1' \? 'agent-first' : 'legacy'\}/);
   assert.match(page, /onNavigate\?\.\('ai-execution', currentTaskId\)/);
   assert.match(page, /onNavigate\?\.\('ai-results', currentTaskId\)/);
   assert.doesNotMatch(page, /setTimeout|随机|fake/i);

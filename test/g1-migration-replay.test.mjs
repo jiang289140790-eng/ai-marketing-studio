@@ -70,7 +70,7 @@ function replayAllMigrations(dbName) {
   const migrations = readdirSync(join(REPO_ROOT, 'supabase', 'migrations'))
     .filter((name) => name.endsWith('.sql'))
     .sort();
-  assert.equal(migrations.length, 56, '迁移集必须包含 staging 已应用的 G3 历史、Harness conversation contract、过期生成恢复与持久化投递合同，共 56 项');
+  assert.equal(migrations.length, 57, '迁移集必须包含 staging 已应用的 G3 历史、Harness conversation contract、过期生成恢复、持久化投递与 Agent 计划状态合同，共 57 项');
   for (const name of migrations) {
     if (name === '20260815035041_p22_full_request_idempotency_binding.sql') {
       // P22 迁移需要 legacy 预留行前置（与 p19-sql-integration 同源）。

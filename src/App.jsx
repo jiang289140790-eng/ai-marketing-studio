@@ -120,9 +120,9 @@ export default function App() {
       case 'tasks':
         if (routeView === 'execution') return <TaskExecutionPage {...props} />;
         if (routeView === 'results') return <TaskResultsPage {...props} />;
-        return <AIWorkspacePage {...props} />;
+        return <AIWorkspacePage key={routeParams?.agent === '1' ? 'agent-first' : 'legacy'} {...props} />;
       case 'ai':
-        return <AIWorkspacePage {...props} />;
+        return <AIWorkspacePage key={routeParams?.agent === '1' ? 'agent-first' : 'legacy'} {...props} />;
       case 'campaigns':
         return <CampaignStrategyPage {...props} />;
       case 'plan':

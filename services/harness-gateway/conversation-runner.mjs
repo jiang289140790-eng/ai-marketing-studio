@@ -20,7 +20,7 @@ function validateRequest(request) {
   }
 }
 
-export function createConversationRunner({ executable, profileArgs, workspace = process.env.HARNESS_WORKSPACE || '/workspace', timeoutMs = 600_000, journalFile = process.env.HARNESS_CONVERSATION_JOURNAL || '' } = {}) {
+export function createConversationRunner({ executable, profileArgs, workspace = process.env.HARNESS_WORKSPACE || '/workspace', timeoutMs = 600_000, journalFile = process.env.HARNESS_CONVERSATION_JOURNAL || '', capabilityManifest = null } = {}) {
   const defaults = resolveHarnessLaunch(executable);
   executable = defaults.executable;
   profileArgs ||= defaults.profileArgs;
@@ -73,6 +73,7 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
       DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL || '',
       AMS_USER_ID: userId,
       AMS_CONVERSATION_MODE: 'qa',
+      AMS_CAPABILITY_MANIFEST: JSON.stringify(capabilityManifest || []),
       LANG: 'C.UTF-8',
       NODE_ENV: 'production',
     };

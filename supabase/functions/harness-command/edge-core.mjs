@@ -56,7 +56,7 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
   if (input.schema_version !== EDGE_SCHEMA_VERSION) return fail('SCHEMA_VERSION_MISMATCH', 'schema_version');
   if (typeof userId !== 'string' || !userId) return fail('AUTH_REQUIRED');
   if (!Object.hasOwn(ROLE_RANK, accessRole)) return fail('STAGING_ROLE_DENIED');
-  const threadActions = new Set(['thread_create', 'thread_get', 'thread_send', 'thread_messages', 'thread_events', 'thread_stop']);
+  const threadActions = new Set(['thread_create', 'thread_get', 'thread_send', 'thread_send_agent', 'thread_messages', 'thread_events', 'thread_stop']);
   if (threadActions.has(input.action)) {
     if (input.action === 'thread_create') {
       if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
@@ -67,7 +67,7 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
       return { ok: true, contract: 'thread_create', body: { request_id: input.request_id, workspace_id: input.workspace_id, project_id: input.project_id ?? null, title: input.title?.trim() || null } };
     }
     if (!THREAD_ID.test(String(input.thread_id || ''))) return fail('THREAD_ID_INVALID', 'thread_id');
-    if (input.action === 'thread_send') {
+    if (input.action === 'thread_send' || input.action === 'thread_send_agent') {
       if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
       if (!REQUEST_ID.test(String(input.request_id || ''))) return fail('REQUEST_ID_INVALID', 'request_id');
       if (typeof input.content !== 'string' || !input.content.trim() || input.content.length > 32_000) return fail('CONTENT_INVALID', 'content');
@@ -79,7 +79,7 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
           || typeof attachment.name !== 'string' || !attachment.name || attachment.name.length > 200
           || !Number.isSafeInteger(attachment.size) || attachment.size < 1 || attachment.size > 25 * 1024 * 1024) return fail('ATTACHMENT_INVALID', 'attachments');
       }
-      return { ok: true, contract: 'thread_send', body: { thread_id: input.thread_id, request_id: input.request_id, content: input.content.trim(), attachments: input.attachments ?? [], client_message_id: input.client_message_id ?? null } };
+      return { ok: true, contract: input.action, body: { thread_id: input.thread_id, request_id: input.request_id, content: input.content.trim(), attachments: input.attachments ?? [], client_message_id: input.client_message_id ?? null } };
     }
     if (input.cursor != null && !MESSAGE_CURSOR.test(String(input.cursor))) return fail('CURSOR_INVALID', 'cursor');
     const limit = input.limit == null ? 100 : input.limit;

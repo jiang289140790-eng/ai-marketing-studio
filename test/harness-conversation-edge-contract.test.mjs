@@ -107,7 +107,7 @@ test('isolated Agent-first send is an explicit authenticated conversation contra
 test('Edge source implements real SSE replay, heartbeat and no simulated model streaming', async () => {
   const source = await readFile(new globalThis.URL('../supabase/functions/harness-command/index.ts', import.meta.url), 'utf8');
   const migration = await readFile(new globalThis.URL('../supabase/migrations/20260823032957_harness_conversation_contract_v1.sql', import.meta.url), 'utf8');
-  const recoveryMigration = await readFile(new globalThis.URL('../supabase/migrations/20260824005728_harness_expired_generation_recovery.sql', import.meta.url), 'utf8');
+  const recoveryMigration = await readFile(new globalThis.URL('../supabase/migrations/20260823171530_harness_expired_generation_recovery.sql', import.meta.url), 'utf8');
   const agentStateMigration = await readFile(new globalThis.URL('../supabase/migrations/20260824091212_harness_agent_plan_thread_state.sql', import.meta.url), 'utf8');
   const workspaceSource = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.match(source, /text\/event-stream/);

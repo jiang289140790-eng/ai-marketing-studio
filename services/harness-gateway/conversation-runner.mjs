@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { resolveHarnessLaunch, redactSensitive } from './harness-runner.mjs';
+import { sanitizeConversationData } from './conversation-sanitize.mjs';
 
 const MAX_LINE = 256 * 1024;
 const MAX_STDERR = 4 * 1024;
@@ -103,7 +104,7 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
         const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
         if (!line.trim()) continue;
         try {
-          const frame = JSON.parse(line);
+          const frame = sanitizeConversationData(JSON.parse(line));
           if (terminalFrame) continue;
           journalEntry.frames.push(frame);
           persist({ key: requestKey, state: 'frame', frame });

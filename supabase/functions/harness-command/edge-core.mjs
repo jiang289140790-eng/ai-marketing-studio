@@ -9,6 +9,17 @@ const ROLE_RANK = Object.freeze({ viewer: 0, reviewer: 1, operator: 2, admin: 3 
 
 export const EDGE_SCHEMA_VERSION = 'ams_harness_edge_v1';
 
+const DEFINITIVE_DELIVERY_REJECTIONS = new Set([
+  'INVALID_JSON', 'DELEGATED_AUTHORIZATION_REQUIRED', 'USER_BINDING_MISMATCH',
+  'THREAD_BINDING_MISMATCH', 'GENERATION_ID_INVALID',
+]);
+
+export function classifyDeliveryResponse(status, payload) {
+  if (status >= 200 && status < 300 && payload?.accepted === true && typeof payload?.deliveryId === 'string') return 'accepted';
+  if (status >= 400 && status < 500 && payload?.ok === false && DEFINITIVE_DELIVERY_REJECTIONS.has(payload.code)) return 'rejected';
+  return 'confirmation_unknown';
+}
+
 export function fixedGatewayBase(raw) {
   const url = new URL(raw);
   if (

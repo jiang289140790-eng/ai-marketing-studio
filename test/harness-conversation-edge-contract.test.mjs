@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { extractAssistantTextDelta, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
+import { classifyDeliveryResponse, extractAssistantTextDelta, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
 
 const userId = '00000000-0000-4000-8000-000000000101';
 const threadId = 'thr_00000000-0000-4000-8000-000000000201';
@@ -70,6 +70,16 @@ test('same message request replay returns before confirmation processing in queu
   assert.equal(isAcceptedMessageReplay(message, { claimed: true }), false);
 });
 
+test('proxy 5xx after a possible durable accept remains ambiguous and never authorizes release', () => {
+  assert.equal(classifyDeliveryResponse(202, { accepted: true, deliveryId: 'gdl-1' }), 'accepted');
+  assert.equal(classifyDeliveryResponse(409, { ok: false, code: 'THREAD_BINDING_MISMATCH' }), 'rejected');
+  for (const status of [500, 502, 503, 504]) {
+    assert.equal(classifyDeliveryResponse(status, { ok: false, code: 'DELIVERY_PERSISTENCE_FAILED' }), 'confirmation_unknown');
+  }
+  assert.equal(classifyDeliveryResponse(502, null), 'confirmation_unknown');
+  assert.equal(classifyDeliveryResponse(202, { ok: true }), 'confirmation_unknown');
+});
+
 test('Edge source implements real SSE replay, heartbeat and no simulated model streaming', async () => {
   const source = await readFile(new globalThis.URL('../supabase/functions/harness-command/index.ts', import.meta.url), 'utf8');
   const migration = await readFile(new globalThis.URL('../supabase/migrations/20260823032957_harness_conversation_contract_v1.sql', import.meta.url), 'utf8');
@@ -78,16 +88,15 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /last-event-id/);
   assert.match(source, /: heartbeat/);
   assert.match(source, /harness_list_events_v1/);
-  assert.match(source, /EdgeRuntime\.waitUntil\(processGeneration\(\)\)/);
+  assert.doesNotMatch(source, /EdgeRuntime\.waitUntil/);
+  assert.match(source, /harness_claim_and_prepare_generation_v1/);
+  assert.match(source, /harness_ack_generation_delivery_v1/);
+  assert.match(source, /\/v1\/threads\/\$\{checked\.body\.thread_id\}\/deliveries/);
   assert.match(source, /PLANNER_UNRECOGNIZED/);
   assert.match(source, /\/v1\/tasks\/plan/);
   assert.match(source, /currentTaskId/);
-  assert.match(source, /harness_claim_generation_v1/);
   assert.match(source, /harness_release_generation_v1/);
-  assert.match(source, /generation_stopped/);
-  assert.match(source, /gateway_completed/);
-  assert.match(source, /tool_call_started/);
-  assert.match(source, /tool_call_completed/);
+  assert.match(source, /internal\/generation-events/);
   assert.match(migration, /approval_requested/);
   assert.match(migration, /harness_project_task_event_v1/);
   assert.match(source, /p_task_id: null/);
@@ -96,7 +105,7 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.doesNotMatch(source, /setTimeout\([^,]+,\s*\d+\).*assistant_text_delta/s);
   assert.match(recoveryMigration, /active_generation_lease_until/);
   assert.match(recoveryMigration, /stopGeneration[\s\S]*active_generation_lease_until\s*>=\s*now\(\)/);
-  const failureRelease = source.indexOf("p_status: 'failed'");
-  const failureEvent = source.indexOf("appendEvent('error'", failureRelease);
-  assert.ok(failureRelease >= 0 && failureEvent > failureRelease, 'failure lease must release before its terminal event');
+  assert.match(source, /harness_fail_generation_delivery_v1/);
+  assert.match(source, /GENERATION_DELIVERY_CONFIRMATION_UNKNOWN/);
+  assert.match(source, /return 'confirmation_unknown'/);
 });

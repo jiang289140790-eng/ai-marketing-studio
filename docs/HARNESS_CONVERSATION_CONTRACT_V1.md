@@ -53,3 +53,11 @@ Ordinary Q&A requests have a separate append-only Gateway request/frame journal.
 ## Recovery behavior
 
 SSE uses stable database cursors. Reconnect resumes after the last received cursor and only performs read-side task synchronization. Task snapshot projection is idempotent by task `updated_at`; it cannot repeat execution or paid calls. Authoritative plan approvals and task step states are projected as approval, tool-call, and tool-result records. Assistant stop sends the native DSH `agent.cancel({kind:'user'})`; task cancellation remains the separate existing endpoint. Native aborted/stopped completion maps to `generation_stopped`, while a failed Gateway completion maps to `error` and a failed thread state.
+
+## Durable generation delivery amendment
+
+Edge no longer owns the native model stream and does not use `EdgeRuntime.waitUntil` for generation. One database transaction claims the generation lease and inserts a `pending` delivery row. Edge then makes a bounded request to `POST /v1/threads/:threadId/deliveries`.
+
+The Gateway derives a stable delivery id from `user_id + thread_id + request_id`, synchronously fsyncs the `accepted` record, and only then returns its acknowledgement. Repeating the same request returns the same delivery and never starts a second model process. Delivery states are `pending`, `accepted`, `running`, `completed`, `failed`, and `stopped`.
+
+Gateway model execution is asynchronous and projects fsynced, HMAC-authenticated events back to Edge. Callback events and acknowledgements are append-only and replayable. An accepted delivery that did not reach `running` is safe to resume after restart. A delivery already marked `running` fails closed as `GENERATION_RECOVERY_REQUIRED` after restart and is never re-executed. A definitive delivery failure atomically records a bounded error, releases the matching generation, and appends a user-visible error event.

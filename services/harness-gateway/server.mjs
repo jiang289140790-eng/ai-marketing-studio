@@ -11,6 +11,9 @@ import { createBridgeStateReader, executeConfirmedPlan } from './deterministic-e
 import { createToolClient } from './tool-client.mjs';
 import { createConversationRunner } from './conversation-runner.mjs';
 import { createTaskProjector } from './task-projector.mjs';
+import { createConversationProjector } from './conversation-projector.mjs';
+import { createConversationDeliveryQueue } from './conversation-delivery-queue.mjs';
+import { appendConversationEvent, loadConversationEvents } from './conversation-event-store.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -22,6 +25,9 @@ const BRIDGE_SECRET = process.env.AMS_TOOL_BRIDGE_SECRET_FILE
   : '';
 const EVENT_FILE = process.env.HARNESS_EVENT_FILE || '/data/gateway/events.jsonl';
 const PROJECTOR_ACK_FILE = process.env.HARNESS_PROJECTOR_ACK_FILE || '/data/gateway/projected-events.log';
+const CONVERSATION_PROJECTOR_ACK_FILE = process.env.HARNESS_CONVERSATION_PROJECTOR_ACK_FILE || '/data/gateway/projected-conversation-events.log';
+const CONVERSATION_DELIVERY_FILE = process.env.HARNESS_CONVERSATION_DELIVERY_FILE || '/data/gateway/conversation-deliveries.jsonl';
+const CONVERSATION_EVENT_FILE = process.env.HARNESS_CONVERSATION_EVENT_FILE || '/data/gateway/conversation-events.jsonl';
 const MAX_BODY = 64 * 1024;
 const TASK_TIMEOUT_MS = Number(process.env.HARNESS_TASK_TIMEOUT_MS || 600_000);
 const TOOL_WINDOW_MS = 150_000;
@@ -92,6 +98,20 @@ const queue = new HarnessTaskQueue({
   }),
 });
 const conversations = createConversationRunner({ timeoutMs: TASK_TIMEOUT_MS, journalFile: process.env.HARNESS_CONVERSATION_JOURNAL || '/data/gateway/conversations.jsonl' });
+const conversationProjector = createConversationProjector({
+  callbackBase: process.env.AMS_CONVERSATION_CALLBACK_URL || '',
+  secret: SECRET,
+  ackFile: CONVERSATION_PROJECTOR_ACK_FILE,
+});
+for (const event of loadConversationEvents(CONVERSATION_EVENT_FILE)) conversationProjector.enqueue(event);
+const conversationDeliveries = createConversationDeliveryQueue({
+  journalFile: CONVERSATION_DELIVERY_FILE,
+  runner: conversations,
+  onEvent: (event) => {
+    appendConversationEvent(CONVERSATION_EVENT_FILE, event);
+    conversationProjector.enqueue(event);
+  },
+});
 
 function send(response, status, body) {
   const text = JSON.stringify(body);
@@ -164,9 +184,26 @@ const server = createServer(async (request, response) => {
     response.end(`${JSON.stringify({ type: 'gateway_completed', ...result })}\n`);
     return;
   }
+  const deliveryMatch = url.pathname.match(/^\/v1\/threads\/(thr_[0-9a-f-]{36})\/deliveries$/);
+  if (request.method === 'POST' && deliveryMatch) {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body.user_id !== userId) return send(response, 403, { ok: false, code: 'USER_BINDING_MISMATCH' });
+    if (body.thread_id !== deliveryMatch[1]) return send(response, 409, { ok: false, code: 'THREAD_BINDING_MISMATCH' });
+    if (!/^[A-Za-z0-9._:-]{1,200}$/.test(String(body.generation_id || ''))) {
+      return send(response, 400, { ok: false, code: 'GENERATION_ID_INVALID' });
+    }
+    let result;
+    try { result = conversationDeliveries.enqueue(body, userId); }
+    catch { return send(response, 503, { ok: false, code: 'DELIVERY_PERSISTENCE_FAILED' }); }
+    return send(response, result.replayed ? 200 : 202, result);
+  }
   const stopMatch = url.pathname.match(/^\/v1\/threads\/(thr_[0-9a-f-]{36})\/stop$/);
   if (request.method === 'POST' && stopMatch) {
-    const result = conversations.stop(userId, stopMatch[1]);
+    const result = conversationDeliveries.stop(userId, stopMatch[1]);
     return send(response, result.ok ? 202 : 409, result);
   }
   if (request.method === 'POST' && url.pathname === '/v1/tasks') {
@@ -238,6 +275,8 @@ server.listen(PORT, HOST, () => process.stderr.write(`ams-harness-gateway listen
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     taskProjector.close();
+    conversationProjector.close();
+    conversationDeliveries.close();
     queue.shutdown();
     server.close(async () => {
       await Promise.race([queue.whenIdle(), new Promise((resolve) => setTimeout(resolve, 7_000))]);

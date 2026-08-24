@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath, URL } from 'node:url';
-import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createConversationRunner } from '../conversation-runner.mjs';
@@ -108,5 +108,18 @@ test('ambiguous interrupted request fails closed after restart and never starts 
     appendFileSync(journalFile, `${JSON.stringify({ key: requestKey, state: 'started' })}\n`);
     const restarted = createConversationRunner({ executable: 'missing-executable-must-not-spawn', workspace: process.cwd(), journalFile });
     assert.deepEqual(await restarted.run(request('question', 'interrupted-request'), userId), { ok: false, code: 'GENERATION_RECOVERY_REQUIRED', replayed: true });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('native conversation journal redacts nested credentials before persistence', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ams-conversation-secret-'));
+  const journalFile = join(directory, 'conversation.jsonl');
+  try {
+    const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd(), journalFile });
+    assert.equal((await runner.run(request('secret-journal', 'secret-journal-request'), userId)).ok, true);
+    const journal = readFileSync(journalFile, 'utf8');
+    assert.doesNotMatch(journal, /journal-secret-value|journal-api-key/);
+    assert.match(journal, /\[REDACTED\]/);
+    assert.match(journal, /visible/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

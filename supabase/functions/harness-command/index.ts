@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
-import { extractAssistantTextDelta, fixedGatewayBase, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
+import { classifyDeliveryResponse, fixedGatewayBase, isAcceptedMessageReplay, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
 
 const ALLOWED_ORIGINS = new Set([
   'https://jiang289140790-eng.github.io',
@@ -63,6 +63,41 @@ Deno.serve(async (request) => {
     });
     if (error) return json(request, { ok: false, code: 'TASK_PROJECTION_FAILED' }, 503);
     if (!data?.projected) return json(request, { ok: false, code: 'THREAD_NOT_BOUND' }, 409);
+    return json(request, { ok: true, ...data });
+  }
+  if (request.method === 'POST' && requestUrl.pathname.endsWith('/harness-command/internal/generation-events')) {
+    const rawBody = await request.text();
+    if (new TextEncoder().encode(rawBody).length > MAX_RESPONSE) return json(request, { ok: false, code: 'BODY_TOO_LARGE' }, 413);
+    const userId = request.headers.get('x-ams-user-id') || '';
+    const timestamp = request.headers.get('x-ams-timestamp') || '';
+    const signature = request.headers.get('x-ams-signature') || '';
+    const callbackPath = '/functions/v1/harness-command/internal/generation-events';
+    const valid = await verifyGatewayCallback(gatewaySecret, {
+      method: 'POST', path: callbackPath, userId, timestamp, rawBody, signature,
+    });
+    if (!valid) return json(request, { ok: false, code: 'UNAUTHORIZED' }, 401);
+    let envelope: any;
+    try { envelope = JSON.parse(rawBody); } catch { return json(request, { ok: false, code: 'INVALID_JSON' }, 400); }
+    const event = envelope?.event;
+    const generationEventTypes = new Set([
+      'generation_started', 'assistant_text_delta', 'assistant_text_completed',
+      'tool_call_started', 'tool_call_completed', 'generation_completed',
+      'generation_stopped', 'generation_failed',
+    ]);
+    if (envelope?.schema_version !== 1 || event?.user_id !== userId
+      || !/^thr_[0-9a-f-]{36}$/.test(String(event?.thread_id || ''))
+      || !/^[A-Za-z0-9._:-]{1,200}$/.test(String(event?.generation_id || ''))
+      || !/^[A-Za-z0-9._:-]{1,200}$/.test(String(event?.request_id || ''))
+      || !generationEventTypes.has(String(event?.event_type || ''))
+      || !/^[A-Za-z0-9._:-]{1,240}$/.test(String(event?.event_id || ''))) {
+      return json(request, { ok: false, code: 'GENERATION_EVENT_INVALID' }, 400);
+    }
+    const { data, error } = await serviceClient.schema('api').rpc('harness_apply_generation_event_v1', {
+      p_user_id: userId, p_thread_id: event.thread_id, p_generation_id: event.generation_id,
+      p_request_id: event.request_id, p_event_id: event.event_id,
+      p_event_type: event.event_type, p_payload: event.payload || {},
+    });
+    if (error) return json(request, { ok: false, code: 'GENERATION_PROJECTION_FAILED' }, 503);
     return json(request, { ok: true, ...data });
   }
 
@@ -193,6 +228,7 @@ Deno.serve(async (request) => {
   if (checked.contract === 'thread_send') {
     let thread: any;
     let message: any;
+    const generationId = `edge_${checked.body.request_id}`;
     try {
       thread = await rpc('harness_get_thread_v1', { p_user_id: userId, p_thread_id: checked.body.thread_id });
       if (!thread) return json(request, { ok: false, code: 'THREAD_NOT_FOUND' }, 404);
@@ -203,13 +239,18 @@ Deno.serve(async (request) => {
         p_structured_payload: { attachments: checked.body.attachments }, p_task_id: null,
         p_client_message_id: checked.body.client_message_id, p_parent_message_id: null,
       });
-      const generationId = `edge_${checked.body.request_id}`;
-      const claim = await rpc('harness_claim_generation_v1', {
+      const claim = await rpc('harness_claim_and_prepare_generation_v1', {
         p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
+        p_request_id: checked.body.request_id,
       });
       if (!claim?.claimed) {
+        if (message?.replayed === true && claim?.deliveryStatus === 'pending') {
+          // The prior Edge invocation ended after the atomic claim but before
+          // Gateway acknowledgement. Re-run only the idempotent delivery path.
+        } else {
         if (isAcceptedMessageReplay(message, claim)) return json(request, { ok: true, accepted: true, replayed: true, messageId: message.id }, 200);
         return json(request, { ok: false, code: 'THREAD_GENERATION_ACTIVE' }, 409);
+        }
       }
     } catch { return json(request, { ok: false, code: 'MESSAGE_ACCEPT_FAILED' }, 503); }
 
@@ -266,11 +307,15 @@ Deno.serve(async (request) => {
             p_native_session_id: thread.nativeSessionId, p_current_task_id: task.id, p_active_generation_id: generationId,
           });
           await appendEvent('task_progress', { state: confirmed.task?.state || 'queued', messageId: approvalMessage.id }, approvalMessage.id, task.id);
+          await rpc('harness_close_generation_delivery_v1', {
+            p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
+            p_request_id: checked.body.request_id, p_status: 'completed',
+          });
           await rpc('harness_release_generation_v1', {
             p_user_id: userId, p_thread_id: checked.body.thread_id,
             p_generation_id: generationId, p_status: 'executing', p_clear_current_task: false,
           });
-          return;
+          return true;
         }
 
         // Existing deterministic planner is the authority for task intent. A
@@ -293,100 +338,77 @@ Deno.serve(async (request) => {
           await rpc('harness_project_task_event_v1', {
             p_user_id: userId, p_task: task, p_gateway_event: 'planned', p_event_at: task.updated_at,
           });
+          await rpc('harness_close_generation_delivery_v1', {
+            p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
+            p_request_id: checked.body.request_id, p_status: 'completed',
+          });
           await rpc('harness_release_generation_v1', {
             p_user_id: userId, p_thread_id: checked.body.thread_id,
             p_generation_id: generationId, p_status: 'waiting_confirmation', p_clear_current_task: false,
           });
-          return;
+          return true;
         }
         if (planPayload?.code && planPayload.code !== 'PLANNER_UNRECOGNIZED') {
           throw new Error(`planner rejected: ${planPayload.code}`);
         }
 
-        const path = `/v1/threads/${checked.body.thread_id}/messages`;
-        const rawBody = JSON.stringify({
+        const path = `/v1/threads/${checked.body.thread_id}/deliveries`;
+        const deliveryBody = {
           schema_version: 1, thread_id: checked.body.thread_id,
           native_session_id: thread.nativeSessionId || checked.body.thread_id.replace(/^thr_/, 'session-'),
+          generation_id: generationId,
           request_id: checked.body.request_id, user_id: userId,
           workspace_id: thread.thread.workspaceId, project_id: thread.thread.projectId,
           content: checked.body.content,
-        });
-        const response = await signedGatewayFetch(path, JSON.parse(rawBody), 600_000);
-        if (!response.ok || !response.body) throw new Error('gateway generation rejected');
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let pending = '';
-        let assistantText = '';
-        let assistantMessageId: string | null = null;
-        let generationOutcome: { state: 'completed' | 'stopped' | 'failed'; code: string | null } = { state: 'completed', code: null };
-        while (true) {
-          const { done, value } = await reader.read();
-          pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-          const lines = pending.split(/\r?\n/); pending = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const frame = JSON.parse(line);
-            generationOutcome = reduceGenerationOutcome(generationOutcome, frame);
-            if (frame.type === 'gateway_completed') {
-              continue;
-            }
-            if (frame.type !== 'session_event') continue;
-            const event = frame.event;
-            if (event?.type === 'assistant/chunk') {
-              const chunk = event.data?.chunk;
-              const delta = extractAssistantTextDelta(chunk);
-              if (delta) { assistantText += delta; await appendEvent('assistant_text_delta', { delta, nativeSeq: event.seq }); }
-            } else if (event?.type === 'assistant/message') {
-              const content = (event.data?.message?.content || []).filter((block: any) => block?.type === 'text').map((block: any) => block.text).join('');
-              if (content) assistantText = content;
-              const assistant = await rpc('harness_append_message_v1', {
-                p_user_id: userId, p_thread_id: checked.body.thread_id,
-                p_request_id: `${checked.body.request_id}:assistant`, p_role: 'assistant', p_kind: 'text', p_status: 'completed',
-                p_content: assistantText, p_structured_payload: { nativeSeq: event.seq }, p_task_id: null,
-                p_client_message_id: null, p_parent_message_id: message.id,
-              });
-              assistantMessageId = assistant.id;
-              await appendEvent('assistant_text_completed', { messageId: assistant.id, nativeSeq: event.seq }, assistant.id);
-            } else if (event?.type === 'tool/call') {
-              await appendEvent('tool_call_started', { nativeSeq: event.seq, call: event.data });
-            } else if (event?.type === 'tool/result') {
-              await appendEvent('tool_call_completed', { nativeSeq: event.seq, result: event.data });
-            }
-          }
-          if (done) break;
+        };
+        let response: Response;
+        try {
+          response = await signedGatewayFetch(path, deliveryBody, 20_000);
+        } catch {
+          // The Gateway may have fsynced the stable delivery before the ACK
+          // connection was lost. Keep the lease and pending row so the exact
+          // requestId can be redelivered without a second model invocation.
+          return 'confirmation_unknown';
         }
-        if (generationOutcome.state === 'failed') {
-          if (assistantMessageId) await rpc('harness_complete_message_v1', {
-            p_user_id: userId, p_thread_id: checked.body.thread_id, p_message_id: assistantMessageId, p_status: 'failed',
-          });
-          throw new Error(generationOutcome.code || 'GENERATION_FAILED');
+        const delivery = await response.json().catch(() => null);
+        const deliveryOutcome = classifyDeliveryResponse(response.status, delivery);
+        if (deliveryOutcome === 'confirmation_unknown') {
+          return 'confirmation_unknown';
         }
-        if (generationOutcome.state === 'stopped') {
-          if (assistantMessageId) await rpc('harness_complete_message_v1', {
-            p_user_id: userId, p_thread_id: checked.body.thread_id, p_message_id: assistantMessageId, p_status: 'stopped',
-          });
-          await rpc('harness_release_generation_v1', {
+        if (deliveryOutcome === 'rejected') {
+          throw Object.assign(new Error('gateway delivery not acknowledged'), { code: delivery?.code || 'GENERATION_DELIVERY_FAILED' });
+        }
+        try {
+          await rpc('harness_ack_generation_delivery_v1', {
             p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
-            p_status: 'stopped', p_clear_current_task: true,
+            p_request_id: checked.body.request_id, p_gateway_delivery_id: delivery.deliveryId,
           });
-          await appendEvent('generation_stopped', { code: 'GENERATION_STOPPED' });
-          return;
+        } catch {
+          // Gateway has already durably accepted ownership. Its signed,
+          // replayable generation_started callback reconciles the DB state;
+          // releasing here could permit a duplicate model call.
         }
-        await rpc('harness_release_generation_v1', {
-          p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
-          p_status: 'completed', p_clear_current_task: true,
-        });
-        if (!assistantMessageId && assistantText) await appendEvent('assistant_text_completed', { content: assistantText });
+        return true;
       } catch (error) {
-        await rpc('harness_release_generation_v1', {
+        await rpc('harness_fail_generation_delivery_v1', {
           p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
-          p_status: 'failed', p_clear_current_task: true,
+          p_request_id: checked.body.request_id,
+          p_error_code: (error as any)?.code || 'GENERATION_DELIVERY_FAILED',
         });
-        await appendEvent('error', { code: 'GENERATION_FAILED', message: 'Assistant generation failed.' });
+        return false;
       }
     };
-    EdgeRuntime.waitUntil(processGeneration());
-    return json(request, { ok: true, accepted: true, replayed: message?.replayed === true, messageId: message.id }, message?.replayed ? 200 : 202);
+    const delivered = await processGeneration();
+    if (delivered === 'confirmation_unknown') {
+      return json(request, {
+        ok: false, code: 'GENERATION_DELIVERY_CONFIRMATION_UNKNOWN',
+        message: 'Gateway acknowledgement was interrupted. Retry this same message to reconcile safely.',
+        messageId: message.id,
+      }, 503);
+    }
+    return delivered
+      ? json(request, { ok: true, accepted: true, replayed: message?.replayed === true, messageId: message.id }, message?.replayed ? 200 : 202)
+      : json(request, { ok: false, code: 'GENERATION_DELIVERY_FAILED', messageId: message.id }, 503);
   }
 
   try {

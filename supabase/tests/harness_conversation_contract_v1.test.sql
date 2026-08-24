@@ -35,6 +35,12 @@ begin
     'api.harness_claim_generation_v1(uuid,text,text)',
     'api.harness_release_generation_v1(uuid,text,text,text,boolean)',
     'api.harness_request_stop_v1(uuid,text)'
+    ,'api.harness_prepare_generation_delivery_v1(uuid,text,text,text)'
+    ,'api.harness_claim_and_prepare_generation_v1(uuid,text,text,text)'
+    ,'api.harness_ack_generation_delivery_v1(uuid,text,text,text,text)'
+    ,'api.harness_fail_generation_delivery_v1(uuid,text,text,text,text)'
+    ,'api.harness_close_generation_delivery_v1(uuid,text,text,text,text)'
+    ,'api.harness_apply_generation_event_v1(uuid,text,text,text,text,text,jsonb)'
   ] loop
     if has_function_privilege('anon', fn, 'execute')
       or has_function_privilege('authenticated', fn, 'execute') then
@@ -52,6 +58,14 @@ begin
   if not (select relrowsecurity and relforcerowsecurity
           from pg_class where oid = 'ams_private.harness_generation_requests_v1'::regclass) then
     raise exception 'generation request RLS must be enabled and forced';
+  end if;
+  if not (select relrowsecurity and relforcerowsecurity
+          from pg_class where oid = 'ams_private.harness_generation_deliveries_v1'::regclass) then
+    raise exception 'generation delivery RLS must be enabled and forced';
+  end if;
+  if not (select relrowsecurity and relforcerowsecurity
+          from pg_class where oid = 'ams_private.harness_generation_event_receipts_v1'::regclass) then
+    raise exception 'generation event receipt RLS must be enabled and forced';
   end if;
   if not (select relrowsecurity and relforcerowsecurity
           from pg_class where oid = 'ams_private.harness_messages_v1'::regclass) then
@@ -174,6 +188,39 @@ begin
   end if;
   if (api.harness_claim_generation_v1(owner_id, thread_id, 'generation-1'))->>'reason' <> 'generation_replayed' then
     raise exception 'completed request replay outcome missing';
+  end if;
+
+  if not ((api.harness_claim_and_prepare_generation_v1(owner_id,thread_id,'generation-delivery','request-delivery'))->>'claimed')::boolean then
+    raise exception 'atomic generation delivery claim failed';
+  end if;
+  if not exists (select 1 from ams_private.harness_generation_deliveries_v1 d
+      where d.thread_id=(created->>'threadId') and d.generation_id='generation-delivery' and d.status='pending') then
+    raise exception 'claim returned before delivery state was persisted';
+  end if;
+  perform api.harness_ack_generation_delivery_v1(owner_id,thread_id,'generation-delivery','request-delivery','gdl-contract-test');
+  if (select d.status from ams_private.harness_generation_deliveries_v1 d
+      where d.thread_id=(created->>'threadId') and d.generation_id='generation-delivery') <> 'accepted' then
+    raise exception 'gateway acknowledgement was not persisted';
+  end if;
+  perform api.harness_fail_generation_delivery_v1(owner_id,thread_id,'generation-delivery','request-delivery','DELIVERY_TEST_FAILURE');
+  if (select active_generation_id from ams_private.harness_threads_v1 where id=thread_id) is not null then
+    raise exception 'delivery failure did not immediately release generation';
+  end if;
+  if not ((api.harness_claim_and_prepare_generation_v1(owner_id,thread_id,'generation-terminal','request-terminal'))->>'claimed')::boolean then
+    raise exception 'terminal guard generation claim failed';
+  end if;
+  perform api.harness_ack_generation_delivery_v1(owner_id,thread_id,'generation-terminal','request-terminal','gdl-terminal-test');
+  perform api.harness_apply_generation_event_v1(owner_id,thread_id,'generation-terminal','request-terminal',
+    'event-terminal-completed','generation_completed','{}'::jsonb);
+  perform api.harness_apply_generation_event_v1(owner_id,thread_id,'generation-terminal','request-terminal',
+    'event-terminal-late-failure','generation_failed',jsonb_build_object('code','LATE_FAILURE'));
+  if (select d.status from ams_private.harness_generation_deliveries_v1 d
+      where d.thread_id=(created->>'threadId') and d.generation_id='generation-terminal') <> 'completed' then
+    raise exception 'late callback regressed completed delivery';
+  end if;
+  if (select count(*) from ams_private.harness_generation_event_receipts_v1 r
+      where r.thread_id=(created->>'threadId') and r.generation_id='generation-terminal') <> 2 then
+    raise exception 'generation event receipts are not durable and idempotent';
   end if;
 
   if not ((api.harness_claim_generation_v1(owner_id, thread_id, 'generation-confirm'))->>'claimed')::boolean then

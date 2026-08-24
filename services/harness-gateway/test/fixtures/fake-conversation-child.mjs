@@ -2,6 +2,9 @@
 const envelope = JSON.parse(process.argv.at(-1));
 process.stdout.write(`${JSON.stringify({ type: 'session_resumed', sessionId: envelope.sessionId })}\n`);
 process.stdout.write(`${JSON.stringify({ type: 'session_event', sessionId: envelope.sessionId, event: { seq: 1, type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: '真实' } } } })}\n`);
+if (envelope.content === 'secret-journal') {
+  process.stdout.write(`${JSON.stringify({ type: 'session_event', sessionId: envelope.sessionId, event: { seq: 2, type: 'tool/call', data: { headers: { Authorization: 'Bearer journal-secret-value' }, api_key: 'journal-api-key', safe: 'visible' } } })}\n`);
+}
 if (envelope.content === 'wait-for-stop') {
   process.stdin.setEncoding('utf8');
   process.stdin.once('data', () => {

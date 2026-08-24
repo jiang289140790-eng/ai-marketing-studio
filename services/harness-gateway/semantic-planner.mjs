@@ -128,6 +128,12 @@ export function createDeepSeekSemanticPlanner({
     const checkedManifest = validateCapabilityManifest(capabilityManifest);
     if (!checkedManifest.ok) throw Object.assign(new Error('Capability manifest is invalid.'), { code: checkedManifest.code });
     const memory = memoryForPlanner(context.project_memory);
+    const attachments = Array.isArray(context.attachments) ? context.attachments.slice(0, 10).map((item) => ({
+      ref: item.ref,
+      name: item.name,
+      size: item.size,
+      mime_type: item.mime_type,
+    })) : [];
     const systemPrompt = semanticPlannerSystemPrompt(checkedManifest.value);
     let response;
     try {
@@ -143,6 +149,7 @@ export function createDeepSeekSemanticPlanner({
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'system', content: `Bounded same-project task memory (never approvals or payloads): ${JSON.stringify(memory)}` },
+            { role: 'system', content: `Authenticated private attachment manifest (identity and metadata only; never claim visual/audio understanding from metadata): ${JSON.stringify(attachments)}` },
             { role: 'user', content: String(intent ?? '') },
           ],
         }),

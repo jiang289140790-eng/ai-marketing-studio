@@ -51,6 +51,19 @@ test('rejects malformed thread/session/request binding before spawn', async () =
   const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd() });
   await assert.rejects(() => runner.run({ ...request('x'), thread_id: '../escape' }, userId), { code: 'CONVERSATION_REQUEST_INVALID' });
   await assert.rejects(() => runner.run({ ...request('x'), workspace_id: 'other' }, userId), { code: 'CONVERSATION_REQUEST_INVALID' });
+  await assert.rejects(() => runner.run({ ...request('x'), attachments: [{ ref: 'public:file.pdf', name: 'file.pdf', size: 100, mime_type: 'application/pdf' }] }, userId), { code: 'CONVERSATION_REQUEST_INVALID' });
+});
+
+test('accepts only bounded private attachment identity in native conversation context', async () => {
+  const runner = createConversationRunner({ executable: process.execPath, profileArgs: [fixture], workspace: process.cwd(), timeoutMs: 2_000 });
+  const attachment = {
+    ref: `harness-thread-attachments:${userId}/${threadId}/request-attachment/brief.pdf`,
+    name: 'brief.pdf',
+    size: 1024,
+    mime_type: 'application/pdf',
+  };
+  const result = await runner.run({ ...request('summarize attachment', 'request-attachment'), attachments: [attachment] }, userId);
+  assert.equal(result.ok, true);
 });
 
 test('completed request replays persisted native frames after restart without another model process', async () => {

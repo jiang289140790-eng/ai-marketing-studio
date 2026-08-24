@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createHarnessClient } from '../services/harness-client.js';
 import { resolvePresentationBlocks } from '../services/harness-presentation.js';
 import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
+import { GenerationArtifactViewer } from '../components/generation-execution/GenerationArtifactViewer.jsx';
+import { createGenerationClient } from '../services/generation-execution-service.js';
 import {
   isValidHarnessTaskId,
   normalizeTaskSnapshot,
@@ -9,6 +11,7 @@ import {
   taskSnapshotView,
 } from '../services/harness-task-model.js';
 import './ai-task-pages.css';
+import './GenerationTasksPage.css';
 
 function boundedMessage(error) {
   return String(error?.message || error || '操作失败。').slice(0, 200);
@@ -22,6 +25,27 @@ function formatTime(value) {
 }
 
 const POLL_INTERVAL_MS = 1500;
+const GENERATION_JOB_ID = /^g1j-[0-9a-f]{24}$/;
+
+function findGenerationJobId(value, depth = 0, seen = new Set()) {
+  if (depth > 8 || value == null) return null;
+  if (typeof value === 'string') return GENERATION_JOB_ID.test(value) ? value : null;
+  if (typeof value !== 'object' || seen.has(value)) return null;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 100)) {
+      const found = findGenerationJobId(item, depth + 1, seen);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const [key, item] of Object.entries(value).slice(0, 100)) {
+    if ((key === 'job_id' || key === 'jobId') && typeof item === 'string' && GENERATION_JOB_ID.test(item)) return item;
+    const found = findGenerationJobId(item, depth + 1, seen);
+    if (found) return found;
+  }
+  return null;
+}
 
 // 结果页五分类展示顺序与标签（每类都从同一 snapshot 派生，缺失逐类空态）。
 const RESULT_SECTION_ORDER = [
@@ -41,12 +65,15 @@ const RESULT_SECTION_ORDER = [
  * 空状态，绝不使用 demo/fixture/static success。非终态任务明确提示尚未
  * 产生结果；轮询更新原子替换整个 snapshot。
  */
-export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClient: providedHarnessClient }) {
+export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClient: providedHarnessClient, generationClient: providedGenerationClient }) {
   const harnessClient = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
+  const generationClient = useMemo(() => providedGenerationClient || createGenerationClient(), [providedGenerationClient]);
   const [task, setTask] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showFullResult, setShowFullResult] = useState(false);
+  const [generationJob, setGenerationJob] = useState(null);
+  const [generationError, setGenerationError] = useState('');
   const pollGeneration = useRef(0);
   const pollInFlight = useRef(false);
 
@@ -108,7 +135,21 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
   const presentationBlocks = useMemo(() => resolvePresentationBlocks(task), [task]);
   const finalResponse = task?.result?.final_response || '';
   const terminal = task && ['succeeded', 'reused', 'partial', 'failed', 'blocked', 'cancelled'].includes(task.state);
+  const generationJobId = useMemo(() => findGenerationJobId(task?.result?.result_data), [task]);
   const notTerminalText = task ? `任务还在 ${stateLabel(task.state)}，尚未产生最终结果。` : '';
+
+  useEffect(() => {
+    let active = true;
+    setGenerationJob(null);
+    setGenerationError('');
+    if (!generationJobId) return () => { active = false; };
+    generationClient.status({ jobId: generationJobId }).then((response) => {
+      if (active) setGenerationJob(response?.data || null);
+    }).catch((caught) => {
+      if (active) setGenerationError(boundedMessage(caught));
+    });
+    return () => { active = false; };
+  }, [generationClient, generationJobId]);
 
   return (
     <main className="ai-task-page" data-testid="ai-task-results">
@@ -272,6 +313,15 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
               <summary>原始产物身份</summary>
               <div className="ai-artifacts">{task.result.artifact_refs.map((ref) => <code key={ref}>{ref}</code>)}</div>
             </details>
+          )}
+
+          {generationJobId && (
+            <section className="ai-task-panel g1-page" data-testid="ai-task-generation-preview">
+              <div className="ai-task-panel-head"><div><p className="eyebrow">生成成品</p><h3>预览、下载与版本历史</h3></div></div>
+              {generationError && <div className="notice error" role="alert">{generationError}</div>}
+              {!generationJob && !generationError && <div className="skeleton skeleton-card" />}
+              {generationJob && <GenerationArtifactViewer artifacts={generationJob.artifacts || []} client={generationClient} jobId={generationJobId} onError={(caught) => setGenerationError(boundedMessage(caught))} />}
+            </section>
           )}
 
           {technical && (

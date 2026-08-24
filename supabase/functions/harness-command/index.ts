@@ -236,43 +236,6 @@ Deno.serve(async (request) => {
           });
         };
 
-        const confirmsCurrentPlan = /^(?:执行|确认执行|开始执行)[。！!]?$/u.test(checked.body.content);
-        if (confirmsCurrentPlan && thread.currentTaskId) {
-          const taskPath = `/v1/tasks/${thread.currentTaskId}`;
-          const readResponse = await signedGatewayFetch(taskPath, null, 20_000, 'GET');
-          const readPayload = await readResponse.json().catch(() => null);
-          const task = readPayload?.task;
-          if (!task?.plan?.fingerprint || task.state !== 'planned') throw new Error('current plan is not confirmable');
-          const required = task.plan.approvals || {};
-          const confirmResponse = await signedGatewayFetch(`${taskPath}/confirm`, {
-            schema_version: 'ams_harness_gateway_v1', task_id: task.id,
-            plan_fingerprint: task.plan.fingerprint,
-            approval: {
-              paid_external_calls: required.paid_external_calls === true,
-              online_writes: required.online_writes === true,
-              handoff_creation: required.handoff_creation === true,
-            },
-          });
-          const confirmed = await confirmResponse.json().catch(() => null);
-          if (!confirmed?.ok) throw new Error(`confirmation rejected: ${confirmed?.code || 'unknown'}`);
-          const approvalMessage = await rpc('harness_append_message_v1', {
-            p_user_id: userId, p_thread_id: checked.body.thread_id,
-            p_request_id: `${checked.body.request_id}:approval`, p_role: 'system', p_kind: 'approval', p_status: 'completed',
-            p_content: '计划已确认，开始执行。', p_structured_payload: { taskId: task.id, approval: required },
-            p_task_id: task.id, p_client_message_id: null, p_parent_message_id: message.id,
-          });
-          await rpc('harness_set_thread_runtime_v1', {
-            p_user_id: userId, p_thread_id: checked.body.thread_id, p_status: 'executing',
-            p_native_session_id: thread.nativeSessionId, p_current_task_id: task.id, p_active_generation_id: generationId,
-          });
-          await appendEvent('task_progress', { state: confirmed.task?.state || 'queued', messageId: approvalMessage.id }, approvalMessage.id, task.id);
-          await rpc('harness_release_generation_v1', {
-            p_user_id: userId, p_thread_id: checked.body.thread_id,
-            p_generation_id: generationId, p_status: 'executing', p_clear_current_task: false,
-          });
-          return;
-        }
-
         // Existing deterministic planner is the authority for task intent. A
         // recognized task is persisted as a plan and never reaches the model or
         // a paid provider before confirmation. Only a genuinely unrecognized
@@ -281,6 +244,12 @@ Deno.serve(async (request) => {
         const planResponse = explicitOrdinaryQuestion ? null : await signedGatewayFetch('/v1/tasks/plan', {
           schema_version: 'ams_harness_gateway_v1', request_id: `${checked.body.request_id}:plan`,
           user_id: userId, project_id: thread.thread?.projectId || null, intent: checked.body.content,
+          attachments: checked.body.attachments.map((attachment: any) => ({
+            ref: `${attachment.bucket}:${attachment.path}`,
+            name: attachment.name,
+            size: attachment.size,
+            mime_type: attachment.mimeType,
+          })),
         });
         const planPayload = planResponse ? await planResponse.json().catch(() => null) : { code: 'PLANNER_UNRECOGNIZED' };
         if (planPayload?.ok === true && planPayload.task?.plan) {
@@ -310,6 +279,12 @@ Deno.serve(async (request) => {
           request_id: checked.body.request_id, user_id: userId,
           workspace_id: thread.thread.workspaceId, project_id: thread.thread.projectId,
           content: checked.body.content,
+          attachments: checked.body.attachments.map((attachment: any) => ({
+            ref: `${attachment.bucket}:${attachment.path}`,
+            name: attachment.name,
+            size: attachment.size,
+            mime_type: attachment.mimeType,
+          })),
         });
         const response = await signedGatewayFetch(path, JSON.parse(rawBody), 600_000);
         if (!response.ok || !response.body) throw new Error('gateway generation rejected');

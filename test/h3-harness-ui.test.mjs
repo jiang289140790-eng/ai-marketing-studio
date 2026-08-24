@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHarnessClient, HARNESS_EDGE_SCHEMA_VERSION } from '../src/services/harness-client.js';
+import { HARNESS_CAPABILITY_IDS } from '../src/services/harness-capability-map.js';
+import { WORKFLOW_IDS } from '../services/harness-gateway/workflow-catalog.mjs';
 
 const threadId = 'thr_11111111-1111-4111-8111-111111111111';
 
@@ -29,13 +31,16 @@ test('browser conversation client uses authenticated thread contracts and stable
   await harness.createThread({ workspaceId: 'ai-marketing-studio-staging', projectId: null, requestId: 'request-thread' });
   await harness.getThread(threadId);
   await harness.sendMessage({ threadId, requestId: 'request-message', clientMessageId: 'client-message', content: '你能做什么？' });
+  await harness.confirmThreadPlan({ taskId: 'ht-11111111-1111-4111-8111-111111111111', planFingerprint: 'a'.repeat(64), approval: { paid_external_calls: true } });
   await harness.listMessages(threadId, 7, 100);
   await harness.stopGeneration(threadId);
-  assert.deepEqual(calls.map((entry) => entry.options.body.action), ['thread_create', 'thread_get', 'thread_send', 'thread_messages', 'thread_stop']);
+  assert.deepEqual(calls.map((entry) => entry.options.body.action), ['thread_create', 'thread_get', 'thread_send', 'confirm', 'thread_messages', 'thread_stop']);
   assert.equal(calls[0].options.body.schema_version, HARNESS_EDGE_SCHEMA_VERSION);
   assert.equal(calls[2].options.body.request_id, 'request-message');
   assert.equal(calls[2].options.body.client_message_id, 'client-message');
-  assert.equal(calls[3].options.body.cursor, '7');
+  assert.equal(calls[3].options.body.plan_fingerprint, 'a'.repeat(64));
+  assert.deepEqual(calls[3].options.body.approval, { paid_external_calls: true });
+  assert.equal(calls[4].options.body.cursor, '7');
   for (const call of calls) {
     assert.equal(call.name, 'harness-command');
     assert.doesNotMatch(JSON.stringify(call), /service[_-]?role|hmac.secret|database_url/i);
@@ -51,6 +56,7 @@ test('attachment upload uses the private thread-owned bucket path', async () => 
   const result = await harness.uploadAttachment({ threadId, requestId: 'request-1', file });
   assert.equal(result.bucket, 'harness-thread-attachments');
   assert.match(result.path, new RegExp(`^user-1/${threadId}/request-1/brief_notes\\.md$`));
+  assert.equal(result.mimeType, 'text/markdown');
   assert.equal(uploads[0].options.upsert, false);
 });
 
@@ -98,7 +104,14 @@ test('conversation workspace renders transcript, structured cards, fixed compose
   assert.match(page, /ACTIVE_THREAD_KEY/);
   assert.match(page, /onNavigate\?\.\('ai-execution', currentTaskId\)/);
   assert.match(page, /onNavigate\?\.\('ai-results', currentTaskId\)/);
-  assert.doesNotMatch(page, /setTimeout|随机|fake/i);
+  assert.doesNotMatch(page, /随机|fake/i);
+  assert.match(page, /attempt > 5/);
+  assert.match(page, /Math\.min\(8_000/);
+  assert.match(page, /globalThis\.setTimeout/);
+  assert.match(page, /重新连接/);
+  assert.match(page, /harness-active-project/);
+  assert.match(page, /confirmThreadPlan/);
+  assert.doesNotMatch(page, /send\(['"]执行['"]\)/);
   assert.match(client, /streamThreadEvents/);
   assert.match(client, /last-event-id|cursor=/i);
 });
@@ -107,6 +120,20 @@ test('browser code has no legacy direct submit and no local completed fabricatio
   const client = await readFile(new globalThis.URL('../src/services/harness-client.js', import.meta.url), 'utf8');
   const page = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.doesNotMatch(client, /\bsubmit\s*\(/);
-  assert.doesNotMatch(page, /harnessClient\.submit|state:\s*['"]completed['"]|setTimeout/);
+  assert.doesNotMatch(page, /harnessClient\.submit|state:\s*['"]completed['"]/);
   assert.match(page, /message\.status/);
+});
+
+test('official UI capability map exactly mirrors every approved workflow id', () => {
+  assert.deepEqual([...HARNESS_CAPABILITY_IDS].sort(), [...WORKFLOW_IDS].sort());
+  assert.equal(new Set(HARNESS_CAPABILITY_IDS).size, HARNESS_CAPABILITY_IDS.length);
+});
+
+test('task results bind generation job identity to signed preview, download, and version history', async () => {
+  const page = await readFile(new globalThis.URL('../src/pages/TaskResultsPage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /g1j-\[0-9a-f\]\{24\}/);
+  assert.match(page, /generationClient\.status\(\{ jobId: generationJobId \}\)/);
+  assert.match(page, /data-testid="ai-task-generation-preview"/);
+  assert.match(page, /GenerationArtifactViewer/);
+  assert.match(page, /artifacts=\{generationJob\.artifacts \|\| \[\]\}/);
 });

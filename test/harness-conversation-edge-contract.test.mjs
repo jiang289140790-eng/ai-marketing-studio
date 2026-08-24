@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { classifyDeliveryResponse, extractAssistantTextDelta, isAcceptedMessageReplay, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
+import { classifyDeliveryResponse, extractAssistantTextDelta, isAcceptedMessageReplay, isOrdinaryConversationIntent, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
 
 const userId = '00000000-0000-4000-8000-000000000101';
 const threadId = 'thr_00000000-0000-4000-8000-000000000201';
@@ -78,6 +78,15 @@ test('proxy 5xx after a possible durable accept remains ambiguous and never auth
   }
   assert.equal(classifyDeliveryResponse(502, null), 'confirmation_unknown');
   assert.equal(classifyDeliveryResponse(202, { ok: true }), 'confirmation_unknown');
+});
+
+test('ordinary capability questions and conversational follow-ups bypass task planning', () => {
+  for (const content of ['你能做什么？', '你能干什么', '你可以帮我做哪些', '您会干啥？', '你是谁', '其他的呢', '还有什么？']) {
+    assert.equal(isOrdinaryConversationIntent(content), true, content);
+  }
+  for (const content of ['搜索 X 热门主题', '读取当前项目', '生成 Brief']) {
+    assert.equal(isOrdinaryConversationIntent(content), false, content);
+  }
 });
 
 test('Edge source implements real SSE replay, heartbeat and no simulated model streaming', async () => {

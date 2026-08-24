@@ -20,6 +20,13 @@ export function classifyDeliveryResponse(status, payload) {
   return 'confirmation_unknown';
 }
 
+export function isOrdinaryConversationIntent(content) {
+  const normalized = String(content || '').trim().replace(/[？?。!！]+$/u, '');
+  if (!normalized) return false;
+  if (/^(?:你|您)?(?:能|可以|会)(?:做|干|帮我做)(?:什么|哪些|啥)$/u.test(normalized)) return true;
+  return /^(?:你是谁|怎么使用|如何使用|还有呢|还有什么|其他呢|其他的呢|别的呢|还有其他的吗)$/u.test(normalized);
+}
+
 export function fixedGatewayBase(raw) {
   const url = new URL(raw);
   if (

@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
-import { classifyDeliveryResponse, fixedGatewayBase, isAcceptedMessageReplay, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
+import { classifyDeliveryResponse, fixedGatewayBase, isAcceptedMessageReplay, isOrdinaryConversationIntent, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
 
 const ALLOWED_ORIGINS = new Set([
   'https://jiang289140790-eng.github.io',
@@ -322,7 +322,7 @@ Deno.serve(async (request) => {
         // recognized task is persisted as a plan and never reaches the model or
         // a paid provider before confirmation. Only a genuinely unrecognized
         // intent enters the native Harness Q&A session.
-        const explicitOrdinaryQuestion = /^(?:你能做什么|你可以做什么|你是谁|怎么使用|如何使用)[？?。!！]*$/u.test(checked.body.content);
+        const explicitOrdinaryQuestion = isOrdinaryConversationIntent(checked.body.content);
         const planResponse = explicitOrdinaryQuestion ? null : await signedGatewayFetch('/v1/tasks/plan', {
           schema_version: 'ams_harness_gateway_v1', request_id: `${checked.body.request_id}:plan`,
           user_id: userId, project_id: thread.thread?.projectId || null, intent: checked.body.content,
@@ -376,7 +376,12 @@ Deno.serve(async (request) => {
           return 'confirmation_unknown';
         }
         if (deliveryOutcome === 'rejected') {
-          throw Object.assign(new Error('gateway delivery not acknowledged'), { code: delivery?.code || 'GENERATION_DELIVERY_FAILED' });
+          await rpc('harness_fail_generation_delivery_v1', {
+            p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
+            p_request_id: checked.body.request_id,
+            p_error_code: `GATEWAY_${response.status}_${delivery?.code || 'UNKNOWN_REJECTION'}`,
+          });
+          return false;
         }
         try {
           await rpc('harness_ack_generation_delivery_v1', {

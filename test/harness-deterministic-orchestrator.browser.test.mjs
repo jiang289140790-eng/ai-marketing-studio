@@ -45,32 +45,34 @@ function fixtureSource() {
       async sendMessage(value) {
         calls.push({ method: 'sendMessage', value });
         append({ id: value.clientMessageId, thread_id: threadId, role: 'user', kind: 'text', content: value.content });
-        if (value.content === '执行') {
-          append({ id: 'progress', thread_id: threadId, task_id: taskId, role: 'system', kind: 'progress', content: '执行完成', structured_payload: { completed_steps: 3, total_steps: 3 } });
-          append({ id: 'brief', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'brief', content: 'Brief 已生成，等待审核', structured_payload: { review_status: 'pending_review' } });
-          threadState.status = 'executing';
-          queueMicrotask(() => emit('task_progress', { completed_steps: 3 }));
-          queueMicrotask(() => emit('brief_result', { review_status: 'pending_review' }));
-          queueMicrotask(() => emit('task_completed', { state: 'succeeded' }));
-        } else {
-          append({ id: 'plan', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'plan', content: '已生成确定性计划，等待确认', structured_payload: {
-            approvals: { paid_external_calls: true, online_writes: true },
-            cost_indicators: { paid_calls: 2 },
-            steps: [
-              { step: 'st-1', label: '读取 Evidence', operation: 'workspace.evidence.list' },
-              { step: 'st-2', label: '分析 Evidence', operation: 'research.analyze_persisted' },
-              { step: 'st-3', label: '生成 Brief', operation: 'workspace.brief.assemble' },
-            ],
-          } });
-          append({ id: 'tool', thread_id: threadId, task_id: taskId, role: 'tool', kind: 'tool_call', content: '准备读取项目上下文', structured_payload: { tool: 'workspace.evidence.list', project_id: 'project-safe', API_KEY: 'must-never-render', authorization: 'must-never-render', nested: { password: 'must-never-render' } } });
-          append({ id: 'evidence', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'evidence', content: '已找到可复用 Evidence', structured_payload: { count: 2, source: '当前项目', credential: 'must-never-render', Cookie: 'must-never-render' } });
-          append({ id: 'historical', thread_id: threadId, task_id: 'ht-22222222-2222-4222-8222-222222222222', role: 'assistant', kind: 'artifact', content: '{"auth":"must-never-render"}', structured_payload: { signed_url: 'must-never-render', signature: 'must-never-render', title: '历史成品' } });
-          append({ id: 'unsafe-text', thread_id: threadId, role: 'assistant', kind: 'text', content: '{"bearer":"must-never-render"}' });
-          threadState.status = 'waiting_confirmation';
-          threadState.currentTaskId = taskId;
-          queueMicrotask(() => emit('plan_created', {}));
-        }
+        append({ id: 'plan', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'plan', content: '已生成确定性计划，等待确认', structured_payload: {
+          fingerprint: '${'a'.repeat(64)}',
+          approvals: { paid_external_calls: true, online_writes: true },
+          cost_indicators: { paid_calls: 2, online_writes: 1 },
+          steps: [
+            { step: 'st-1', label: '读取 Evidence', operation: 'workspace.evidence.list' },
+            { step: 'st-2', label: '分析 Evidence', operation: 'research.analyze_persisted' },
+            { step: 'st-3', label: '生成 Brief', operation: 'workspace.brief.assemble' },
+          ],
+        } });
+        append({ id: 'tool', thread_id: threadId, task_id: taskId, role: 'tool', kind: 'tool_call', content: '准备读取项目上下文', structured_payload: { tool: 'workspace.evidence.list', project_id: 'project-safe', API_KEY: 'must-never-render', authorization: 'must-never-render', nested: { password: 'must-never-render' } } });
+        append({ id: 'evidence', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'evidence', content: '已找到可复用 Evidence', structured_payload: { count: 2, source: '当前项目', credential: 'must-never-render', Cookie: 'must-never-render' } });
+        append({ id: 'historical', thread_id: threadId, task_id: 'ht-22222222-2222-4222-8222-222222222222', role: 'assistant', kind: 'artifact', content: '{"auth":"must-never-render"}', structured_payload: { signed_url: 'must-never-render', signature: 'must-never-render', title: '历史成品' } });
+        append({ id: 'unsafe-text', thread_id: threadId, role: 'assistant', kind: 'text', content: '{"bearer":"must-never-render"}' });
+        threadState.status = 'waiting_confirmation';
+        threadState.currentTaskId = taskId;
+        queueMicrotask(() => emit('plan_created', {}));
         return { ok: true, accepted: true, messageId: messages.at(-1).id };
+      },
+      async confirmThreadPlan(value) {
+        calls.push({ method: 'confirmThreadPlan', value });
+        append({ id: 'progress', thread_id: threadId, task_id: taskId, role: 'system', kind: 'progress', content: '执行完成', structured_payload: { completed_steps: 3, total_steps: 3 } });
+        append({ id: 'brief', thread_id: threadId, task_id: taskId, role: 'assistant', kind: 'brief', content: 'Brief 已生成，等待审核', structured_payload: { review_status: 'pending_review' } });
+        threadState.status = 'executing';
+        queueMicrotask(() => emit('task_progress', { completed_steps: 3 }));
+        queueMicrotask(() => emit('brief_result', { review_status: 'pending_review' }));
+        queueMicrotask(() => emit('task_completed', { state: 'succeeded' }));
+        return { ok: true, accepted: true };
       },
       async streamThreadEvents({ onEvent, onStatus, signal }) {
         eventSink = onEvent;
@@ -165,16 +167,21 @@ test('real browser: authoritative plan and confirmation remain in one server-bac
     await cdp.evaluate(`(() => { const input = document.querySelector('[data-testid="harness-intent"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'must not send'); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
     assert.equal(await cdp.evaluate(`globalThis.__fixture.calls.filter((call) => call.method === 'sendMessage').length`), sendsBeforeActiveEnter, 'Enter cannot append an orphan message while generation is active');
     await cdp.evaluate(`globalThis.__setGenerationActive(false)`);
-    await waitForSelector(cdp, '.conversation-card.kind-plan .primary', { label: 'plan confirmation restored' });
+    await waitForSelector(cdp, '.conversation-approval-scopes', { label: 'plan approval scopes restored' });
+    await cdp.evaluate(`document.querySelectorAll('.conversation-approval-scopes input:not(:disabled)').forEach((input) => input.click())`);
+    await waitForSelector(cdp, '.conversation-card.kind-plan .primary', { label: 'plan confirmation enabled after exact approvals' });
     await click(cdp, { selector: '.conversation-card.kind-plan .primary', label: 'confirm plan' });
     await waitForSelector(cdp, '.conversation-card.kind-brief', { label: 'Brief result' });
     assert.equal(await cdp.evaluate(`document.querySelector('.conversation-card.kind-progress') !== null`), true);
     const snapshot = await cdp.evaluate(`structuredClone(globalThis.__fixture)`);
     const sends = snapshot.calls.filter((call) => call.method === 'sendMessage');
+    const confirmations = snapshot.calls.filter((call) => call.method === 'confirmThreadPlan');
     assert.equal(snapshot.calls.filter((call) => call.method === 'createThread').length, 1);
-    assert.equal(sends.length, 2);
+    assert.equal(sends.length, 1);
     assert.equal(sends.every((call) => call.value.threadId === THREAD_ID), true);
-    assert.equal(new Set(sends.map((call) => call.value.requestId)).size, 2);
+    assert.equal(confirmations.length, 1);
+    assert.equal(confirmations[0].value.planFingerprint, 'a'.repeat(64));
+    assert.deepEqual(confirmations[0].value.approval, { paid_external_calls: true, online_writes: true, handoff_creation: false });
     assert.equal(snapshot.messages.filter((message) => message.id !== 'historical' && message.task_id).every((message) => message.task_id === TASK_ID), true);
     assert.equal(snapshot.messages.find((message) => message.id === 'historical')?.task_id, 'ht-22222222-2222-4222-8222-222222222222');
     assert.equal(tracker.state.exceptions, 0, tracker.state.lastException || 'browser exception');

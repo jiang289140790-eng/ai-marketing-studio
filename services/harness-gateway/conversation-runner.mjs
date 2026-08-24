@@ -7,6 +7,17 @@ import { sanitizeConversationData } from './conversation-sanitize.mjs';
 
 const MAX_LINE = 256 * 1024;
 const MAX_STDERR = 4 * 1024;
+const ATTACHMENT_REF = /^harness-thread-attachments:[0-9a-f-]{36}\/thr_[0-9a-f-]{36}\/[A-Za-z0-9._:-]{1,200}\/[A-Za-z0-9._-]{1,120}$/i;
+const ATTACHMENT_MIME = /^(?:image\/(?:png|jpeg|webp|gif)|video\/mp4|application\/(?:pdf|json)|text\/(?:plain|markdown|csv))(?:;[A-Za-z0-9=._ -]{1,80})?$/i;
+
+function validAttachment(item) {
+  return item && typeof item === 'object' && !Array.isArray(item)
+    && Object.keys(item).every((key) => ['ref', 'name', 'size', 'mime_type'].includes(key))
+    && ATTACHMENT_REF.test(String(item.ref || ''))
+    && typeof item.name === 'string' && item.name.length > 0 && item.name.length <= 200
+    && Number.isSafeInteger(item.size) && item.size > 0 && item.size <= 25 * 1024 * 1024
+    && ATTACHMENT_MIME.test(String(item.mime_type || ''));
+}
 
 function validateRequest(request) {
   if (!request || request.schema_version !== 1
@@ -15,7 +26,10 @@ function validateRequest(request) {
     || !/^[A-Za-z0-9._:-]{1,200}$/.test(String(request.request_id || ''))
     || request.workspace_id !== 'ai-marketing-studio-staging'
     || typeof request.content !== 'string' || !request.content.trim()
-    || request.content.length > 32_000) {
+    || request.content.length > 32_000
+    || !Array.isArray(request.attachments ?? [])
+    || (request.attachments ?? []).length > 10
+    || (request.attachments ?? []).some((item) => !validAttachment(item))) {
     throw Object.assign(new Error('Invalid conversation request.'), { code: 'CONVERSATION_REQUEST_INVALID' });
   }
 }
@@ -60,10 +74,13 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
     if (recovered?.state === 'started') return { ok: false, code: 'GENERATION_RECOVERY_REQUIRED', replayed: true };
     if (active.has(activeKey)) return { ok: false, code: 'GENERATION_ALREADY_ACTIVE' };
     const generationId = `gen_${randomUUID()}`;
+    const attachmentManifest = (request.attachments || []).map((item) => ({ ref: item.ref, name: item.name, size: item.size, mime_type: item.mime_type }));
     const envelope = JSON.stringify({
       schemaVersion: 1,
       sessionId: request.native_session_id,
-      content: request.content.trim(),
+      content: attachmentManifest.length
+        ? `${request.content.trim()}\n\n[Authenticated private attachment manifest; metadata only, do not claim file-content understanding]\n${JSON.stringify(attachmentManifest)}`
+        : request.content.trim(),
     });
     const env = {
       PATH: process.env.PATH || '',

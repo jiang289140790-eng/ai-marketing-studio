@@ -5,6 +5,7 @@ export const HARNESS_EDGE_SCHEMA_VERSION = 'ams_harness_edge_v1';
 export const HARNESS_ACTIVE_PROJECT_KEY = 'p19_active_project_v1';
 export const HARNESS_DEMO_USER_KEY = 'ams_harness_demo_user_v1';
 export const HARNESS_THREAD_SCHEMA_VERSION = 1;
+export const HARNESS_APPROVAL_SCOPES = Object.freeze(['paid_external_calls', 'online_writes', 'handoff_creation']);
 
 const CAPABILITY_QUERY_PATTERN = /^(?:你)?(?:现在|目前|当前)?(?:能|可以|能够)?(?:做|干|处理|完成)(?:哪些|什么|啥)(?:事情|任务|工作|功能)?[？?。!！]*$/u;
 
@@ -124,6 +125,9 @@ export function createHarnessClient({
     sendAgentMessage({ threadId, requestId, content, attachments = [], clientMessageId = null }) {
       return invoke({ action: 'thread_send_agent', thread_id: threadId, request_id: requestId, content, attachments, client_message_id: clientMessageId });
     },
+    confirmThreadPlan({ taskId, planFingerprint, approval }) {
+      return invoke({ action: 'confirm', task_id: taskId, plan_fingerprint: planFingerprint, approval });
+    },
     listMessages(threadId, cursor = 0, limit = 100) {
       return invoke({ action: 'thread_messages', thread_id: threadId, cursor: String(cursor), limit });
     },
@@ -141,42 +145,40 @@ export function createHarnessClient({
     },
     async streamThreadEvents({ threadId, cursor = 0, signal, onEvent, onStatus }) {
       let nextCursor = Number(cursor) || 0;
+      onStatus?.('connecting');
+      const token = await accessToken(false);
+      const base = client?.supabaseUrl || String(edgeBase).replace(/\/$/, '');
+      if (!base) throw boundedError('HARNESS_NOT_CONFIGURED', 'AI 工作区尚未连接 staging。');
+      const target = `${base}/functions/v1/harness-command/threads/${encodeURIComponent(threadId)}/events?cursor=${nextCursor}&limit=200`;
+      let response;
+      try {
+        response = await fetchImpl(target, { method: 'GET', redirect: 'error', headers: { authorization: `Bearer ${token}`, apikey: client?.supabaseKey || '' }, signal });
+      } catch (error) {
+        if (signal?.aborted) return nextCursor;
+        onStatus?.('disconnected');
+        throw boundedError('EVENT_STREAM_DISCONNECTED', error?.message);
+      }
+      if (!response.ok || !response.body) throw boundedError('EVENT_STREAM_UNAVAILABLE', `事件流连接失败（${response.status}）`);
+      onStatus?.('connected');
+      const reader = response.body.getReader();
+      const decoder = new globalThis.TextDecoder();
+      let pending = '';
       while (!signal?.aborted) {
-        onStatus?.('connecting');
-        const token = await accessToken(false);
-        const base = client?.supabaseUrl || String(edgeBase).replace(/\/$/, '');
-        if (!base) throw boundedError('HARNESS_NOT_CONFIGURED', 'AI 工作区尚未连接 staging。');
-        const target = `${base}/functions/v1/harness-command/threads/${encodeURIComponent(threadId)}/events?cursor=${nextCursor}&limit=200`;
-        let response;
-        try {
-          response = await fetchImpl(target, { method: 'GET', redirect: 'error', headers: { authorization: `Bearer ${token}`, apikey: client?.supabaseKey || '' }, signal });
-        } catch (error) {
-          if (signal?.aborted) return nextCursor;
-          onStatus?.('disconnected');
-          throw boundedError('EVENT_STREAM_DISCONNECTED', error?.message);
+        const { done, value } = await reader.read();
+        pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const frames = pending.split(/\r?\n\r?\n/); pending = frames.pop() || '';
+        for (const frame of frames) {
+          if (!frame || frame.startsWith(':')) continue;
+          const lines = frame.split(/\r?\n/);
+          const id = lines.find((line) => line.startsWith('id:'))?.slice(3).trim();
+          const type = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
+          const dataLine = lines.find((line) => line.startsWith('data:'))?.slice(5).trim();
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine);
+          if (id && Number.isSafeInteger(Number(id))) nextCursor = Math.max(nextCursor, Number(id));
+          onEvent?.({ type, event, cursor: nextCursor });
         }
-        if (!response.ok || !response.body) throw boundedError('EVENT_STREAM_UNAVAILABLE', `事件流连接失败（${response.status}）`);
-        onStatus?.('connected');
-        const reader = response.body.getReader();
-        const decoder = new globalThis.TextDecoder();
-        let pending = '';
-        while (!signal?.aborted) {
-          const { done, value } = await reader.read();
-          pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-          const frames = pending.split(/\r?\n\r?\n/); pending = frames.pop() || '';
-          for (const frame of frames) {
-            if (!frame || frame.startsWith(':')) continue;
-            const lines = frame.split(/\r?\n/);
-            const id = lines.find((line) => line.startsWith('id:'))?.slice(3).trim();
-            const type = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
-            const dataLine = lines.find((line) => line.startsWith('data:'))?.slice(5).trim();
-            if (!dataLine) continue;
-            const event = JSON.parse(dataLine);
-            if (id && Number.isSafeInteger(Number(id))) nextCursor = Math.max(nextCursor, Number(id));
-            onEvent?.({ type, event, cursor: nextCursor });
-          }
-          if (done) break;
-        }
+        if (done) break;
       }
       return nextCursor;
     },

@@ -49,10 +49,11 @@ test('real browser: conversation workspace route, empty state, composer, respons
 
     for (const [width, height] of [[1440, 1000], [1366, 900], [1024, 850], [768, 900], [390, 844]]) {
       await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
+      await waitFor(async () => await cdp.evaluate(`innerWidth === ${width} && innerHeight === ${height}`), { label: `${width}px viewport settlement` });
       const layout = await cdp.evaluate(`(() => { const box = document.querySelector('.conversation-workspace').getBoundingClientRect(); const composer = document.querySelector('.conversation-composer').getBoundingClientRect(); return { boxWidth: box.width, boxHeight: box.height, composerBottom: composer.bottom, viewport: innerHeight, overflow: document.documentElement.scrollWidth > innerWidth }; })()`);
       assert.equal(layout.overflow, false, `${width}px has no horizontal overflow`);
       assert.ok(layout.boxHeight >= 400, `${width}px keeps the empty workspace useful without a forced blank transcript`);
-      assert.ok(layout.composerBottom <= layout.viewport + 420, `${width}px composer remains reachable without nested-page overflow`);
+      assert.ok(layout.composerBottom <= layout.viewport + 420, `${width}px composer remains reachable without nested-page overflow: ${JSON.stringify(layout)}`);
       if (process.env.AMS_CAPTURE_ACCEPTANCE_SCREENSHOTS === '1') {
         mkdirSync(SCREENSHOT_DIR, { recursive: true });
         const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });

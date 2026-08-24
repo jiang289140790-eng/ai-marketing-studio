@@ -99,6 +99,33 @@ test('DeepSeek adapter sends no tools and parses strict JSON response', async ()
   assert.equal(body.response_format.type, 'json_object');
 });
 
+test('private attachment identity reaches semantic planning as bounded metadata only', async () => {
+  const calls = [];
+  const semantic = createDeepSeekSemanticPlanner({
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        schema_version: SEMANTIC_PLANNER_SCHEMA_VERSION,
+        kind: 'plan',
+        workflow: 'read_capability',
+        slots: {},
+      }) } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  const attachment = {
+    ref: 'harness-thread-attachments:00000000-0000-4000-8000-000000000101/thr_00000000-0000-4000-8000-000000000201/request-1/brief.pdf',
+    name: 'brief.pdf',
+    size: 1024,
+    mime_type: 'application/pdf',
+  };
+  await semantic('Summarize what this attachment could be used for.', { attachments: [attachment] });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].messages[2].content, /Authenticated private attachment manifest/);
+  assert.match(calls[0].messages[2].content, /brief\.pdf/);
+  assert.match(calls[0].messages[2].content, /metadata only/);
+  assert.equal(calls[0].tools, undefined);
+});
+
 test('prompt and tool injection cannot add tools, workflows, payload fields, approvals, or prices', async () => {
   const calls = [];
   const semantic = createDeepSeekSemanticPlanner({

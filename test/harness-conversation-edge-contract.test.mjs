@@ -135,10 +135,13 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /GENERATION_DELIVERY_CONFIRMATION_UNKNOWN/);
   assert.match(source, /return 'confirmation_unknown'/);
   assert.match(source, /agent_plan_created/);
+  assert.match(source, /confirmsCurrentPlan\s*=\s*checked\.contract\s*===\s*['"]thread_send['"]/);
   assert.match(agentStateMigration, /v_current_task_id is not null then 'waiting_confirmation'/);
   assert.match(agentStateMigration, /not \(p_event_type='generation_completed' and v_current_task_id is not null\)/);
   assert.match(agentStateMigration, /then 'tool_call' else 'tool_result'/);
   assert.match(agentStateMigration, /harness_append_message_v1/);
   assert.match(workspaceSource, /ACTIVE_AGENT_THREAD_KEY/);
+  assert.doesNotMatch(workspaceSource, /removeItem\(ACTIVE_THREAD_KEY\)/);
+  assert.match(workspaceSource, /removeItem\(activeThreadKey\)/);
   assert.match(workspaceSource, /payload\.state/);
 });

@@ -5,6 +5,7 @@ const PROJECT_ID = /^prj-[0-9a-f]{24}$/;
 const THREAD_ID = /^thr_[0-9a-f-]{36}$/;
 const MESSAGE_CURSOR = /^\d{1,19}$/;
 const MAX_INTENT = 12_000;
+const ATTACHMENT_MIME = /^(?:image\/(?:png|jpeg|webp|gif)|video\/mp4|application\/(?:pdf|json)|text\/(?:plain|markdown|csv))(?:;[A-Za-z0-9=._ -]{1,80})?$/i;
 const ROLE_RANK = Object.freeze({ viewer: 0, reviewer: 1, operator: 2, admin: 3 });
 
 export const EDGE_SCHEMA_VERSION = 'ams_harness_edge_v1';
@@ -77,9 +78,10 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
         if (!plainObject(attachment) || attachment.bucket !== 'harness-thread-attachments'
           || typeof attachment.path !== 'string' || !attachment.path.startsWith(`${userId}/${input.thread_id}/`)
           || typeof attachment.name !== 'string' || !attachment.name || attachment.name.length > 200
+          || typeof attachment.mimeType !== 'string' || !ATTACHMENT_MIME.test(attachment.mimeType)
           || !Number.isSafeInteger(attachment.size) || attachment.size < 1 || attachment.size > 25 * 1024 * 1024) return fail('ATTACHMENT_INVALID', 'attachments');
       }
-      return { ok: true, contract: input.action, body: { thread_id: input.thread_id, request_id: input.request_id, content: input.content.trim(), attachments: input.attachments ?? [], client_message_id: input.client_message_id ?? null } };
+      return { ok: true, contract: input.action, body: { thread_id: input.thread_id, request_id: input.request_id, content: input.content.trim(), attachments: (input.attachments ?? []).map((attachment) => ({ bucket: attachment.bucket, path: attachment.path, name: attachment.name, size: attachment.size, mimeType: attachment.mimeType.toLowerCase() })), client_message_id: input.client_message_id ?? null } };
     }
     if (input.cursor != null && !MESSAGE_CURSOR.test(String(input.cursor))) return fail('CURSOR_INVALID', 'cursor');
     const limit = input.limit == null ? 100 : input.limit;

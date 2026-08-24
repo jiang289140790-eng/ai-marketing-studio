@@ -108,6 +108,26 @@ const TASK_ID = /^ht-[0-9a-f-]{36}$/;
 const MAX_PROMPT = 12_000;
 const MAX_RESULT_BYTES = 12 * 1024;
 const MAX_STRUCTURED_RESULT_BYTES = 64 * 1024;
+const ATTACHMENT_REF = /^harness-thread-attachments:[0-9a-f-]{36}\/thr_[0-9a-f-]{36}\/[A-Za-z0-9._:-]{1,200}\/[A-Za-z0-9._-]{1,120}$/i;
+const ATTACHMENT_MIME = /^(?:image\/(?:png|jpeg|webp|gif)|video\/mp4|application\/(?:pdf|json)|text\/(?:plain|markdown|csv))(?:;[A-Za-z0-9=._ -]{1,80})?$/i;
+
+function normalizeAttachmentManifest(value) {
+  if (value == null) return { ok: true, value: [] };
+  if (!Array.isArray(value) || value.length > 10) return { ok: false, code: 'ATTACHMENTS_INVALID' };
+  const normalized = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+      || Object.keys(item).some((key) => !['ref', 'name', 'size', 'mime_type'].includes(key))
+      || typeof item.ref !== 'string' || !ATTACHMENT_REF.test(item.ref)
+      || typeof item.name !== 'string' || !item.name || item.name.length > 200
+      || !Number.isSafeInteger(item.size) || item.size < 1 || item.size > 25 * 1024 * 1024
+      || typeof item.mime_type !== 'string' || !ATTACHMENT_MIME.test(item.mime_type)) {
+      return { ok: false, code: 'ATTACHMENT_INVALID' };
+    }
+    normalized.push({ ref: item.ref, name: item.name, size: item.size, mime_type: item.mime_type.toLowerCase() });
+  }
+  return { ok: true, value: normalized };
+}
 
 // Allowlisted harness failure diagnostic shape, sourced from the same
 // constants the classifier emits (a single source of truth so the producer
@@ -229,7 +249,7 @@ function bounded(value, limit) {
 
 export function validateTaskRequest(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, code: 'INVALID_REQUEST' };
-  const allowed = new Set(['schema_version', 'request_id', 'user_id', 'project_id', 'intent', 'approval']);
+  const allowed = new Set(['schema_version', 'request_id', 'user_id', 'project_id', 'intent', 'approval', 'attachments']);
   if (Object.keys(input).some((key) => !allowed.has(key))) return { ok: false, code: 'UNKNOWN_FIELD' };
   if (input.schema_version !== GATEWAY_SCHEMA_VERSION) return { ok: false, code: 'SCHEMA_VERSION_MISMATCH' };
   for (const key of ['request_id', 'user_id', 'intent']) {
@@ -240,6 +260,8 @@ export function validateTaskRequest(input) {
   if (input.project_id != null && (typeof input.project_id !== 'string' || input.project_id.length > 200)) {
     return { ok: false, code: 'PROJECT_ID_INVALID' };
   }
+  const attachments = normalizeAttachmentManifest(input.attachments);
+  if (!attachments.ok) return attachments;
   const approval = input.approval == null ? { paid_external_calls: false, online_writes: false } : input.approval;
   if (!approval || typeof approval !== 'object' || Array.isArray(approval)) return { ok: false, code: 'APPROVAL_INVALID' };
   const approvalAllowed = new Set(['paid_external_calls', 'online_writes', 'handoff_creation']);
@@ -253,6 +275,7 @@ export function validateTaskRequest(input) {
       user_id: input.user_id.trim(),
       project_id: input.project_id?.trim() || null,
       intent: input.intent.trim(),
+      attachments: attachments.value,
       approval: {
         paid_external_calls: approval.paid_external_calls === true,
         online_writes: approval.online_writes === true,
@@ -276,7 +299,7 @@ function fail(code, field = null) {
  */
 export function validatePlanRequest(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return fail('INVALID_REQUEST');
-  const allowed = new Set(['schema_version', 'request_id', 'user_id', 'project_id', 'intent']);
+  const allowed = new Set(['schema_version', 'request_id', 'user_id', 'project_id', 'intent', 'attachments']);
   if (Object.keys(input).some((key) => !allowed.has(key))) return fail('UNKNOWN_FIELD');
   if (input.schema_version !== GATEWAY_SCHEMA_VERSION) return fail('SCHEMA_VERSION_MISMATCH');
   for (const key of ['request_id', 'user_id', 'intent']) {
@@ -287,6 +310,8 @@ export function validatePlanRequest(input) {
   if (input.project_id != null && (typeof input.project_id !== 'string' || input.project_id.length > 200)) {
     return fail('PROJECT_ID_INVALID');
   }
+  const attachments = normalizeAttachmentManifest(input.attachments);
+  if (!attachments.ok) return fail(attachments.code, 'attachments');
   return {
     ok: true,
     value: {
@@ -295,6 +320,7 @@ export function validatePlanRequest(input) {
       user_id: input.user_id.trim(),
       project_id: input.project_id?.trim() || null,
       intent: input.intent.trim(),
+      attachments: attachments.value,
     },
   };
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 /* global Buffer, setImmediate, setTimeout */
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { GATEWAY_SCHEMA_VERSION, HarnessTaskQueue, signRequest, validateDelegatedAuthorization, validateTaskRequest, verifySignedRequest } from '../gateway-core.mjs';
+import { GATEWAY_SCHEMA_VERSION, HarnessTaskQueue, signRequest, validateDelegatedAuthorization, validatePlanRequest, validateTaskRequest, verifySignedRequest } from '../gateway-core.mjs';
 
 function request(overrides = {}) {
   return {
@@ -20,6 +20,23 @@ test('strict task envelope rejects unknown fields and invented identity', () => 
   assert.equal(validateTaskRequest({ ...request(), sql: 'select 1' }).code, 'UNKNOWN_FIELD');
   assert.equal(validateTaskRequest({ ...request(), user_id: '' }).code, 'USER_ID_INVALID');
   assert.equal(validateTaskRequest({ ...request(), approval: { admin: true } }).code, 'APPROVAL_UNKNOWN_FIELD');
+});
+
+test('private attachment manifests are exact, bounded, and request-fingerprint bound', () => {
+  const attachment = {
+    ref: 'harness-thread-attachments:00000000-0000-4000-8000-000000000101/thr_00000000-0000-4000-8000-000000000201/request-1/brief.pdf',
+    name: 'brief.pdf',
+    size: 1024,
+    mime_type: 'application/pdf',
+  };
+  const { approval: _approval, ...planRequest } = request();
+  const planned = validatePlanRequest({ ...planRequest, attachments: [attachment] });
+  assert.equal(planned.ok, true);
+  assert.deepEqual(planned.value.attachments, [attachment]);
+  assert.equal(validatePlanRequest({ ...planRequest, attachments: [{ ...attachment, ref: 'public:file.pdf' }] }).code, 'ATTACHMENT_INVALID');
+  assert.equal(validatePlanRequest({ ...planRequest, attachments: [{ ...attachment, mime_type: 'text/html' }] }).code, 'ATTACHMENT_INVALID');
+  assert.equal(validatePlanRequest({ ...planRequest, attachments: [{ ...attachment, size: 25 * 1024 * 1024 + 1 }] }).code, 'ATTACHMENT_INVALID');
+  assert.equal(validateTaskRequest({ ...request(), attachments: [{ ...attachment, extra: true }] }).code, 'ATTACHMENT_INVALID');
 });
 
 test('HMAC is body-bound, timestamp-bound, and time-bounded', () => {

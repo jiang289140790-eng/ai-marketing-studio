@@ -657,6 +657,7 @@ export function createPlanner({ modelPlanner = null } = {}) {
           raw = await modelPlanner(request.intent, {
             capability_manifest: capabilityManifest,
             project_memory: projectMemory,
+            attachments: request.attachments || [],
           });
         } catch (error) {
           const code = typeof error?.code === 'string' && /^PLANNER_[A-Z0-9_]{1,64}$/.test(error.code)

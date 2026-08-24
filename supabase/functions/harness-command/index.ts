@@ -294,7 +294,11 @@ Deno.serve(async (request) => {
           });
         };
 
-        const confirmsCurrentPlan = /^(?:执行|确认执行|开始执行)[。！!]?$/u.test(checked.body.content);
+        // Legacy compatibility only. Agent-first threads must use the explicit
+        // fingerprint-bound `confirm` contract so paid/write scopes are never
+        // inferred or auto-approved from conversational text.
+        const confirmsCurrentPlan = checked.contract === 'thread_send'
+          && /^(?:执行|确认执行|开始执行)[。！!]?$/u.test(checked.body.content);
         if (confirmsCurrentPlan && thread.currentTaskId) {
           const taskPath = `/v1/tasks/${thread.currentTaskId}`;
           const readResponse = await signedGatewayFetch(taskPath, null, 20_000, 'GET');
@@ -343,6 +347,12 @@ Deno.serve(async (request) => {
         const planResponse = explicitOrdinaryQuestion ? null : await signedGatewayFetch('/v1/tasks/plan', {
           schema_version: 'ams_harness_gateway_v1', request_id: `${checked.body.request_id}:plan`,
           user_id: userId, project_id: thread.thread?.projectId || null, intent: checked.body.content,
+          attachments: checked.body.attachments.map((attachment: any) => ({
+            ref: `${attachment.bucket}:${attachment.path}`,
+            name: attachment.name,
+            size: attachment.size,
+            mime_type: attachment.mimeType,
+          })),
         });
         const planPayload = planResponse ? await planResponse.json().catch(() => null) : { code: 'PLANNER_UNRECOGNIZED' };
         if (planPayload?.ok === true && planPayload.task?.plan) {
@@ -377,6 +387,12 @@ Deno.serve(async (request) => {
           request_id: checked.body.request_id, user_id: userId,
           workspace_id: thread.thread.workspaceId, project_id: thread.thread.projectId,
           content: checked.body.content,
+          attachments: checked.body.attachments.map((attachment: any) => ({
+            ref: `${attachment.bucket}:${attachment.path}`,
+            name: attachment.name,
+            size: attachment.size,
+            mime_type: attachment.mimeType,
+          })),
         };
         let response: Response;
         try {

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createHarnessClient, newHarnessRequestId, readHarnessActiveProject } from '../services/harness-client.js';
+import { createHarnessClient, HARNESS_ACTIVE_PROJECT_KEY, HARNESS_APPROVAL_SCOPES, newHarnessRequestId, readHarnessActiveProject } from '../services/harness-client.js';
+import { createP20OnlineStore } from '../services/p20-online-store.js';
+import { capabilityModeLabel, HARNESS_CAPABILITY_MAP } from '../services/harness-capability-map.js';
 import { parseHarnessContextParams } from '../utils/app-route.js';
 import './AIWorkspacePage.css';
 
@@ -69,6 +71,12 @@ const VISIBLE_PAYLOAD_FIELDS = Object.freeze({
   progress: ['completed_steps', 'total_steps', 'status', 'summary'],
 });
 
+const APPROVAL_LABELS = Object.freeze({
+  paid_external_calls: '允许本计划中的付费外部调用',
+  online_writes: '允许本计划写入 staging',
+  handoff_creation: '允许创建交接包',
+});
+
 function StructuredSummary({ payload, kind, limit = 6 }) {
   const allowed = new Set(VISIBLE_PAYLOAD_FIELDS[kind] || []);
   const entries = Object.entries(payload || {})
@@ -95,12 +103,15 @@ function MessageIcon({ role, kind }) {
   return <span className={`message-avatar assistant kind-${kind}`} aria-hidden="true">{glyphs[kind] || 'AI'}</span>;
 }
 
-function MessageCard({ message, onNavigate, onCommand, canConfirm, currentTaskId }) {
+function MessageCard({ message, onNavigate, onConfirm, canConfirm, currentTaskId, confirming }) {
   const payload = messagePayload(message);
   const kind = message.kind || 'text';
   const messageTaskId = message.task_id || message.taskId;
   const taskId = messageTaskId && messageTaskId === currentTaskId ? currentTaskId : null;
   const safeContent = !isSerializedPayload(message.content) ? message.content : '';
+  const requiredApprovals = HARNESS_APPROVAL_SCOPES.filter((scope) => payload.approvals?.[scope] === true);
+  const [approval, setApproval] = useState(() => Object.fromEntries(HARNESS_APPROVAL_SCOPES.map((scope) => [scope, false])));
+  const exactApprovalReady = requiredApprovals.every((scope) => approval[scope] === true);
   if (kind === 'text') {
     const content = messageText(message);
     const displayText = message.role === 'user' || !isSerializedPayload(content) ? content : '结构化响应已由安全视图收起。';
@@ -118,18 +129,21 @@ function MessageCard({ message, onNavigate, onCommand, canConfirm, currentTaskId
       <header><strong>{labels[kind] || readableLabel(kind)}</strong><span className={`message-status status-${message.status || 'ready'}`}>{message.status || 'ready'}</span></header>
       {safeContent && <p>{safeContent}</p>}
       {kind === 'plan' && Array.isArray(payload.steps) && <ol className="conversation-plan-steps">{payload.steps.map((step, index) => <li key={step.step || index}><span>{index + 1}</span><div><b>{step.label || step.title || `步骤 ${index + 1}`}</b><small>{step.operation || step.tool || ''}</small></div></li>)}</ol>}
-      {kind === 'plan' && <div className="conversation-plan-risk"><span>费用风险：{payload.cost_indicators?.paid_calls > 0 ? `${payload.cost_indicators.paid_calls} 次付费调用` : '无付费调用'}</span><span>审批：{Object.values(payload.approvals || {}).some(Boolean) ? '需要确认' : '无需额外审批'}</span></div>}
+      {kind === 'plan' && <div className="conversation-plan-risk"><span>费用风险：{payload.cost_indicators?.paid_calls > 0 ? `${payload.cost_indicators.paid_calls} 次付费调用` : '无付费调用'}</span><span>在线写入：{payload.cost_indicators?.online_writes > 0 ? `${payload.cost_indicators.online_writes} 步` : '无'}</span><span>计划指纹：<code>{String(payload.fingerprint || '').slice(0, 12) || '缺失'}</code></span></div>}
+      {kind === 'plan' && canConfirm && <fieldset className="conversation-approval-scopes"><legend>逐项确认本计划</legend>{HARNESS_APPROVAL_SCOPES.map((scope) => <label key={scope}><input type="checkbox" checked={approval[scope]} disabled={!requiredApprovals.includes(scope) || confirming} onChange={(event) => setApproval((current) => ({ ...current, [scope]: event.target.checked }))} />{APPROVAL_LABELS[scope]}{!requiredApprovals.includes(scope) && <small>（本计划不需要）</small>}</label>)}</fieldset>}
+      {kind === 'plan' && Array.isArray(payload.steps) && payload.steps.some((step) => String(step.operation || '').startsWith('generation.')) && <p className="conversation-generation-gate">生成任务必须先取得精确报价；请在生成工作台确认金额后提交，不在通用对话中盲批费用。</p>}
       {kind === 'tool_call' && <details className="conversation-tool-details"><summary>查看工具与参数摘要</summary><StructuredSummary payload={payload} kind={kind} /></details>}
       {['tool_result', 'evidence', 'analysis', 'knowledge', 'brief', 'artifact'].includes(kind) && <StructuredSummary payload={payload} kind={kind} />}
       {messageTaskId && !taskId && <p className="conversation-historical-note">历史任务记录，仅供查看。</p>}
-      {taskId && <footer>{kind === 'plan' && canConfirm && <button type="button" className="primary" onClick={() => onCommand?.('执行')}>确认执行</button>}<button type="button" onClick={() => onNavigate?.('ai-execution', taskId)}>查看执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', taskId)}>查看完整结果</button></footer>}
+      {taskId && <footer>{kind === 'plan' && canConfirm && <button type="button" className="primary" disabled={!exactApprovalReady || confirming || !/^[0-9a-f]{64}$/.test(String(payload.fingerprint || ''))} onClick={() => onConfirm?.({ taskId, planFingerprint: payload.fingerprint, approval })}>{confirming ? '正在确认…' : '按此指纹确认计划'}</button>}<button type="button" onClick={() => onNavigate?.('ai-execution', taskId)}>查看执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', taskId)}>查看完整结果</button></footer>}
       </div>
     </article>
   );
 }
 
-export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: providedHarnessClient }) {
+export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: providedHarnessClient, projectStore: providedProjectStore }) {
   const client = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
+  const projectStore = useMemo(() => providedProjectStore || (!providedHarnessClient ? createP20OnlineStore() : null), [providedHarnessClient, providedProjectStore]);
   const routeContext = useMemo(() => parseHarnessContextParams(routeParams), [routeParams]);
   const agentFirst = routeParams?.agent === '1';
   const activeThreadKey = agentFirst ? ACTIVE_AGENT_THREAD_KEY : ACTIVE_THREAD_KEY;
@@ -143,9 +157,16 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const [error, setError] = useState('');
   const [eventCursor, setEventCursor] = useState(0);
   const [userNearBottom, setUserNearBottom] = useState(true);
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectId] = useState(() => readHarnessActiveProject());
+  const [confirming, setConfirming] = useState(false);
+  const [streamEpoch, setStreamEpoch] = useState(0);
   const transcriptRef = useRef(null);
   const fileInputRef = useRef(null);
   const cursorRef = useRef(0);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef(null);
+  const terminalRef = useRef(false);
 
   const loadHistory = useCallback(async (threadId) => {
     const response = await client.listMessages(threadId, 0, 200);
@@ -161,6 +182,20 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
   useEffect(() => {
     let active = true;
+    if (!projectStore) return undefined;
+    projectStore.listProjects().then((items) => {
+      if (!active) return;
+      setProjects(Array.isArray(items) ? items : []);
+      if (!activeProjectId && items?.[0]?.id) {
+        globalThis.localStorage.setItem(HARNESS_ACTIVE_PROJECT_KEY, items[0].id);
+        setActiveProjectId(items[0].id);
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [activeProjectId, projectStore]);
+
+  useEffect(() => {
+    let active = true;
     const restore = async () => {
       if (routeParams?.new) globalThis.localStorage.removeItem(activeThreadKey);
       const threadId = routeParams?.new ? '' : globalThis.localStorage.getItem(activeThreadKey) || '';
@@ -169,7 +204,13 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       try {
         const response = await client.getThread(threadId);
         if (!active) return;
-        setThread({ ...response.thread, actions: response.actions || {}, currentTaskId: response.currentTaskId, eventCursor: response.eventCursor });
+        const restored = { ...response.thread, actions: response.actions || {}, currentTaskId: response.currentTaskId, eventCursor: response.eventCursor };
+        const restoredProject = restored.projectId || restored.project_id || null;
+        if (activeProjectId && restoredProject && restoredProject !== activeProjectId) {
+          globalThis.localStorage.removeItem(activeThreadKey);
+          return;
+        }
+        setThread(restored);
         cursorRef.current = Number(response.eventCursor || 0);
         setEventCursor(cursorRef.current);
         await loadHistory(threadId);
@@ -181,15 +222,29 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     };
     restore();
     return () => { active = false; };
-  }, [activeThreadKey, client, loadHistory, refreshThread, routeParams?.new]);
+  }, [activeProjectId, activeThreadKey, client, loadHistory, routeParams?.new]);
 
   useEffect(() => {
     if (!thread?.id) return undefined;
     const controller = new globalThis.AbortController();
+    terminalRef.current = false;
+    const scheduleReconnect = (caught = null) => {
+      if (controller.signal.aborted || terminalRef.current) return;
+      const attempt = reconnectAttemptRef.current + 1;
+      reconnectAttemptRef.current = attempt;
+      setConnection('disconnected');
+      if (attempt > 5) {
+        setError(caught?.message || '事件连接多次中断，请手动重新连接。');
+        return;
+      }
+      const delay = Math.min(8_000, 750 * (2 ** (attempt - 1)));
+      reconnectTimerRef.current = globalThis.setTimeout(() => setStreamEpoch((value) => value + 1), delay);
+    };
     client.streamThreadEvents({
       threadId: thread.id, cursor: cursorRef.current, signal: controller.signal,
       onStatus: setConnection,
       onEvent: ({ type, event, cursor }) => {
+        reconnectAttemptRef.current = 0;
         cursorRef.current = cursor;
         setEventCursor(cursor);
         const payload = event.payload || {};
@@ -206,14 +261,16 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         if (type === 'generation_stopped') { setLiveText(''); setConnection('connected'); refreshThread(thread.id); loadHistory(thread.id); }
         if (type === 'error' || type === 'task_failed') { setLiveText(''); setConnection('failed'); setError(payload.message || 'AI 回复失败，请重试失败步骤。'); refreshThread(thread.id); }
         if (type === 'task_blocked') { setLiveText(''); setConnection('blocked'); refreshThread(thread.id); }
+        if (['task_completed', 'task_partial', 'task_failed', 'task_blocked', 'task_cancelled'].includes(type)) terminalRef.current = true;
         if (['task_completed', 'task_partial', 'task_cancelled'].includes(type)) refreshThread(thread.id);
         if (['plan_created', 'tool_call_started', 'tool_call_completed', 'approval_requested', 'task_progress', 'task_completed', 'task_partial', 'task_failed', 'task_blocked', 'task_cancelled', 'evidence_result', 'analysis_result', 'knowledge_result', 'brief_result', 'artifact_result', 'error'].includes(type)) loadHistory(thread.id);
       },
-    }).catch((caught) => {
-      if (!controller.signal.aborted) { setConnection('disconnected'); setError(caught?.message || '事件连接已中断，可重新连接。'); }
-    });
-    return () => controller.abort();
-  }, [client, loadHistory, refreshThread, thread?.id]);
+    }).then(() => scheduleReconnect()).catch(scheduleReconnect);
+    return () => {
+      controller.abort();
+      if (reconnectTimerRef.current) globalThis.clearTimeout(reconnectTimerRef.current);
+    };
+  }, [client, loadHistory, refreshThread, streamEpoch, thread?.id]);
 
   useEffect(() => {
     const node = transcriptRef.current;
@@ -226,11 +283,40 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
   async function ensureThread(requestId) {
     if (thread?.id) return thread;
-    const response = await client.createThread({ workspaceId: WORKSPACE_ID, projectId: readHarnessActiveProject(), requestId: `${requestId}:thread`, title: draft.slice(0, 80) || null });
+    const response = await client.createThread({ workspaceId: WORKSPACE_ID, projectId: activeProjectId, requestId: `${requestId}:thread`, title: draft.slice(0, 80) || null });
     const next = { id: response.threadId, actions: { sendMessage: true, stopGeneration: false }, currentTaskId: response.currentTaskId, eventCursor: response.eventCursor, status: 'active' };
     globalThis.localStorage.setItem(activeThreadKey, next.id);
     setThread(next);
     return next;
+  }
+
+  async function confirmPlan({ taskId, planFingerprint, approval }) {
+    if (confirming) return;
+    setConfirming(true);
+    setError('');
+    try {
+      await client.confirmThreadPlan({ taskId, planFingerprint, approval });
+      setThread((current) => current && { ...current, status: 'executing', currentTaskId: taskId });
+      if (thread?.id) await Promise.all([loadHistory(thread.id), refreshThread(thread.id)]);
+    } catch (caught) {
+      setError(caught?.message || '计划确认失败。');
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  function switchProject(projectId) {
+    if (projectId === activeProjectId) return;
+    globalThis.localStorage.setItem(HARNESS_ACTIVE_PROJECT_KEY, projectId);
+    globalThis.localStorage.removeItem(activeThreadKey);
+    cursorRef.current = 0;
+    reconnectAttemptRef.current = 0;
+    setEventCursor(0);
+    setMessages([]);
+    setThread(null);
+    setLiveText('');
+    setError('');
+    setActiveProjectId(projectId);
   }
 
   async function send(overrideContent = '') {
@@ -283,7 +369,10 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
     <main className="ai-workspace conversation-page" data-testid="harness-ai-workspace">
       <section className="conversation-heading">
         <div><span>AMS × DeepSeek Harness</span><h1>{messages.length ? 'AI 营销工作区' : '今天想完成什么？'}</h1><p>问答、计划、执行进度和结果都保留在同一个会话中。</p></div>
-        <div className={`conversation-connection ${connection}`}><i />{connectionLabel}</div>
+        <div className="conversation-heading-actions">
+          <label className="conversation-project-compact" data-testid="harness-active-project">当前项目<select value={activeProjectId || ''} onChange={(event) => switchProject(event.target.value)} disabled={!projects.length}>{!projects.length && <option value={activeProjectId || ''}>{activeProjectId || '尚未选择项目'}</option>}{projects.map((project) => <option key={project.id} value={project.id}>{project.topic || project.title || project.id}</option>)}</select></label>
+          <div className={`conversation-connection ${connection}`}><i />{connectionLabel}</div>
+        </div>
       </section>
 
       <nav className="ai-task-flow" aria-label="三页任务流程" data-testid="ai-task-flow">
@@ -295,7 +384,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
       <section className={`conversation-workspace ${messages.length === 0 && !liveText ? 'is-empty' : 'has-conversation'}`} data-testid="conversation-workspace">
         {messages.length > 0 && <header className="conversation-toolbar"><div><span className="harness-mark">H</span><div><strong>DeepSeek Harness</strong><small>{currentTaskId ? '已关联当前任务' : '对话会话'}</small></div></div><div>{currentTaskId && <><button type="button" onClick={() => onNavigate?.('ai-execution', currentTaskId)}>执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', currentTaskId)}>结果与审核</button></>}</div></header>}
         <div className="conversation-transcript" ref={transcriptRef} aria-live="polite" data-testid="conversation-transcript" onScroll={(event) => { const node = event.currentTarget; setUserNearBottom(node.scrollHeight - node.scrollTop - node.clientHeight < 96); }}>
-          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>今天想完成什么？</h2><p>直接提问，或描述一个需要执行的营销任务。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onCommand={send} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
+          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>今天想完成什么？</h2><p>直接提问，或描述一个需要执行的营销任务。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onConfirm={confirmPlan} confirming={confirming} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
           {liveText && <article className="conversation-message assistant streaming"><MessageIcon role="assistant" kind="text" /><div className="message-body"><span className="message-author">DeepSeek Harness</span><div>{liveText}<span className="stream-caret" /></div></div></article>}
           {sending && !liveText && <div className="conversation-thinking"><i /><span>正在思考…</span></div>}
         </div>
@@ -311,7 +400,14 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           </div>
         </div>
       </section>
-      {error && <div className="notice error" role="alert">{error}<button type="button" onClick={async () => { if (!thread?.id) return; setConnection('connecting'); setError(''); try { await Promise.all([loadHistory(thread.id), refreshThread(thread.id)]); setConnection('connected'); } catch (caught) { setConnection('failed'); setError(caught.message); } }}>重新连接</button></div>}
+      <details className="conversation-capabilities" data-testid="harness-capability-map">
+        <summary>Harness 已批准能力与对应页面 <span>{HARNESS_CAPABILITY_MAP.length} 项</span></summary>
+        <div className="conversation-capability-grid">
+          {HARNESS_CAPABILITY_MAP.map((capability) => <button type="button" key={capability.id} onClick={() => onNavigate?.(capability.route)}><strong>{capability.label}</strong><small>{capabilityModeLabel(capability.mode)}</small><code>{capability.id}</code></button>)}
+        </div>
+        <p>AI 工作台负责理解、计划、确认和跟踪；研究、知识与生成页面负责专业查看和人工操作。未登记能力不会被执行。</p>
+      </details>
+      {error && <div className="notice error" role="alert">{error}<button type="button" onClick={() => { reconnectAttemptRef.current = 0; setError(''); if (thread?.id) { loadHistory(thread.id); refreshThread(thread.id); setStreamEpoch((value) => value + 1); } }}>重新连接</button></div>}
       {thread?.id && <details className="ai-technical-details"><summary>技术详情</summary><dl><div><dt>thread_id</dt><dd><code>{thread.id}</code></dd></div>{currentTaskId && <div><dt>task_id</dt><dd><code>{currentTaskId}</code></dd></div>}<div><dt>event_cursor</dt><dd>{eventCursor}</dd></div></dl></details>}
     </main>
   );

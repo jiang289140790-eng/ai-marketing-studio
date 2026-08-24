@@ -239,8 +239,34 @@ Deno.serve(async (request) => {
           'x-ams-delegated-authorization': authorization,
         }, body: rawBody, signal: AbortSignal.timeout(20_000),
       });
-      return json(request, { ok: response.ok, ...stop }, response.ok ? 202 : response.status);
-    } catch { return json(request, { ok: false, code: 'STOP_FAILED' }, 503); }
+      const gatewayResult = await response.json().catch(() => null);
+      if (response.ok) return json(request, { ok: true, ...stop }, 202);
+      // The durable thread lease can briefly outlive the Gateway child (for
+      // example when the model completed while the stop request was in
+      // flight, or after a Gateway restart). In that exact case there is no
+      // process left to stop, so reconcile the authoritative thread/event
+      // state instead of exposing a false global outage and leaving the
+      // composer locked until the lease expires.
+      if (response.status === 409 && gatewayResult?.code === 'NO_ACTIVE_GENERATION') {
+        await rpc('harness_apply_generation_event_v1', {
+          p_user_id: userId,
+          p_thread_id: checked.body.thread_id,
+          p_generation_id: stop.generationId,
+          p_request_id: `stop:${stop.generationId}`,
+          p_event_id: `stop:${stop.generationId}:reconciled`,
+          p_event_type: 'generation_stopped',
+          p_payload: { code: 'GENERATION_STOPPED', reconciled: true },
+        });
+        return json(request, { ok: true, accepted: true, generationId: stop.generationId, reconciled: true }, 202);
+      }
+      return json(request, {
+        ok: false,
+        code: gatewayResult?.code || 'STOP_DELIVERY_FAILED',
+        message: '停止请求未送达执行服务，请重试停止或重新连接。',
+      }, response.status >= 500 ? 503 : 409);
+    } catch {
+      return json(request, { ok: false, code: 'STOP_FAILED', message: '停止请求失败，请重新连接后重试。' }, 503);
+    }
   }
   if (checked.contract === 'thread_send' || checked.contract === 'thread_send_agent') {
     let thread: any;

@@ -396,7 +396,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             <input ref={fileInputRef} className="sr-only" type="file" multiple accept={ACCEPT} onChange={selectFiles} />
             <button type="button" className="composer-attach" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS}>＋ 附件</button>
             <span>消息和事件由服务端保存，刷新后自动恢复。</span>
-            {generationActive ? <button type="button" className="composer-stop" onClick={async () => { setConnection('stopping'); setError(''); try { await client.stopGeneration(thread.id); await refreshThread(thread.id); } catch (caught) { setConnection('failed'); setError(caught.message); } }}>停止</button> : <button type="button" className="composer-send" onClick={() => send()} disabled={!draft.trim() || sending || thread?.actions?.sendMessage === false} data-testid="harness-submit">发送</button>}
+            {generationActive ? <button type="button" className="composer-stop" onClick={async () => { setConnection('stopping'); setError(''); try { await client.stopGeneration(thread.id); await loadHistory(thread.id); await refreshThread(thread.id); setLiveText(''); setConnection('connected'); } catch (caught) { await refreshThread(thread.id).catch(() => {}); setConnection('failed'); setError(caught?.message || '停止请求失败，请重新连接后重试。'); } }}>停止</button> : <button type="button" className="composer-send" onClick={() => send()} disabled={!draft.trim() || sending || thread?.actions?.sendMessage === false} data-testid="harness-submit">发送</button>}
           </div>
         </div>
       </section>

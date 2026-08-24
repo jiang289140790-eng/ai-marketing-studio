@@ -123,6 +123,9 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /currentTaskId/);
   assert.match(source, /harness_release_generation_v1/);
   assert.match(source, /internal\/generation-events/);
+  assert.match(source, /gatewayResult\?\.code === 'NO_ACTIVE_GENERATION'/);
+  assert.match(source, /p_event_type: 'generation_stopped'/);
+  assert.match(source, /reconciled: true/);
   assert.match(migration, /approval_requested/);
   assert.match(migration, /harness_project_task_event_v1/);
   assert.match(source, /p_task_id: null/);
@@ -144,4 +147,5 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.doesNotMatch(workspaceSource, /removeItem\(ACTIVE_THREAD_KEY\)/);
   assert.match(workspaceSource, /removeItem\(activeThreadKey\)/);
   assert.match(workspaceSource, /payload\.state/);
+  assert.match(workspaceSource, /await loadHistory\(thread\.id\); await refreshThread\(thread\.id\); setLiveText\(''\); setConnection\('connected'\)/);
 });

@@ -10,7 +10,7 @@ import { canonicalJson, derivePlanSteps, normalizeSlots, PLAN_SCHEMA_VERSION, pl
 test('catalog integrity: every entry, operation, scope, dependency and bound is exact', () => {
   const verdict = assertWorkflowIntegrity();
   assert.equal(verdict.ok, true, verdict.issues.join('; '));
-  assert.equal(WORKFLOW_IDS.length, 13, 'the fixed catalog exposes exactly the bounded workflow set (G1 生成执行层加入 generate_media / read_generation)');
+  assert.equal(WORKFLOW_IDS.length, 14, 'the fixed catalog includes the bounded private-attachment workflow');
   for (const id of WORKFLOW_IDS) {
     const workflow = lookupWorkflow(id);
     assert.ok(workflow, `workflow ${id} resolves`);
@@ -135,7 +135,7 @@ test('G1 生成执行层工作流：quote 只读零批准；submit 付费+写入
 
 test('workflow ids and titles are stable for the UI contract', () => {
   assert.deepEqual(WORKFLOW_IDS, [
-    'read_capability', 'collect_analyze_evidence', 'search_x', 'search_reddit',
+    'read_capability', 'collect_analyze_evidence', 'inspect_private_attachments', 'search_x', 'search_reddit',
     'search_x_reddit', 'analyze_evidence', 'compare_project', 'generate_similar',
     'assemble_brief', 'lineage_audit', 'create_handoff', 'generate_media', 'read_generation',
   ]);

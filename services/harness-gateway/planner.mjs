@@ -23,6 +23,8 @@ export const ITEM_ID_PATTERN = /^st-\d+#\d+$/;
 export const PLANNER_AUDIT_SCHEMA_VERSION = 'ams_harness_planner_audit_v1';
 const PLANNER_AUDIT_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 const PLANNER_AUDIT_VALUE = /^[a-z0-9][a-z0-9._-]{0,119}$/i;
+const ATTACHMENT_REF = /^harness-thread-attachments:([0-9a-f-]{36})\/(thr_[0-9a-f-]{36})\/([^\s/]{1,200})\/([^\s]{1,300})$/i;
+const ATTACHMENT_MIME = /^(image\/(jpeg|png|webp)|video\/mp4|application\/pdf|text\/(plain|markdown|csv)|application\/json)$/i;
 
 const POST_URL_PATTERN = /(https?:\/\/[^\s，,。；;）)>"\]]+)/iu;
 const INTEGER_PATTERN = /(\d{1,2})\s*条/;
@@ -209,6 +211,27 @@ function normalizeFlags(slots) {
   if (next.card) { next.analyze = true; next.persist = true; }
   if (next.analyze) next.persist = true;
   return next;
+}
+
+function normalizePlanAttachments(value, userId) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) return fail('PLAN_ATTACHMENTS_INVALID', { field: 'attachments' });
+  const refs = new Set();
+  const normalized = [];
+  let threadId = null;
+  for (const [index, item] of value.entries()) {
+    if (!plainObject(item)) return fail('PLAN_ATTACHMENT_INVALID', { field: `attachments.${index}` });
+    if (Object.keys(item).some((key) => !['ref','name','size','mime_type'].includes(key))) return fail('PLAN_ATTACHMENT_INVALID', { field: `attachments.${index}` });
+    const match = ATTACHMENT_REF.exec(String(item.ref || ''));
+    if (!match || match[1].toLowerCase() !== String(userId).toLowerCase() || refs.has(item.ref)) return fail('PLAN_ATTACHMENT_INVALID', { field: `attachments.${index}.ref` });
+    if (threadId && threadId !== match[2]) return fail('PLAN_ATTACHMENT_THREAD_MISMATCH', { field: `attachments.${index}.ref` });
+    threadId = match[2];
+    if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 200) return fail('PLAN_ATTACHMENT_INVALID', { field: `attachments.${index}.name` });
+    if (!Number.isSafeInteger(item.size) || item.size < 1 || item.size > 25 * 1024 * 1024) return fail('PLAN_ATTACHMENT_INVALID', { field: `attachments.${index}.size` });
+    if (typeof item.mime_type !== 'string' || !ATTACHMENT_MIME.test(item.mime_type)) return fail('PLAN_ATTACHMENT_INVALID', { field: `attachments.${index}.mime_type` });
+    refs.add(item.ref);
+    normalized.push({ ref: item.ref, name: item.name, size: item.size, mime_type: item.mime_type.toLowerCase() });
+  }
+  return { ok: true, value: normalized, thread_id: threadId };
 }
 
 function firstMatch(text, patterns) {
@@ -468,6 +491,12 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots, 
   }
   const workflow = lookupWorkflow(workflowId);
   if (!workflow) return fail('PLAN_WORKFLOW_UNKNOWN', { field: workflowId ?? null });
+  const hasAttachments = Array.isArray(request.attachments) && request.attachments.length > 0;
+  if ((workflow.id === 'inspect_private_attachments') !== hasAttachments) {
+    return fail(hasAttachments ? 'PLAN_ATTACHMENT_WORKFLOW_REQUIRED' : 'PLAN_ATTACHMENTS_REQUIRED', { field: 'attachments' });
+  }
+  const attachments = hasAttachments ? normalizePlanAttachments(request.attachments, request.user_id) : null;
+  if (attachments && !attachments.ok) return attachments;
   // G1 图生视频契约（前置）：video_i2v 的引用素材身份缺失/非法必须先于无关
   // 必填字段（如 brief_id）报告，绝不降级、绝不发明素材；在 normalizeSlots
   // 之前判定，覆盖确定性分类器与 modelPlanner 两条路径。
@@ -475,7 +504,7 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots, 
   if (i2vAsset) return i2vAsset;
   const normalized = normalizeSlots(workflow, candidateSlots);
   if (!normalized.ok) return normalized;
-  const slots = workflow.id === 'collect_analyze_evidence' ? normalizeFlags(normalized.value) : normalized.value;
+  const slots = ['collect_analyze_evidence', 'inspect_private_attachments'].includes(workflow.id) ? normalizeFlags(normalized.value) : normalized.value;
   // G1 图生视频契约：video_i2v 必须绑定精确的已批准引用素材身份。缺失即
   // fail closed（绝不让 quote/submit 带着无素材的 i2v 计划进入执行），绝不
   // 降级为文生视频、绝不发明素材身份。
@@ -522,6 +551,7 @@ export function buildPlan({ taskId, request, workflowId, slots: candidateSlots, 
     request_fingerprint: request.request_fingerprint,
     approvals,
     cost_indicators: costIndicators,
+    ...(attachments ? { attachments: attachments.value } : {}),
     ...(plannerAudit ? { planner_audit: plannerAudit } : {}),
     slots,
     steps,
@@ -542,7 +572,7 @@ export function validatePlanShape(plan) {
   const allowed = new Set([
     'schema_version', 'plan_version', 'task_id', 'workflow', 'workflow_title', 'intent',
     'user_id', 'project_id', 'request_fingerprint', 'approvals', 'cost_indicators',
-    'planner_audit', 'slots', 'steps', 'fingerprint',
+    'planner_audit', 'attachments', 'slots', 'steps', 'fingerprint',
   ]);
   const unknown = Object.keys(plan).find((key) => !allowed.has(key));
   if (unknown) return fail('PLAN_UNKNOWN_FIELD', { field: unknown });
@@ -568,6 +598,13 @@ export function validatePlanShape(plan) {
     || !Number.isSafeInteger(plan.cost_indicators.paid_calls) || plan.cost_indicators.paid_calls < 0
     || !Number.isSafeInteger(plan.cost_indicators.online_writes) || plan.cost_indicators.online_writes < 0) {
     return fail('PLAN_COST_INDICATORS_INVALID');
+  }
+  const hasAttachments = Array.isArray(plan.attachments) && plan.attachments.length > 0;
+  if ((workflow.id === 'inspect_private_attachments') !== hasAttachments) return fail(hasAttachments ? 'PLAN_ATTACHMENT_WORKFLOW_REQUIRED' : 'PLAN_ATTACHMENTS_REQUIRED', { field: 'attachments' });
+  if (hasAttachments) {
+    const attachments = normalizePlanAttachments(plan.attachments, plan.user_id);
+    if (!attachments.ok) return attachments;
+    if (canonicalJson(attachments.value) !== canonicalJson(plan.attachments)) return fail('PLAN_ATTACHMENTS_MISMATCH', { field: 'attachments' });
   }
   if (plan.planner_audit !== undefined) {
     const audit = plan.planner_audit;
@@ -595,7 +632,7 @@ export function validatePlanShape(plan) {
   if (i2vAsset) return i2vAsset;
   const normalizedSlots = normalizeSlots(workflow, plan.slots);
   if (!normalizedSlots.ok) return normalizedSlots;
-  const expectedSlots = workflow.id === 'collect_analyze_evidence'
+  const expectedSlots = ['collect_analyze_evidence', 'inspect_private_attachments'].includes(workflow.id)
     ? normalizeFlags(normalizedSlots.value)
     : normalizedSlots.value;
   // 与 buildPlan 同一 G1 图生视频契约：持久化计划缺引用素材身份同样 fail
@@ -643,7 +680,15 @@ export function validatePlanShape(plan) {
 export function createPlanner({ modelPlanner = null } = {}) {
   return {
     async plan({ taskId, request, capabilityManifest = null, projectMemory = null }) {
-      let classification = classifyIntent(request.intent);
+      const hasAttachments = Array.isArray(request.attachments) && request.attachments.length > 0;
+      let classification = hasAttachments
+        ? { ok: true, value: { workflow: 'inspect_private_attachments', slots: {
+            persist: true,
+            analyze: true,
+            card: true,
+            brief: BRIEF_TRIGGERS.test(request.intent),
+          } } }
+        : classifyIntent(request.intent);
       let plannerMode = 'deterministic';
       const requiresSemanticClarification = classification.ok === true
         && ['search_x', 'search_x_reddit'].includes(classification.value.workflow)

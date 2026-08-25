@@ -30,6 +30,7 @@ const definitions = {
   // contracts intentionally contain no project field for these operations).
   'research.status': { endpoint: 'p22-research-assist', action: 'status', fields: ['project_id'], optional: ['project_id'], approval: [], stripProjectId: true },
   'research.collect_url': { endpoint: 'p22-research-assist', action: 'collect_url', fields: ['url', 'project_id'], optional: ['project_id'], approval: ['paid_external_calls'], stripProjectId: true },
+  'research.inspect_attachments': { endpoint: 'p22-research-assist', action: 'inspect_attachments', fields: ['project_id', 'thread_id', 'attachments'], approval: ['paid_external_calls'] },
   'research.search_x': { endpoint: 'p22-research-assist', action: 'search', fields: ['keyword', 'count', 'sort', 'project_id'], optional: ['count', 'sort', 'project_id'], approval: ['paid_external_calls'], stripProjectId: true },
   'research.search_reddit': { endpoint: 'p22-research-assist', action: 'search_reddit', fields: ['keyword', 'count', 'sort', 'subreddit', 'time_filter', 'project_id'], optional: ['count', 'sort', 'subreddit', 'time_filter', 'project_id'], approval: ['paid_external_calls'], stripProjectId: true },
   'research.analyze_persisted': { endpoint: 'p22-research-assist', action: 'analyze_persisted', fields: ['project_id', 'evidence_id'], approval: ['paid_external_calls'] },
@@ -165,6 +166,17 @@ export function toBoundaryRequest(validated) {
         // 固定常量写入并放在载荷展开之后：模型载荷不允许该字段（validateToolCall
         // 的 UNKNOWN_PAYLOAD_FIELD），任何碰撞也会被固定值覆盖，绝不用户可控。
         schema_version: G1_COMMAND_SCHEMA_VERSION,
+        idempotency_key: boundaryIdempotencyKey,
+      },
+    };
+  }
+  if (validated.operation === 'research.inspect_attachments') {
+    return {
+      endpoint: definition.endpoint,
+      body: {
+        action: definition.action,
+        ...structuredClone(validated.payload),
+        harness_task_id: validated.task_id,
         idempotency_key: boundaryIdempotencyKey,
       },
     };

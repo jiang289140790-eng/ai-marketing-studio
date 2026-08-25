@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createHarnessClient } from '../services/harness-client.js';
+import { createHarnessClient, newHarnessRequestId } from '../services/harness-client.js';
 import { resolvePresentationBlocks } from '../services/harness-presentation.js';
 import { PresentationPanel } from '../components/harness-presentation/PresentationPanel.jsx';
 import { GenerationArtifactViewer } from '../components/generation-execution/GenerationArtifactViewer.jsx';
@@ -47,6 +47,44 @@ function findGenerationJobId(value, depth = 0, seen = new Set()) {
   return null;
 }
 
+function attachmentBindings(pipeline) {
+  const bindings = pipeline?.source?.provenance?.object_bindings;
+  if (!Array.isArray(bindings)) return [];
+  return bindings.filter((binding) => binding && typeof binding.ref === 'string' && typeof binding.mime_type === 'string');
+}
+
+function AttachmentPreview({ binding, preview, onDownload }) {
+  const mime = String(binding.mime_type || '');
+  return (
+    <article className="ai-attachment-card" data-testid="ai-task-attachment-card">
+      <div className="ai-attachment-card-head">
+        <div><strong>{binding.name || 'attachment'}</strong><small>{mime} · {Number(binding.size || 0).toLocaleString()} bytes</small></div>
+        <button className="ghost-button compact" type="button" onClick={() => onDownload(binding)}>下载</button>
+      </div>
+      {preview?.error ? (
+        <div className="notice error" role="alert">{preview.error}</div>
+      ) : !preview?.signedUrl ? (
+        <div className="skeleton skeleton-card" />
+      ) : mime.startsWith('image/') ? (
+        <img className="ai-attachment-media" src={preview.signedUrl} alt={binding.name || '附件预览'} />
+      ) : mime.startsWith('video/') ? (
+        <video className="ai-attachment-media" src={preview.signedUrl} controls preload="metadata" />
+      ) : mime === 'application/pdf' ? (
+        <iframe
+          className="ai-attachment-document"
+          src={preview.signedUrl}
+          title={binding.name || 'PDF 附件预览'}
+          sandbox=""
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <a className="ghost-button compact ai-attachment-open" href={preview.signedUrl} target="_blank" rel="noreferrer">打开附件</a>
+      )}
+      <code>{String(binding.sha256 || '')}</code>
+    </article>
+  );
+}
+
 // 结果页五分类展示顺序与标签（每类都从同一 snapshot 派生，缺失逐类空态）。
 const RESULT_SECTION_ORDER = [
   ['evidence', 'Evidence'],
@@ -74,6 +112,9 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
   const [showFullResult, setShowFullResult] = useState(false);
   const [generationJob, setGenerationJob] = useState(null);
   const [generationError, setGenerationError] = useState('');
+  const [attachmentPreviews, setAttachmentPreviews] = useState({});
+  const [briefRepairing, setBriefRepairing] = useState(false);
+  const [briefRepairError, setBriefRepairError] = useState('');
   const pollGeneration = useRef(0);
   const pollInFlight = useRef(false);
 
@@ -136,6 +177,8 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
   const finalResponse = task?.result?.final_response || '';
   const terminal = task && ['succeeded', 'reused', 'partial', 'failed', 'blocked', 'cancelled'].includes(task.state);
   const generationJobId = useMemo(() => findGenerationJobId(task?.result?.result_data), [task]);
+  const attachmentPipeline = task?.result?.result_data?.attachment_pipeline || null;
+  const privateAttachments = useMemo(() => attachmentBindings(attachmentPipeline), [attachmentPipeline]);
   const notTerminalText = task ? `任务还在 ${stateLabel(task.state)}，尚未产生最终结果。` : '';
 
   useEffect(() => {
@@ -150,6 +193,53 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
     });
     return () => { active = false; };
   }, [generationClient, generationJobId]);
+
+  useEffect(() => {
+    let active = true;
+    setAttachmentPreviews({});
+    if (privateAttachments.length === 0) return () => { active = false; };
+    (async () => {
+      const next = {};
+      for (const binding of privateAttachments) {
+        try {
+          next[binding.ref] = await harnessClient.createAttachmentPreview({ ref: binding.ref, name: binding.name });
+        } catch (caught) {
+          next[binding.ref] = { error: boundedMessage(caught) };
+        }
+        if (active) setAttachmentPreviews({ ...next });
+      }
+    })();
+    return () => { active = false; };
+  }, [harnessClient, privateAttachments]);
+
+  const downloadAttachment = useCallback(async (binding) => {
+    try {
+      const preview = await harnessClient.createAttachmentPreview({ ref: binding.ref, name: binding.name, download: true });
+      globalThis.open?.(preview.signedUrl, '_blank', 'noopener,noreferrer');
+    } catch (caught) {
+      setAttachmentPreviews((current) => ({ ...current, [binding.ref]: { error: boundedMessage(caught) } }));
+    }
+  }, [harnessClient]);
+
+  const reassembleBrief = useCallback(async () => {
+    if (briefRepairing || !technical?.project_id) return;
+    setBriefRepairing(true);
+    setBriefRepairError('');
+    try {
+      const response = await harnessClient.plan({
+        requestId: newHarnessRequestId(),
+        projectId: technical.project_id,
+        intent: '重新组装当前项目的待审核 Brief',
+      });
+      const nextTaskId = response?.task?.id;
+      if (!isValidHarnessTaskId(nextTaskId)) throw new Error('服务端没有返回有效的 Brief 重组任务。');
+      onNavigate?.('ai-execution', nextTaskId);
+    } catch (caught) {
+      setBriefRepairError(boundedMessage(caught));
+    } finally {
+      setBriefRepairing(false);
+    }
+  }, [briefRepairing, harnessClient, onNavigate, technical?.project_id]);
 
   return (
     <main className="ai-task-page" data-testid="ai-task-results">
@@ -242,6 +332,24 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
 
           {presentationBlocks.length > 0 && <PresentationPanel blocks={presentationBlocks} />}
 
+          {privateAttachments.length > 0 && (
+            <section className="ai-task-panel" data-testid="ai-task-attachment-preview">
+              <div className="ai-task-panel-head"><div><p className="eyebrow">私有附件与模型理解</p><h3>来源、内容分析与恢复预览</h3></div></div>
+              <div className="ai-attachment-grid">
+                {privateAttachments.map((binding) => (
+                  <AttachmentPreview key={binding.ref} binding={binding} preview={attachmentPreviews[binding.ref]} onDownload={downloadAttachment} />
+                ))}
+              </div>
+              {attachmentPipeline?.source?.content_text && <div className="ai-result-copy" data-testid="ai-task-attachment-content">{attachmentPipeline.source.content_text}</div>}
+              {attachmentPipeline?.analysis?.result && (
+                <div className="ai-result-copy" data-testid="ai-task-attachment-analysis">
+                  <strong>{attachmentPipeline.analysis.model || '多模态模型'} · 第 {attachmentPipeline.analysis.analysis_version || 1} 版</strong>
+                  <pre>{JSON.stringify(attachmentPipeline.analysis.result, null, 2)}</pre>
+                </div>
+              )}
+            </section>
+          )}
+
           <section className="ai-task-panel" data-testid="ai-task-sections">
             <div className="ai-task-panel-head">
               <div>
@@ -305,6 +413,15 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
                   {chain.other.map((id) => <div key={`other-${id}`}><dt>身份引用</dt><dd><code>{id}</code></dd></div>)}
                 </dl>
               </>
+            )}
+            {chain?.brief?.length > 0 && technical?.project_id && (
+              <div className="ai-brief-reassemble" data-testid="ai-task-brief-reassemble">
+                <p>知识卡或来源发生变化时，可创建一个受修订号和指纹保护的新 Brief 版本；旧版本会保留。</p>
+                <button className="primary-button" type="button" disabled={briefRepairing} onClick={reassembleBrief}>
+                  {briefRepairing ? '正在创建安全计划…' : '重新组装 Brief'}
+                </button>
+                {briefRepairError && <div className="notice error" role="alert">{briefRepairError}</div>}
+              </div>
             )}
           </section>
 

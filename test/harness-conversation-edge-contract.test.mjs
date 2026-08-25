@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { classifyDeliveryResponse, extractAssistantTextDelta, isAcceptedMessageReplay, isOrdinaryConversationIntent, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
+import { classifyDeliveryResponse, classifyPlanRejection, extractAssistantTextDelta, isAcceptedMessageReplay, isOrdinaryConversationIntent, reduceGenerationOutcome, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback, EDGE_SCHEMA_VERSION } from '../supabase/functions/harness-command/edge-core.mjs';
 
 const userId = '00000000-0000-4000-8000-000000000101';
 const threadId = 'thr_00000000-0000-4000-8000-000000000201';
@@ -80,6 +80,28 @@ test('proxy 5xx after a possible durable accept remains ambiguous and never auth
   assert.equal(classifyDeliveryResponse(202, { ok: true }), 'confirmation_unknown');
 });
 
+test('Gateway plan rejection preserves only bounded code, field and exact plan stage', () => {
+  assert.deepEqual(classifyPlanRejection(409, {
+    code: 'QUEUE_CAPACITY_EXCEEDED',
+    diagnostics: { field: 'queue.capacity', detail: 'must not escape' },
+    secret: 'must not escape',
+  }), {
+    code: 'QUEUE_CAPACITY_EXCEEDED',
+    diagnostics: { stage: 'gateway_plan', field: 'queue.capacity', status: 409 },
+  });
+  assert.deepEqual(classifyPlanRejection(503, {
+    code: 'invalid code with content',
+    diagnostics: { field: '../private/value' },
+  }), {
+    code: 'GATEWAY_PLAN_REJECTED',
+    diagnostics: { stage: 'gateway_plan', field: null, status: 503 },
+  });
+  assert.deepEqual(classifyPlanRejection(503, null), {
+    code: 'GATEWAY_PLAN_REJECTED',
+    diagnostics: { stage: 'gateway_plan', field: null, status: 503 },
+  });
+});
+
 test('ordinary capability questions and conversational follow-ups bypass task planning', () => {
   for (const content of ['你能做什么？', '你能干什么', '你可以帮我做哪些', '您会干啥？', '你是谁', '其他的呢', '还有什么？']) {
     assert.equal(isOrdinaryConversationIntent(content), true, content);
@@ -110,6 +132,7 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   const recoveryMigration = await readFile(new globalThis.URL('../supabase/migrations/20260823171530_harness_expired_generation_recovery.sql', import.meta.url), 'utf8');
   const agentStateMigration = await readFile(new globalThis.URL('../supabase/migrations/20260824091212_harness_agent_plan_thread_state.sql', import.meta.url), 'utf8');
   const workspaceSource = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
+  const gatewaySource = await readFile(new globalThis.URL('../services/harness-gateway/server.mjs', import.meta.url), 'utf8');
   assert.match(source, /text\/event-stream/);
   assert.match(source, /last-event-id/);
   assert.match(source, /: heartbeat/);
@@ -120,6 +143,11 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /\/v1\/threads\/\$\{checked\.body\.thread_id\}\/deliveries/);
   assert.match(source, /PLANNER_UNRECOGNIZED/);
   assert.match(source, /\/v1\/tasks\/plan/);
+  assert.match(source, /classifyPlanRejection\(planResponse\?\.status, planPayload\)/);
+  assert.match(source, /planResponse && planPayload\?\.code !== 'PLANNER_UNRECOGNIZED'/);
+  assert.match(source, /return \{ kind: 'plan_rejected', \.\.\.failure \}/);
+  assert.match(source, /delivered\?\.kind === 'plan_rejected'/);
+  assert.doesNotMatch(source, /throw new Error\(`planner rejected:/);
   assert.match(source, /currentTaskId/);
   assert.match(source, /harness_release_generation_v1/);
   assert.match(source, /internal\/generation-events/);
@@ -130,6 +158,14 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(migration, /harness_project_task_event_v1/);
   assert.match(source, /p_task_id: null/);
   assert.match(source, /internal\/task-events/);
+  assert.match(source, /PROJECTION_BINDING_INVALID/);
+  assert.match(source, /harness_get_thread_v1/);
+  assert.match(source, /boundThread\?\.thread\?\.currentTaskId !== binding\.task_id/);
+  assert.match(source, /boundThread\?\.thread\?\.projectId !== binding\.project_id/);
+  assert.match(gatewaySource, /event\.event_type === 'agent_plan_created'/);
+  assert.match(gatewaySource, /taskProjector\.bindTask\(event\.payload\.task\.id/);
+  assert.match(gatewaySource, /thread_id: event\.thread_id/);
+  assert.match(gatewaySource, /project_id: event\.payload\.task\.request\?\.project_id/);
   assert.doesNotMatch(source, /Task projection is pushed durably[\s\S]*\/v1\/tasks\/\$\{threadState\.currentTaskId\}/);
   assert.doesNotMatch(source, /setTimeout\([^,]+,\s*\d+\).*assistant_text_delta/s);
   assert.match(recoveryMigration, /active_generation_lease_until/);

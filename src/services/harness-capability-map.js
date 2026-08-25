@@ -3,6 +3,7 @@
 export const HARNESS_CAPABILITY_MAP = Object.freeze([
   { id: 'read_capability', label: '查看当前项目与能力', route: 'ai', mode: 'read' },
   { id: 'collect_analyze_evidence', label: '采集并分析公开来源', route: 'research', mode: 'paid-write' },
+  { id: 'inspect_private_attachments', label: '理解私有图片、视频与文档', route: 'ai', mode: 'paid-write' },
   { id: 'search_x', label: '搜索 X 热门主题', route: 'research', mode: 'paid' },
   { id: 'search_reddit', label: '搜索 Reddit 热门主题', route: 'research', mode: 'paid' },
   { id: 'search_x_reddit', label: '跨平台主题搜索', route: 'research', mode: 'paid-write' },

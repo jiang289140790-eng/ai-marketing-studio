@@ -1015,7 +1015,7 @@ test('P22 records bounded cost before the documented Apify sequence and issues p
   assert.ok(!core.includes('run-sync-get-dataset-items'));
   // 只检查可执行逻辑：注释（含 qwen 契约说明）不属于 collect 的可执行路径。
   const executable = (source) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-  const collectBody = executable(edge.slice(edge.indexOf('async function collect'), edge.indexOf('async function analyze')));
+  const collectBody = executable(edge.slice(edge.indexOf('async function collect'), edge.indexOf('function attachmentObjectPath')));
   const reserveAt = collectBody.indexOf("recordProviderCost(db,userId,'apify'");
   const adapterAt = collectBody.indexOf('runApifyCollectionSequence(');
   const normalizeAt = collectBody.indexOf('normalizeCollectedItems(');

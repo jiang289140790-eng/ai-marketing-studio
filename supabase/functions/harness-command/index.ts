@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
-import { classifyDeliveryResponse, fixedGatewayBase, isAcceptedMessageReplay, isOrdinaryConversationIntent, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
+import { classifyDeliveryResponse, classifyPlanRejection, fixedGatewayBase, isAcceptedMessageReplay, isOrdinaryConversationIntent, signGatewayRequest, validateEdgeRequest, verifyGatewayCallback } from './edge-core.mjs';
 
 const ALLOWED_ORIGINS = new Set([
   'https://jiang289140790-eng.github.io',
@@ -57,6 +57,23 @@ Deno.serve(async (request) => {
     const event = envelope?.event;
     if (envelope?.schema_version !== 1 || event?.user_id !== userId || !event?.task || event.task.id !== event.task_id) {
       return json(request, { ok: false, code: 'PROJECTION_ENVELOPE_INVALID' }, 400);
+    }
+    const binding = envelope?.binding;
+    if (binding !== null && binding !== undefined) {
+      const projectId = event.task.request?.project_id ?? null;
+      if (binding.user_id !== userId || binding.task_id !== event.task_id
+        || !/^thr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(binding.thread_id || ''))
+        || binding.project_id !== projectId) {
+        return json(request, { ok: false, code: 'PROJECTION_BINDING_INVALID' }, 409);
+      }
+      const { data: boundThread, error: boundThreadError } = await serviceClient.schema('api').rpc('harness_get_thread_v1', {
+        p_user_id: userId, p_thread_id: binding.thread_id,
+      });
+      if (boundThreadError || boundThread?.thread?.id !== binding.thread_id
+        || boundThread?.thread?.currentTaskId !== binding.task_id
+        || boundThread?.thread?.projectId !== binding.project_id) {
+        return json(request, { ok: false, code: 'THREAD_NOT_BOUND' }, 409);
+      }
     }
     const { data, error } = await serviceClient.schema('api').rpc('harness_project_task_event_v1', {
       p_user_id: userId, p_task: event.task, p_gateway_event: event.event, p_event_at: event.at,
@@ -401,8 +418,13 @@ Deno.serve(async (request) => {
           });
           return true;
         }
-        if (planPayload?.code && planPayload.code !== 'PLANNER_UNRECOGNIZED') {
-          throw new Error(`planner rejected: ${planPayload.code}`);
+        if (planResponse && planPayload?.code !== 'PLANNER_UNRECOGNIZED') {
+          const failure = classifyPlanRejection(planResponse?.status, planPayload);
+          await rpc('harness_fail_generation_delivery_v1', {
+            p_user_id: userId, p_thread_id: checked.body.thread_id, p_generation_id: generationId,
+            p_request_id: checked.body.request_id, p_error_code: failure.code,
+          });
+          return { kind: 'plan_rejected', ...failure };
         }
 
         const path = `/v1/threads/${checked.body.thread_id}/deliveries`;
@@ -469,6 +491,14 @@ Deno.serve(async (request) => {
         message: 'Gateway acknowledgement was interrupted. Retry this same message to reconcile safely.',
         messageId: message.id,
       }, 503);
+    }
+    if (typeof delivered === 'object' && delivered?.kind === 'plan_rejected') {
+      return json(request, {
+        ok: false,
+        code: delivered.code,
+        diagnostics: delivered.diagnostics,
+        messageId: message.id,
+      }, 422);
     }
     return delivered
       ? json(request, { ok: true, accepted: true, replayed: message?.replayed === true, messageId: message.id }, message?.replayed ? 200 : 202)

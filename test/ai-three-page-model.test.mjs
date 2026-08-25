@@ -346,6 +346,59 @@ test('stepExecutionView：步骤顺序、尝试次数（failed_count）与可重
   assert.deepEqual(stepExecutionView(normalizeTaskSnapshot(sampleTask({ plan: null }))), []);
 });
 
+test('H5 模型诊断：刷新恢复保留有界结构、首次失败为 1 次且敏感字段被丢弃', () => {
+  const raw = sampleTask({
+    state: 'failed',
+    step_states: {
+      'st-2': {
+        state: 'failed',
+        failed_count: 1,
+        error: {
+          code: 'MODEL_RESPONSE_INVALID',
+          message: 'The multimodal model response did not match the reviewed response contract.',
+          field: 'output.choices[0].message.content',
+          reason: 'JSON_INVALID',
+          response_shape: {
+            root_type: 'object',
+            known_root_keys: ['output', 'usage', 'private_user_field'],
+            compatible_choice_count: null,
+            native_choice_count: 1,
+            content_type: 'string',
+            content_length: 9528,
+            content_part_count: null,
+            content_parts: [],
+            json_root_type: null,
+            private_model_body: 'PRIVATE_ATTACHMENT_BODY_MUST_NOT_ESCAPE',
+            analysis_rows: [{
+              row_type: 'object',
+              keys: ['source_id', 'PRIVATE_USER_VALUE_MUST_NOT_ESCAPE'],
+              field_types: { source_id: 'string', PRIVATE_USER_VALUE_MUST_NOT_ESCAPE: 'string' },
+              media_count: 0,
+              media_rows: [],
+            }],
+          },
+          raw_response: 'PRIVATE_ATTACHMENT_BODY_MUST_NOT_ESCAPE',
+          authorization: 'Bearer PRIVATE_TOKEN_MUST_NOT_ESCAPE',
+          retry_unsafe: false,
+        },
+      },
+    },
+  });
+  const restored = normalizeTaskSnapshot(JSON.parse(JSON.stringify(raw)));
+  const step = stepExecutionView(restored)[1];
+  assert.equal(step.attempts, 1);
+  assert.equal(step.error.field, 'output.choices[0].message.content');
+  assert.equal(step.error.reason, 'JSON_INVALID');
+  assert.deepEqual(step.error.response_shape.known_root_keys, ['output', 'usage']);
+  assert.equal(step.error.response_shape.native_choice_count, 1);
+  const serialized = JSON.stringify(restored);
+  assert.equal(serialized.includes('PRIVATE_ATTACHMENT_BODY_MUST_NOT_ESCAPE'), false);
+  assert.equal(serialized.includes('PRIVATE_TOKEN_MUST_NOT_ESCAPE'), false);
+  assert.equal(serialized.includes('PRIVATE_USER_VALUE_MUST_NOT_ESCAPE'), false);
+  assert.equal(Object.hasOwn(step.error.response_shape, 'private_model_body'), false);
+  assert.deepEqual(step.error.response_shape.analysis_rows[0].keys, ['source_id', '<unrecognized-key>']);
+});
+
 test('taskErrorText：有界错误文本且绝不回显原始载荷', () => {
   const task = normalizeTaskSnapshot(sampleTask({
     error: { code: 'TOOL_FAILED', message: 'm'.repeat(500), operation: 'search', category: 'tool', stage: 'run' },

@@ -157,10 +157,21 @@ function ruleMediaMetadataBounds(evidence) {
 function ruleManualProvenanceTrust(evidence) {
   const p22Verified = evidence.provenance?.manual === false
     && evidence.provenance?.schema_version === 'p22_apify_evidence_provenance_v1';
+  const h5Verified = evidence.provenance?.manual === false
+    && evidence.provenance?.schema_version === 'h5_verified_attachment_provenance_v1'
+    && evidence.provenance?.method === 'verified_private_attachment';
   return {
     manual: evidence.provenance && evidence.provenance.manual === true,
-    trust_status: evidence.provenance && evidence.provenance.manual === true ? 'manual_local' : p22Verified ? 'apify_server_bound' : 'unknown',
-    note: p22Verified
+    trust_status: evidence.provenance && evidence.provenance.manual === true
+      ? 'manual_local'
+      : p22Verified
+        ? 'apify_server_bound'
+        : h5Verified
+          ? 'verified_private_attachment'
+          : 'unknown',
+    note: h5Verified
+      ? 'Private attachment bytes were verified against the authenticated Storage object before bounded model analysis.'
+      : p22Verified
       ? 'P22 Apify 公开来源已由服务端证明绑定正文、身份与采集运行。'
       : '人工录入的证据按 manual_local 标记可信来源；不依赖任何平台验证。',
   };
@@ -296,9 +307,11 @@ async function buildEvidenceRecord(project, input, { now, hasher }) {
       statement: '该证据由用户手工录入并核对；来源 URL 为人工填写，未经任何平台采集或验证。',
     };
   const p22Source = provenance.manual === false && provenance.schema_version === 'p22_apify_evidence_provenance_v1';
+  const h5AttachmentSource = provenance.manual === false && provenance.schema_version === 'h5_verified_attachment_provenance_v1';
+  const verifiedSource = p22Source || h5AttachmentSource;
   const rawContent = String(input.content_text ?? '');
-  if (p22Source && (!rawContent.trim() || rawContent.length > MAX_STRING_LENGTH)) {
-    throw workbenchError('EVIDENCE_INVALID', 'P22 证据正文缺失或超过 5000 字符，已拒绝。');
+  if (verifiedSource && (!rawContent.trim() || rawContent.length > MAX_STRING_LENGTH)) {
+    throw workbenchError('EVIDENCE_INVALID', 'Verified evidence content is missing or exceeds 5000 characters.');
   }
   const record = {
     schema_version: EVIDENCE_SCHEMA_VERSION,
@@ -307,7 +320,7 @@ async function buildEvidenceRecord(project, input, { now, hasher }) {
     source_url: boundedSlice(input.source_url, 1000),
     label: boundedSlice(input.label, 200),
     platform: boundedSlice(input.platform, 80),
-    content_text: p22Source ? rawContent : boundedSlice(input.content_text, MAX_STRING_LENGTH),
+    content_text: verifiedSource ? rawContent : boundedSlice(input.content_text, MAX_STRING_LENGTH),
     recorded_at: isNonEmptyString(input.recorded_at) ? input.recorded_at : timestamp,
     provenance,
     media_metadata: normalizeMediaMetadata(input.media_metadata),
@@ -327,10 +340,10 @@ async function buildEvidenceRecord(project, input, { now, hasher }) {
     if (!assets.valid) throw workbenchError('EVIDENCE_INVALID', assets.issues[0] || '媒体资产不符合 P29 有界契约。');
     record.media_assets = clonePlain(input.media_assets);
   }
-  if (p22Source && await sha256Hex(record.content_text) !== provenance.content_sha256) {
-    throw workbenchError('EVIDENCE_HASH_MISMATCH', 'P22 证据正文与来源 SHA-256 不一致，已拒绝。');
+  if (verifiedSource && await sha256Hex(record.content_text) !== provenance.content_sha256) {
+    throw workbenchError('EVIDENCE_HASH_MISMATCH', 'Verified evidence content does not match its SHA-256 binding.');
   }
-  const identity = p22Source
+  const identity = verifiedSource
     ? {
       project_id: project.id,
       provider: provenance.provider,

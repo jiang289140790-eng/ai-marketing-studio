@@ -143,6 +143,23 @@ export function createHarnessClient({
       if (uploaded.error) throw boundedError('ATTACHMENT_UPLOAD_FAILED', uploaded.error.message);
       return { bucket: 'harness-thread-attachments', path, name: file.name, size: file.size, mimeType: file.type || 'application/octet-stream' };
     },
+    async createAttachmentPreview({ ref, name = 'attachment', download = false }) {
+      if (!client) throw boundedError('ATTACHMENT_PREVIEW_UNAVAILABLE', '附件预览仅在已认证的 staging 工作区可用。');
+      const match = /^harness-thread-attachments:([^\\\s]{1,900})$/.exec(String(ref || ''));
+      if (!match || match[1].split('/').some((part) => !part || part === '.' || part === '..')) {
+        throw boundedError('ATTACHMENT_REF_INVALID', '附件身份无效，已拒绝生成预览地址。');
+      }
+      const { data: sessionData, error: sessionError } = await client.auth.getSession();
+      const userId = sessionData?.session?.user?.id;
+      if (sessionError || !userId) throw boundedError('AUTH_REQUIRED', '请先登录后再预览附件。');
+      const path = match[1];
+      if (!path.startsWith(`${userId}/`)) throw boundedError('ATTACHMENT_BINDING_MISMATCH', '附件不属于当前登录账号。');
+      const safeName = String(name || 'attachment').normalize('NFKC').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120) || 'attachment';
+      const options = download ? { download: safeName } : undefined;
+      const { data, error } = await client.storage.from('harness-thread-attachments').createSignedUrl(path, 300, options);
+      if (error || !data?.signedUrl) throw boundedError('ATTACHMENT_PREVIEW_FAILED', '无法创建附件的临时预览地址。');
+      return { signedUrl: data.signedUrl, expiresIn: 300 };
+    },
     async streamThreadEvents({ threadId, cursor = 0, signal, onEvent, onStatus }) {
       let nextCursor = Number(cursor) || 0;
       onStatus?.('connecting');

@@ -282,11 +282,19 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                         {step.reuse && <span>可精确复用</span>}
                         {step.cost && <span className="cost">可能付费</span>}
                         {step.write && <span className="write">写入 staging</span>}
-                        {step.attempts > 0 && <span className="attempts">已尝试 {step.attempts + 1} 次</span>}
+                        {step.attempts > 0 && <span className="attempts" data-testid={`ai-task-step-attempts-${step.step}`}>已尝试 {step.attempts} 次</span>}
                         {step.started_at && <time title={formatTime(step.started_at)}>开始 {formatTime(step.started_at)}</time>}
                         {step.finished_at && <time title={formatTime(step.finished_at)}>结束 {formatTime(step.finished_at)}</time>}
                       </div>
                       {step.error && <p className="ai-step-error" data-testid={`ai-task-step-error-${step.step}`}>{step.error.code} · {step.error.message}</p>}
+                      {step.error && (step.error.field || step.error.reason || step.error.response_shape) && (
+                        <details className="ai-step-diagnostics" data-testid={`ai-task-step-diagnostics-${step.step}`}>
+                          <summary>技术诊断</summary>
+                          {step.error.field && <p><strong>field:</strong> {step.error.field}</p>}
+                          {step.error.reason && <p><strong>reason:</strong> {step.error.reason}</p>}
+                          {step.error.response_shape && <pre>{JSON.stringify(step.error.response_shape, null, 2)}</pre>}
+                        </details>
+                      )}
                       {step.retryable && ['partial', 'failed', 'blocked'].includes(task.state) && (
                         <div className="ai-task-retry-zone" data-testid={`ai-task-retry-zone-${step.step}`}>
                           {Object.keys(approvals).length > 0 && (

@@ -44,6 +44,7 @@ export const OPERATIONS = Object.freeze({
   'workspace.handoff.create': ['p19-workspace-command', 'command', 'handoff.create'],
   'research.status': ['p22-research-assist', 'action', 'status'],
   'research.collect_url': ['p22-research-assist', 'action', 'collect_url'],
+  'research.inspect_attachments': ['p22-research-assist', 'action', 'inspect_attachments'],
   'research.search_x': ['p22-research-assist', 'action', 'search'],
   'research.search_reddit': ['p22-research-assist', 'action', 'search_reddit'],
   'research.analyze_persisted': ['p22-research-assist', 'action', 'analyze_persisted'],
@@ -153,9 +154,18 @@ export function validateBridgeEnvelope(input, verifiedUserId) {
     || input.boundary.body[discriminator] !== value) return fail('BOUNDARY_BINDING_MISMATCH', discriminator);
   const allowedBoundary = endpoint === 'p19-workspace-command'
     ? new Set(['schema_version', 'command', 'idempotency_key', 'payload'])
-    : new Set(['action', 'idempotency_key', 'expected_revision', ...(endpoint === 'g1-generation-command' ? ['schema_version'] : []), ...Object.keys(input.call.payload || {})]);
+    : new Set([
+      'action', 'idempotency_key', 'expected_revision',
+      ...(input.call.operation === 'research.inspect_attachments' ? ['harness_task_id'] : []),
+      ...(endpoint === 'g1-generation-command' ? ['schema_version'] : []),
+      ...Object.keys(input.call.payload || {}),
+    ]);
   const unknown = Object.keys(input.boundary.body).find((key) => !allowedBoundary.has(key));
   if (unknown) return fail('BOUNDARY_UNKNOWN_FIELD', unknown);
+  if (input.call.operation === 'research.inspect_attachments'
+    && input.boundary.body.harness_task_id !== input.call.task_id) {
+    return fail('TASK_BINDING_MISMATCH', 'harness_task_id');
+  }
   // G1 边界命令信封要求精确 schema_version（g1_generation_command_v1）：
   // 缺失、错误值或任何覆盖尝试（含经 payload 键注入）都必须 fail closed，
   // 绝不把非固定版本转发到 G1 Edge（其 parseEdgeRequest 同样拒绝非精确版本）。

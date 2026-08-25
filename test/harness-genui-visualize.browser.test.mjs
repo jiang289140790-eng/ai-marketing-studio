@@ -105,11 +105,45 @@ const HOSTILE_TASK = {
   },
 };
 
+const H5_TASK = {
+  ...GOOD_TASK,
+  id: 'ht-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  request: { ...GOOD_TASK.request, request_id: 'web-h5-attachment', intent: '理解私有图片并保存知识卡' },
+  result: {
+    final_response: '私有附件已验证、分析并保存。',
+    artifact_refs: [
+      'prj-aaaaaaaaaaaaaaaaaaaaaaaa/evidence/ev-aaaaaaaaaaaaaaaaaaaaaaaa',
+      'prj-aaaaaaaaaaaaaaaaaaaaaaaa/analysis/an-aaaaaaaaaaaaaaaaaaaaaaaa',
+      'prj-aaaaaaaaaaaaaaaaaaaaaaaa/knowledge/kc-aaaaaaaaaaaaaaaaaaaaaaaa',
+      'prj-aaaaaaaaaaaaaaaaaaaaaaaa/brief/brf-aaaaaaaaaaaaaaaaaaaaaaaa',
+    ],
+    result_data: {
+      attachment_pipeline: {
+        source: {
+          id: 'h5-att-aaaaaaaaaaaaaaaaaaaaaaaa',
+          content_text: 'Verified private image content.',
+          provenance: { object_bindings: [{
+            ref: 'harness-thread-attachments:11111111-1111-4111-8111-111111111111/thr_22222222-2222-4222-8222-222222222222/request-1/source.png',
+            name: 'source.png', size: 68, mime_type: 'image/png', sha256: 'd'.repeat(64),
+          }] },
+        },
+        analysis: {
+          model: 'qwen3.5-omni-flash', analysis_version: 1,
+          result: { visual_content: 'A verified product comparison image.' },
+        },
+      },
+    },
+  },
+};
+
+const REASSEMBLE_TASK_ID = 'ht-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+
 function boundary() {
   const tasks = new Map([
     [GOOD_TASK.id, GOOD_TASK],
     [LEGACY_TASK.id, LEGACY_TASK],
     [HOSTILE_TASK.id, HOSTILE_TASK],
+    [H5_TASK.id, H5_TASK],
   ]);
   const requests = [];
   const server = createServer(async (request, response) => {
@@ -122,8 +156,20 @@ function boundary() {
         aud: 'authenticated', role: 'authenticated', user_metadata: { user_name: 'genui-browser' },
       }, origin);
     }
+    if (request.url?.startsWith('/auth/v1/token?grant_type=refresh_token') && request.method === 'POST') {
+      return json(response, 200, {
+        access_token: 'refreshed-browser-token', token_type: 'bearer', expires_in: 7200,
+        expires_at: Math.floor(Date.now() / 1000) + 7200,
+        refresh_token: 'refreshed-browser-refresh',
+        user: {
+          id: '11111111-1111-4111-8111-111111111111', email: 'genui-browser@example.invalid',
+          aud: 'authenticated', role: 'authenticated', user_metadata: { user_name: 'genui-browser' },
+        },
+      }, origin);
+    }
     if (request.url === '/functions/v1/harness-command' && request.method === 'POST') {
       const body = await readJson(request);
+      requests.at(-1).body = body;
       if (body.action === 'list') {
         return json(response, 200, { ok: true, tasks: [...tasks.values()].map((task) => summary(task.id, task.request.intent)) }, origin);
       }
@@ -132,7 +178,19 @@ function boundary() {
         if (!task) return json(response, 404, { ok: false, code: 'TASK_NOT_FOUND' }, origin);
         return json(response, 200, { ok: true, task }, origin);
       }
+      if (body.action === 'plan') {
+        return json(response, 200, { ok: true, task: { id: REASSEMBLE_TASK_ID } }, origin);
+      }
       return json(response, 200, { ok: true }, origin);
+    }
+    if (request.method === 'POST' && request.url?.startsWith('/storage/v1/object/sign/harness-thread-attachments/')) {
+      return json(response, 200, { signedURL: '/object/sign/harness-thread-attachments/test-preview.png?token=bounded' }, origin);
+    }
+    if (request.method === 'GET' && request.url?.startsWith('/storage/v1/object/sign/harness-thread-attachments/test-preview.png')) {
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+      response.writeHead(200, { 'content-type': 'image/png', 'access-control-allow-origin': origin || '*' });
+      response.end(png);
+      return;
     }
     return json(response, 404, { ok: false, code: 'NOT_FOUND' }, origin);
   });
@@ -269,6 +327,21 @@ test('Harness GenUI/visualize real browser: bounded charts, flows, tables, fragm
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('安全校验')`), true, 'rejected payload surfaces a bounded safety notice');
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('未知的内容块类型') || document.body.innerText.includes('渲染失败') || document.body.innerText.includes('降级')`), true);
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-results"]') !== null`), true, 'page stays alive after adversarial payloads');
+
+    // H5 private attachment recovery uses an authenticated short-lived URL,
+    // keeps the bounded model result, survives refresh, and creates exactly
+    // one guarded Brief reassembly plan when requested.
+    await navigateToResults(H5_TASK.id, 'H5 private attachment task');
+    await waitForSelector(cdp, '[data-testid="ai-task-attachment-preview"]', { label: 'H5 attachment preview' });
+    await waitForSelector(cdp, '[data-testid="ai-task-attachment-card"] img', { label: 'H5 signed image' });
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-attachment-content"]')?.textContent.includes('Verified private image content.')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-attachment-analysis"]')?.textContent.includes('qwen3.5-omni-flash')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="ai-task-brief-reassemble"] button')?.textContent.includes('Brief')`), true);
+    await cdp.send('Page.reload', { ignoreCache: true });
+    await waitForSelector(cdp, '[data-testid="ai-task-attachment-card"] img', { label: 'H5 signed image after refresh' });
+    await cdp.evaluate(`document.querySelector('[data-testid="ai-task-brief-reassemble"] button').click()`);
+    await waitFor(() => requests.some((entry) => entry.body?.action === 'plan' && entry.body?.project_id === 'prj-aaaaaaaaaaaaaaaaaaaaaaaa'), { label: 'guarded Brief reassembly plan' });
+    assert.equal(requests.filter((entry) => entry.body?.action === 'plan').length, 1, 'one guarded reassembly plan is created');
 
     // 9) 移动端无横向溢出。
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

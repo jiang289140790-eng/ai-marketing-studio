@@ -15,7 +15,7 @@ function call(operation, payload = {}, extra = {}) {
 
 test('tool registry contains only bounded P19/P22/G1 operations and no destructive command', () => {
   const operations = Object.keys(TOOL_DEFINITIONS);
-  assert.equal(operations.length, 20, 'P19/P22 16 项 + G1 生成执行层 4 项');
+  assert.equal(operations.length, 21, 'bounded P19/P22/H5 operations plus four G1 generation operations');
   assert.equal(operations.some((value) => /delete|remove|archive|decide|sql|grant|auth/i.test(value)), false);
   assert.deepEqual(
     new Set(Object.values(TOOL_DEFINITIONS).map((value) => value.endpoint)),
@@ -25,6 +25,14 @@ test('tool registry contains only bounded P19/P22/G1 operations and no destructi
     assert.equal(TOOL_DEFINITIONS[operation].endpoint, 'g1-generation-command', `${operation} 必须路由到 g1 边界`);
     assert.equal(TOOL_DEFINITIONS[operation].approval.includes('paid_external_calls'), operation === 'generation.submit', `${operation} 付费批准标记精确`);
   }
+  assert.deepEqual(TOOL_DEFINITIONS['research.inspect_attachments'], {
+    endpoint: 'p22-research-assist',
+    action: 'inspect_attachments',
+    fields: ['project_id', 'thread_id', 'attachments'],
+    approval: ['paid_external_calls'],
+    optional: [],
+    requiresRevision: false,
+  });
 });
 
 test('unknown fields, operations, cross-project calls, invalid revisions and oversized payloads fail closed', () => {

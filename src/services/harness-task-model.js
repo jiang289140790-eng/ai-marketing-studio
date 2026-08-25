@@ -81,6 +81,95 @@ function boundedText(value, limit) {
   return String(value ?? '').slice(0, limit);
 }
 
+const SAFE_DIAGNOSTIC_TYPES = new Set(['array', 'null', 'object', 'string', 'number', 'boolean', 'undefined', 'function', 'bigint', 'symbol']);
+const SAFE_JSON_ROOT_KEYS = new Set(['analyses']);
+const SAFE_ANALYSIS_KEYS = new Set([
+  'source_id', 'text_expression', 'hook', 'copy_pattern', 'target_audience', 'audience_need_emotion',
+  'media_analysis', 'virality_drivers', 'reusable_methods', 'rewrite_suggestions', 'signals', 'risks',
+]);
+const SAFE_MEDIA_KEYS = new Set([
+  'media_id', 'visual_content', 'composition', 'people', 'scene', 'emotion', 'visual_selling_points', 'style_pattern',
+]);
+
+function boundedDiagnosticCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 1_000_000_000) : null;
+}
+
+function boundedDiagnosticType(value) {
+  const text = boundedText(value, 24);
+  return SAFE_DIAGNOSTIC_TYPES.has(text) ? text : 'unknown';
+}
+
+function boundedDiagnosticKey(value, allowlist = null) {
+  const text = boundedText(value, 64);
+  if (allowlist && !allowlist.has(text)) return '<unrecognized-key>';
+  return /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(text) || text === '<nonstandard-key>' ? text : '<nonstandard-key>';
+}
+
+function boundedDiagnosticKeys(value, limit, allowlist = null) {
+  return Array.isArray(value) ? value.slice(0, limit).map((key) => boundedDiagnosticKey(key, allowlist)) : [];
+}
+
+function boundedDiagnosticFieldTypes(value, limit, allowlist = null) {
+  if (!isPlainObject(value)) return {};
+  return Object.fromEntries(Object.entries(value).slice(0, limit).map(([key, type]) => [boundedDiagnosticKey(key, allowlist), boundedDiagnosticType(type)]));
+}
+
+function normalizeDiagnosticRow(value, media = false) {
+  if (!isPlainObject(value)) return null;
+  const row = {
+    row_type: boundedDiagnosticType(value.row_type),
+    keys: boundedDiagnosticKeys(value.keys, media ? 16 : 24, media ? SAFE_MEDIA_KEYS : SAFE_ANALYSIS_KEYS),
+    field_types: boundedDiagnosticFieldTypes(value.field_types, media ? 16 : 24, media ? SAFE_MEDIA_KEYS : SAFE_ANALYSIS_KEYS),
+  };
+  if (!media) {
+    row.media_count = boundedDiagnosticCount(value.media_count);
+    row.media_rows = Array.isArray(value.media_rows) ? value.media_rows.slice(0, 8).map((entry) => normalizeDiagnosticRow(entry, true)).filter(Boolean) : [];
+  }
+  return row;
+}
+
+function normalizeResponseShape(value) {
+  if (!isPlainObject(value)) return null;
+  return {
+    root_type: boundedDiagnosticType(value.root_type),
+    known_root_keys: Array.isArray(value.known_root_keys)
+      ? value.known_root_keys.filter((key) => ['choices', 'output', 'usage'].includes(key)).slice(0, 3)
+      : [],
+    compatible_choice_count: boundedDiagnosticCount(value.compatible_choice_count),
+    native_choice_count: boundedDiagnosticCount(value.native_choice_count),
+    content_type: boundedDiagnosticType(value.content_type),
+    content_length: boundedDiagnosticCount(value.content_length),
+    content_part_count: boundedDiagnosticCount(value.content_part_count),
+    content_parts: Array.isArray(value.content_parts) ? value.content_parts.slice(0, 8).map((part) => ({
+      part_type: ['text', 'output_text', 'other'].includes(part?.part_type) ? part.part_type : null,
+      value_type: boundedDiagnosticType(part?.value_type),
+      text_type: boundedDiagnosticType(part?.text_type),
+      text_length: boundedDiagnosticCount(part?.text_length),
+    })) : [],
+    json_root_type: value.json_root_type == null ? null : boundedDiagnosticType(value.json_root_type),
+    ...(Array.isArray(value.json_root_keys) ? { json_root_keys: boundedDiagnosticKeys(value.json_root_keys, 24, SAFE_JSON_ROOT_KEYS) } : {}),
+    ...(value.analyses_type != null ? { analyses_type: boundedDiagnosticType(value.analyses_type) } : {}),
+    ...(value.analysis_count != null ? { analysis_count: boundedDiagnosticCount(value.analysis_count) } : {}),
+    ...(Array.isArray(value.analysis_rows) ? { analysis_rows: value.analysis_rows.slice(0, 4).map((entry) => normalizeDiagnosticRow(entry)).filter(Boolean) } : {}),
+  };
+}
+
+function normalizeTaskError(value) {
+  if (!isPlainObject(value)) return null;
+  const responseShape = normalizeResponseShape(value.response_shape);
+  const field = typeof value.field === 'string' && /^[A-Za-z_][A-Za-z0-9_.[\]-]{0,95}$/.test(value.field) ? value.field : null;
+  const reason = typeof value.reason === 'string' && /^[A-Z][A-Z0-9_]{1,95}$/.test(value.reason) ? value.reason : null;
+  return {
+    code: boundedText(value.code, 80),
+    message: boundedText(value.message, MAX_ERROR_TEXT),
+    ...(field ? { field } : {}),
+    ...(reason ? { reason } : {}),
+    ...(responseShape ? { response_shape: responseShape } : {}),
+    retry_unsafe: value.retry_unsafe === true,
+  };
+}
+
 export function stateLabel(state) {
   return TASK_STATE_LABELS[state] || String(state || 'unknown').slice(0, MAX_STATE_TEXT);
 }
@@ -164,11 +253,7 @@ export function normalizeTaskSnapshot(value) {
         failed_count: Number.isSafeInteger(raw.failed_count) && raw.failed_count > 0 ? raw.failed_count : 0,
         started_at: typeof raw.started_at === 'string' ? raw.started_at.slice(0, 40) : null,
         finished_at: typeof raw.finished_at === 'string' ? raw.finished_at.slice(0, 40) : null,
-        error: isPlainObject(raw.error) ? {
-          code: boundedText(raw.error.code, 80),
-          message: boundedText(raw.error.message, MAX_ERROR_TEXT),
-          retry_unsafe: raw.error.retry_unsafe === true,
-        } : null,
+        error: normalizeTaskError(raw.error),
         tool_calls: normalizeToolCallList(raw.tool_calls),
       };
     }

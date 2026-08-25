@@ -64,6 +64,7 @@ const ACTION_FIELDS = Object.freeze({
   collect_url: new Set(['action', 'url', 'idempotency_key']),
   search: new Set(['action', 'keyword', 'count', 'sort', 'idempotency_key']),
   search_reddit: new Set(['action', 'keyword', 'count', 'sort', 'subreddit', 'time_filter', 'idempotency_key']),
+  inspect_attachments: new Set(['action', 'project_id', 'thread_id', 'harness_task_id', 'attachments', 'idempotency_key']),
   analyze: new Set(['action', 'items', 'idempotency_key']),
   analyze_persisted: new Set(['action', 'project_id', 'evidence_id', 'idempotency_key']),
   generate_similar: new Set(['action', 'project_id', 'evidence_id', 'analysis_id', 'idempotency_key']),
@@ -223,6 +224,38 @@ export function parseP22Request(raw) {
       }
     }
     return identified({ action, keyword, count, sort, subreddit, time_filter: timeFilter });
+  }
+  if (action === 'inspect_attachments') {
+    const projectId = text(input.project_id, 'project_id', 28);
+    const threadId = text(input.thread_id, 'thread_id', 48);
+    const taskId = text(input.harness_task_id, 'harness_task_id', 48);
+    if (!/^prj-[0-9a-f]{24}$/.test(projectId)) throw new P22Error('PROJECT_ID_INVALID', '项目身份格式无效。', 400, { field: 'project_id' });
+    if (!/^thr_[0-9a-f-]{36}$/.test(threadId)) throw new P22Error('THREAD_ID_INVALID', '会话身份格式无效。', 400, { field: 'thread_id' });
+    if (!/^ht-[0-9a-f-]{36}$/.test(taskId)) throw new P22Error('TASK_ID_INVALID', '任务身份格式无效。', 400, { field: 'harness_task_id' });
+    if (!Array.isArray(input.attachments) || input.attachments.length < 1 || input.attachments.length > 10) {
+      throw new P22Error('ATTACHMENT_COUNT_INVALID', '附件数量必须为 1–10。', 400, { field: 'attachments' });
+    }
+    const seen = new Set();
+    let totalSize = 0;
+    const allowedMime = /^(image\/(jpeg|png|webp)|video\/mp4|application\/pdf|text\/(plain|markdown|csv)|application\/json)$/;
+    const attachments = input.attachments.map((rawAttachment, index) => {
+      const attachment = object(rawAttachment);
+      if (!attachment) throw new P22Error('ATTACHMENT_INVALID', '附件描述无效。', 400, { field: `attachments.${index}` });
+      exactFields(attachment, new Set(['ref', 'name', 'size', 'mime_type']), `attachments.${index}`);
+      const ref = text(attachment.ref, `attachments.${index}.ref`, 1000);
+      const match = /^harness-thread-attachments:([0-9a-f-]{36})\/(thr_[0-9a-f-]{36})\/([^\s/]{1,200})\/([^\s]{1,300})$/i.exec(ref);
+      if (!match || match[2] !== threadId || seen.has(ref)) throw new P22Error('ATTACHMENT_BINDING_INVALID', '附件来源绑定无效。', 400, { field: `attachments.${index}.ref` });
+      const name = text(attachment.name, `attachments.${index}.name`, 200);
+      const size = Number(attachment.size);
+      const mimeType = text(attachment.mime_type, `attachments.${index}.mime_type`, 100).toLowerCase();
+      if (!Number.isSafeInteger(size) || size < 1 || size > 25 * 1024 * 1024) throw new P22Error('ATTACHMENT_SIZE_INVALID', '附件大小无效。', 400, { field: `attachments.${index}.size` });
+      if (!allowedMime.test(mimeType)) throw new P22Error('ATTACHMENT_MIME_UNSUPPORTED', '附件类型不受支持。', 415, { field: `attachments.${index}.mime_type` });
+      seen.add(ref);
+      totalSize += size;
+      return { ref, name, size, mime_type: mimeType };
+    });
+    if (totalSize > 40 * 1024 * 1024) throw new P22Error('ATTACHMENT_TOTAL_SIZE_INVALID', '附件总大小超过上限。', 413, { field: 'attachments' });
+    return identified({ action, project_id: projectId, thread_id: threadId, harness_task_id: taskId, attachments });
   }
   if (action === 'analyze_persisted' || action === 'generate_similar') {
     const projectId = text(input.project_id, 'project_id', 28);
@@ -1607,11 +1640,141 @@ export function buildMultimodalQwenContent(items) {
  *   乱序、外来、多余 id 一律 fail closed；
  * - 全部文本有界；未知字段静默由 JSON 结构检查失败关闭。
  */
-export function parseQwenMultimodalAnalyses(payload, items) {
-  const rawText = String(payload?.choices?.[0]?.message?.content || '').trim();
+function qwenResponseShape(payload) {
+  const safeKey = (key) => /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(key) ? key : '<nonstandard-key>';
+  const safeKeys = (value, limit) => object(value) ? Object.keys(value).slice(0, limit).map(safeKey) : [];
+  const fieldTypes = (value, limit) => object(value) ? Object.fromEntries(Object.entries(value).slice(0, limit).map(([key, entry]) => [
+    safeKey(key),
+    Array.isArray(entry) ? 'array' : entry === null ? 'null' : typeof entry,
+  ])) : {};
+  const root = object(payload);
+  const compatibleChoices = Array.isArray(root?.choices) ? root.choices : null;
+  const nativeChoices = Array.isArray(root?.output?.choices) ? root.output.choices : null;
+  const selected = compatibleChoices || nativeChoices;
+  const message = selected?.[0]?.message;
+  const content = message?.content;
+  const partShape = Array.isArray(content)
+    ? content.slice(0, 8).map((part) => ({
+      part_type: part?.type === 'text' || part?.type === 'output_text' ? part.type : part?.type == null ? null : 'other',
+      value_type: Array.isArray(part) ? 'array' : part === null ? 'null' : typeof part,
+      text_type: Array.isArray(part?.text) ? 'array' : part?.text === null ? 'null' : typeof part?.text,
+      text_length: typeof part?.text === 'string' ? part.text.length : null,
+    }))
+    : [];
+  const shape = {
+    root_type: Array.isArray(payload) ? 'array' : payload === null ? 'null' : typeof payload,
+    known_root_keys: root ? ['choices', 'output', 'usage'].filter((key) => Object.hasOwn(root, key)) : [],
+    compatible_choice_count: compatibleChoices?.length ?? null,
+    native_choice_count: nativeChoices?.length ?? null,
+    content_type: Array.isArray(content) ? 'array' : content === null ? 'null' : typeof content,
+    content_length: typeof content === 'string' ? content.length : null,
+    content_part_count: Array.isArray(content) ? content.length : null,
+    content_parts: partShape,
+  };
+  // When the provider returned syntactically valid JSON but the reviewed
+  // analysis schema rejected it, retain only its structure. Field names and
+  // JSON types are sufficient to diagnose a provider contract change; values
+  // (model prose, attachment content and user data) must never enter logs or
+  // task state.
+  let parsedContent = null;
+  if (object(content)) parsedContent = content;
+  if (typeof content === 'string') {
+    const rawCandidate = content.trim();
+    const fenced = rawCandidate.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    const candidate = fenced ? fenced[1].trim() : rawCandidate;
+    try { parsedContent = JSON.parse(candidate); } catch { /* syntax is reported separately */ }
+  }
+  if (object(parsedContent)) {
+    const analyses = parsedContent.analyses;
+    shape.json_root_type = 'object';
+    shape.json_root_keys = safeKeys(parsedContent, 24);
+    shape.analyses_type = Array.isArray(analyses) ? 'array' : analyses === null ? 'null' : typeof analyses;
+    shape.analysis_count = Array.isArray(analyses) ? analyses.length : null;
+    shape.analysis_rows = Array.isArray(analyses)
+      ? analyses.slice(0, 4).map((row) => ({
+        row_type: Array.isArray(row) ? 'array' : row === null ? 'null' : typeof row,
+        keys: safeKeys(row, 24),
+        field_types: fieldTypes(row, 24),
+        media_count: Array.isArray(row?.media_analysis) ? row.media_analysis.length : null,
+        media_rows: Array.isArray(row?.media_analysis) ? row.media_analysis.slice(0, 8).map((media) => ({
+          row_type: Array.isArray(media) ? 'array' : media === null ? 'null' : typeof media,
+          keys: safeKeys(media, 16),
+          field_types: fieldTypes(media, 16),
+        })) : [],
+      })) : [];
+  } else {
+    shape.json_root_type = parsedContent === null ? null : Array.isArray(parsedContent) ? 'array' : typeof parsedContent;
+  }
+  return shape;
+}
+
+function extractQwenMultimodalContent(payload, responseError) {
+  const compatible = payload?.choices;
+  const native = payload?.output?.choices;
+  const hasCompatible = Array.isArray(compatible);
+  const hasNative = Array.isArray(native);
+  if (hasCompatible === hasNative) {
+    throw responseError('choices', hasCompatible ? 'RESPONSE_ENVELOPE_AMBIGUOUS' : 'RESPONSE_ENVELOPE_MISSING');
+  }
+  const choices = hasCompatible ? compatible : native;
+  const prefix = hasCompatible ? 'choices' : 'output.choices';
+  if (choices.length !== 1 || !object(choices[0]) || !object(choices[0].message)) {
+    throw responseError(prefix, 'CHOICE_SHAPE_INVALID', { observed_count: choices.length, expected_count: 1 });
+  }
+  return { content: choices[0].message.content, field: `${prefix}[0].message.content` };
+}
+
+function parseQwenMultimodalAnalysesStrict(payload, items) {
+  const responseError = (field, reason, details = {}) => new P22Error(
+    'MODEL_RESPONSE_INVALID',
+    'The multimodal model response did not match the reviewed response contract.',
+    502,
+    { field, reason, ...details },
+  );
+  const { content, field: contentField } = extractQwenMultimodalContent(payload, responseError);
+  let rawText;
   let parsed;
-  try { parsed = JSON.parse(rawText); } catch { throw new P22Error('MODEL_RESPONSE_INVALID', '分析响应不是有效 JSON。', 502); }
-  if (!Array.isArray(parsed.analyses) || parsed.analyses.length !== items.length) throw new P22Error('MODEL_RESPONSE_INVALID', '分析响应与来源数量不一致。', 502);
+  if (typeof content === 'string') {
+    rawText = content.trim();
+  } else if (object(content)) {
+    // Some structured-output gateways materialize message.content as the JSON
+    // object instead of serialising it. The inner contract remains identical
+    // and is still checked field-by-field below.
+    parsed = globalThis.structuredClone(content);
+  } else if (Array.isArray(content)) {
+    if (content.length < 1 || content.length > 8) {
+      throw responseError(contentField, 'CONTENT_PART_COUNT_INVALID', { observed_count: content.length, limit: 8 });
+    }
+    const textParts = content.map((part, index) => {
+      if (!object(part) || typeof part.text !== 'string'
+        || (part.type !== undefined && part.type !== 'text' && part.type !== 'output_text')) {
+        throw responseError(`${contentField}[${index}]`, 'CONTENT_PART_INVALID', {
+          observed_type: Array.isArray(part) ? 'array' : part === null ? 'null' : typeof part,
+        });
+      }
+      return part.text;
+    });
+    rawText = textParts.join('').trim();
+  } else {
+    throw responseError(contentField, 'CONTENT_TYPE_INVALID', {
+      observed_type: content === null ? 'null' : typeof content,
+    });
+  }
+  if (parsed === undefined) {
+    if (!rawText) throw responseError(contentField, 'CONTENT_EMPTY');
+    if (new globalThis.TextEncoder().encode(rawText).length > 64 * 1024) {
+      throw responseError(contentField, 'CONTENT_TOO_LARGE', { raw_limit: 64 * 1024 });
+    }
+    const fenced = rawText.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (fenced) rawText = fenced[1].trim();
+    try { parsed = JSON.parse(rawText); } catch { throw responseError(contentField, 'JSON_INVALID'); }
+  }
+  if (!object(parsed) || !Array.isArray(parsed.analyses) || parsed.analyses.length !== items.length) {
+    throw responseError('analyses', 'ANALYSIS_COUNT_INVALID', {
+      expected_count: items.length,
+      observed_count: Array.isArray(parsed?.analyses) ? parsed.analyses.length : null,
+    });
+  }
   const byId = new Map(items.map((item) => [item.id, item]));
   const seen = new Set();
   const boundedList = (value, field) => {
@@ -1673,8 +1836,27 @@ export function parseQwenMultimodalAnalyses(payload, items) {
   });
 }
 
+export function parseQwenMultimodalAnalyses(payload, items) {
+  const responseShape = qwenResponseShape(payload);
+  try {
+    return parseQwenMultimodalAnalysesStrict(payload, items);
+  } catch (error) {
+    if (error instanceof P22Error && (error.code === 'MODEL_RESPONSE_INVALID'
+      || error.code === 'MODEL_SOURCE_BINDING_INVALID'
+      || error.code === 'MODEL_MEDIA_BINDING_INVALID')) {
+      error.details = { ...error.details, response_shape: responseShape };
+    }
+    throw error;
+  }
+}
+
 export function publicError(error) {
-  if (error instanceof P22Error) return { code: error.code, message: error.message, status: error.status, details: error.details };
+  if (error instanceof P22Error) {
+    const modelDiagnostic = ['MODEL_RESPONSE_INVALID', 'MODEL_SOURCE_BINDING_INVALID', 'MODEL_MEDIA_BINDING_INVALID'].includes(error.code)
+      ? { diagnostics: globalThis.structuredClone(error.details) }
+      : {};
+    return { code: error.code, message: error.message, status: error.status, details: error.details, ...modelDiagnostic };
+  }
   return { code: 'INTERNAL_ERROR', message: '智能研究服务暂时不可用，内部细节已隐藏。', status: 500, details: {} };
 }
 

@@ -11,7 +11,12 @@ const event = {
   event_id: 'gev_00000000-0000-4000-8000-000000000001',
   task_id: 'ht-00000000-0000-4000-8000-000000000201', user_id: '00000000-0000-4000-8000-000000000101',
   at: '2026-08-23T10:00:00.000Z', event: 'succeeded',
-  task: { id: 'ht-00000000-0000-4000-8000-000000000201', state: 'succeeded' },
+  task: { id: 'ht-00000000-0000-4000-8000-000000000201', state: 'succeeded', request: { project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa' } },
+};
+const binding = {
+  user_id: event.user_id,
+  thread_id: 'thr_00000000-0000-4000-8000-000000000301',
+  project_id: event.task.request.project_id,
 };
 
 test('durable projector retries a failed callback and acknowledges exactly once', async () => {
@@ -95,4 +100,36 @@ test('same-millisecond step transitions keep distinct durable ACK identities acr
     assert.deepEqual(projected, [firstStep.event_id, secondStep.event_id, secondStep.event_id]);
     restarted.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('conversation task projection carries one immutable user/thread/task/project binding', async () => {
+  const bodies = [];
+  const projector = createTaskProjector({ callbackBase: 'https://staging.example.test', secret, fetchImpl: async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return { ok: true };
+  } });
+  assert.equal(projector.enqueue(event), true);
+  assert.equal(projector.bindTask(event.task_id, binding), true);
+  assert.equal(projector.bindTask(event.task_id, binding), true, 'an exact replay is idempotent');
+  assert.equal(projector.bindTask(event.task_id, { ...binding, thread_id: 'thr_00000000-0000-4000-8000-000000000302' }), false, 'identity mutation fails closed');
+  await projector.drain();
+  assert.deepEqual(bodies[0].binding, { ...binding, task_id: event.task_id });
+  assert.equal(bodies[0].event.task.request.project_id, binding.project_id);
+  projector.close();
+});
+
+test('terminal thread binding rejection is acknowledged once and cannot create a 409 retry storm', async () => {
+  let calls = 0;
+  const projector = createTaskProjector({ callbackBase: 'https://staging.example.test', secret, retryMs: 5, fetchImpl: async () => {
+    calls += 1;
+    return { ok: false, status: 409, json: async () => ({ ok: false, code: 'THREAD_NOT_BOUND' }) };
+  } });
+  projector.bindTask(event.task_id, binding);
+  assert.equal(projector.enqueue(event), true);
+  await projector.drain();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(projector.pendingCount(), 0);
+  assert.equal(calls, 1);
+  assert.equal(projector.enqueue(event), false, 'duplicate delivery remains acknowledged');
+  projector.close();
 });

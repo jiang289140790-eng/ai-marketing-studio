@@ -36,7 +36,7 @@ async function buildPlan(intent, projectId = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa') {
 function view(plan) {
   return {
     id: TASK_ID,
-    request: { user_id: 'user-a', project_id: plan.project_id, intent: plan.intent },
+    request: { user_id: plan.user_id || 'user-a', project_id: plan.project_id, intent: plan.intent },
     plan,
     confirmation: {
       approval: {
@@ -47,6 +47,55 @@ function view(plan) {
       confirmed_at: '2026-08-15T08:00:00.000Z',
     },
     step_states: {},
+  };
+}
+
+function attachmentInspectionResult(call) {
+  const contentText = 'A verified private image showing a product comparison layout.';
+  const contentSha256 = createHash('sha256').update(contentText).digest('hex');
+  const item = {
+    id: 'h5-att-aaaaaaaaaaaaaaaaaaaaaaaa',
+    platform: 'private_attachment',
+    source_url: 'https://xtkkdvghiohlnpfnnhmx.supabase.co/storage/v1/object/authenticated/harness-thread-attachments/source.png',
+    label: 'source.png',
+    content_text: contentText,
+    content_sha256: contentSha256,
+    collection_proof: `1999999999.${'c'.repeat(64)}`,
+    provenance: {
+      run_id: TASK_ID,
+      thread_id: call.payload.thread_id,
+      collected_at: '2026-08-24T12:00:00.000Z',
+      usage_total_usd: 0.01,
+      budget_reservation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      object_bindings: call.payload.attachments.map((attachment) => ({
+        ...structuredClone(attachment),
+        sha256: 'd'.repeat(64),
+      })),
+    },
+  };
+  return {
+    ok: true,
+    data: {
+      items: [item],
+      analyses: [{
+        source_id: item.id,
+        model: 'qwen3.5-omni-flash',
+        executed_at: '2026-08-24T12:00:01.000Z',
+        result: {
+          text_expression: 'Product comparison headline and two-column layout.',
+          media_analysis: [{ type: 'image', description: 'Two product cards with contrasting benefits.' }],
+          virality_drivers: ['clear contrast'],
+          reusable_methods: ['before-after structure'],
+          signals: ['comparison'],
+          risks: [],
+        },
+        usage: { total_tokens: 120 },
+        cost: { recorded_cny: 0.02, reservation_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
+      }],
+      usage: { total_tokens: 120 },
+      cost: { recorded_cny: 0.02 },
+    },
+    artifact_refs: [],
   };
 }
 
@@ -99,6 +148,8 @@ function mockBoundary(seed = { evidence: [], analyses: [], cards: [], brief: nul
         };
         return { ok: true, entity: { type: 'evidence', id: 'ev-dummy' }, data: { items: [item] }, artifact_refs: [] };
       }
+      case 'research.inspect_attachments':
+        return attachmentInspectionResult(call);
       case 'workspace.evidence.create': {
         assertCurrentRevision(call);
         const id = `ev-${createHash('sha256').update(call.idempotency_key).digest('hex').slice(0, 24)}`;
@@ -189,6 +240,162 @@ test('every workflow step builds an exact payload that passes validateToolCall',
     const plan = await buildPlan(workflow === 'search_x' ? '搜索 X 上 AI 营销，选 2 条保存为证据' : '搜索 reddit 上 AI 营销，选 2 条保存为证据');
     for (const step of plan.steps) if (step.operation) seenOperations.add(step.operation);
   }
+});
+
+test('verified private attachment executes one paid inspection and preserves Evidence → Analysis → Knowledge → pending Brief lineage', async () => {
+  const userId = '11111111-1111-4111-8111-111111111111';
+  const threadId = 'thr_22222222-2222-4222-8222-222222222222';
+  const attachment = {
+    ref: `harness-thread-attachments:${userId}/${threadId}/req-1/source.png`,
+    name: 'source.png',
+    size: 1024,
+    mime_type: 'image/png',
+  };
+  const planned = await planner.plan({
+    taskId: TASK_ID,
+    request: {
+      user_id: userId,
+      project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+      intent: '请理解附件并生成知识卡和待审核 Brief',
+      attachments: [attachment],
+      request_fingerprint: 'a'.repeat(64),
+    },
+  });
+  assert.equal(planned.ok, true, planned.code);
+  const bridge = mockBoundary();
+  const { output } = await run(planned.value, bridge);
+  assert.equal(output.outcome, 'succeeded');
+
+  const businessCalls = bridge.calls.filter((call) => call.operation !== 'workspace.project.read');
+  assert.deepEqual(businessCalls.map((call) => call.operation), [
+    'research.inspect_attachments',
+    'workspace.evidence.create',
+    'workspace.analysis.create',
+    'workspace.card.create',
+    'workspace.brief.assemble',
+  ]);
+  assert.equal(bridge.calls.filter((call) => call.operation === 'research.inspect_attachments').length, 1, 'exactly one paid attachment inspection');
+  assert.deepEqual(businessCalls[0].payload.attachments, [attachment]);
+  assert.equal(businessCalls[0].payload.thread_id, threadId);
+
+  assert.equal(bridge.state.evidence.length, 1);
+  const evidence = bridge.state.evidence[0];
+  assert.equal(evidence.provenance.schema_version, 'h5_verified_attachment_provenance_v1');
+  assert.deepEqual(evidence.provenance.object_bindings, [{ ...attachment, sha256: 'd'.repeat(64) }]);
+  assert.equal(bridge.state.analyses.length, 1);
+  assert.equal(bridge.state.analyses[0].evidence_id, evidence.id);
+  assert.equal(bridge.state.analyses[0].model_analysis.model, 'qwen3.5-omni-flash');
+  assert.equal(bridge.state.cards.length, 1);
+  assert.equal(bridge.state.cards[0].analysis_id, bridge.state.analyses[0].id);
+  assert.equal(bridge.state.cards[0].evidence_id, evidence.id);
+  assert.equal(bridge.state.brief.status, 'pending_review');
+  assert.deepEqual(bridge.state.brief.knowledge_citation_ids, [bridge.state.cards[0].id]);
+  assert.deepEqual(bridge.state.brief.evidence_provenance.evidence_ids, [evidence.id]);
+  assert.equal(output.result_data.attachment_pipeline.source.id, 'h5-att-aaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.equal(output.result_data.attachment_pipeline.analysis.model, 'qwen3.5-omni-flash');
+  assert.deepEqual(
+    output.result_data.attachment_pipeline.source.provenance.object_bindings,
+    [{ ...attachment, sha256: 'd'.repeat(64) }],
+  );
+  assert.equal(JSON.stringify(output.result_data).includes('signed_url'), false, 'signed URLs are never persisted');
+});
+
+test('malformed attachment model response stops after one paid inspection and performs zero downstream writes', async () => {
+  const userId = '11111111-1111-4111-8111-111111111111';
+  const threadId = 'thr_22222222-2222-4222-8222-222222222222';
+  const planned = await planner.plan({
+    taskId: TASK_ID,
+    request: {
+      user_id: userId,
+      project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+      intent: '请理解附件并生成知识卡和待审核 Brief',
+      attachments: [{
+        ref: `harness-thread-attachments:${userId}/${threadId}/req-1/source.png`,
+        name: 'source.png', size: 1024, mime_type: 'image/png',
+      }],
+      request_fingerprint: 'a'.repeat(64),
+    },
+  });
+  assert.equal(planned.ok, true, planned.code);
+  const base = mockBoundary();
+  const calls = [];
+  const client = async (call, trusted) => {
+    calls.push(call);
+    if (call.operation === 'research.inspect_attachments') {
+      return {
+        ok: false,
+        code: 'MODEL_RESPONSE_INVALID',
+        diagnostics: {
+          field: 'output.choices[0].message.content',
+          reason: 'JSON_INVALID',
+          response_shape: {
+            root_type: 'object',
+            known_root_keys: ['output', 'usage'],
+            compatible_choice_count: null,
+            native_choice_count: 1,
+            content_type: 'string',
+            content_length: 9528,
+            content_part_count: null,
+            content_parts: [],
+            json_root_type: null,
+            analysis_rows: [{
+              row_type: 'object',
+              keys: ['source_id', 'PRIVATE_USER_VALUE_MUST_NOT_ESCAPE'],
+              field_types: { source_id: 'string', PRIVATE_USER_VALUE_MUST_NOT_ESCAPE: 'string' },
+              media_count: 0,
+              media_rows: [],
+            }],
+          },
+          raw_response: 'PRIVATE_MODEL_BODY_MUST_NOT_ESCAPE',
+          authorization: 'Bearer PRIVATE_TOKEN_MUST_NOT_ESCAPE',
+        },
+      };
+    }
+    return base.client(call, trusted);
+  };
+  const taskView = view(planned.value);
+  const output = await executeConfirmedPlan({
+    taskView,
+    plan: planned.value,
+    signal: null,
+    emit: () => {},
+    toolClient: client,
+    stateReader: createBridgeStateReader(client),
+  });
+  assert.equal(output.outcome, 'failed');
+  assert.equal(calls.filter((call) => call.operation === 'research.inspect_attachments').length, 1);
+  assert.deepEqual(calls.filter((call) => call.operation.startsWith('workspace.') && call.operation !== 'workspace.project.read'), []);
+  const failedStep = taskView.step_states[planned.value.steps.find((step) => step.operation === 'research.inspect_attachments').step];
+  assert.equal(failedStep.failed_count, 1, 'the first real provider call is exactly attempt 1');
+  assert.equal(failedStep.error.code, 'MODEL_RESPONSE_INVALID');
+  assert.equal(failedStep.error.field, 'output.choices[0].message.content');
+  assert.equal(failedStep.error.reason, 'JSON_INVALID');
+  assert.deepEqual(failedStep.error.response_shape, {
+    root_type: 'object',
+    known_root_keys: ['output', 'usage'],
+    compatible_choice_count: null,
+    native_choice_count: 1,
+    content_type: 'string',
+    content_length: 9528,
+    content_part_count: null,
+    content_parts: [],
+    json_root_type: null,
+    analysis_rows: [{
+      row_type: 'object',
+      keys: ['source_id', '<unrecognized-key>'],
+      field_types: { source_id: 'string', '<unrecognized-key>': 'string' },
+      media_count: 0,
+      media_rows: [],
+    }],
+  });
+  assert.equal(JSON.stringify(taskView.step_states).includes('PRIVATE_MODEL_BODY_MUST_NOT_ESCAPE'), false);
+  assert.equal(JSON.stringify(taskView.step_states).includes('PRIVATE_TOKEN_MUST_NOT_ESCAPE'), false);
+  assert.equal(JSON.stringify(taskView.step_states).includes('PRIVATE_USER_VALUE_MUST_NOT_ESCAPE'), false);
+  assert.deepEqual(failedStep.error.response_shape.analysis_rows[0].keys, ['source_id', '<unrecognized-key>']);
+  assert.equal(base.state.evidence.length, 0);
+  assert.equal(base.state.analyses.length, 0);
+  assert.equal(base.state.cards.length, 0);
+  assert.equal(base.state.brief, null);
 });
 
 test('batch expansion: 1, 2, max and over-limit inputs get exactly one call per item', async () => {
@@ -386,6 +593,7 @@ test('a planner/template bug surfaces as INTERNAL_PLAN_VALIDATION_ERROR with zer
   assert.equal(output.outcome, 'failed');
   assert.equal(taskView.step_states['st-0'].error.code, 'INTERNAL_PLAN_VALIDATION_ERROR');
   assert.equal(taskView.step_states['st-0'].error.retry_unsafe, true, 'a broken plan is not retryable');
+  assert.equal(taskView.step_states['st-0'].failed_count, 0, 'plan validation failed before any real tool call');
   assert.equal(bridge.calls.length, 0, 'zero bridge calls on a plan bug');
 });
 

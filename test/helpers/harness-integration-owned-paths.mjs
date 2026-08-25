@@ -45,6 +45,16 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/harness-genui-visualize.browser.test.mjs',
   'test/harness-deterministic-orchestrator.browser.test.mjs',
   'test/helpers/harness-integration-owned-paths.mjs',
+  // H5 verified private attachment -> analysis -> knowledge -> Brief loop.
+  // Exact files only; no directory-level expansion.
+  'src/services/p19-contracts.js',
+  'src/services/p19-workspace-service.js',
+  'src/services/p22-research-assist.js',
+  'supabase/functions/p22-research-assist/assist-core.mjs',
+  'supabase/functions/p22-research-assist/index.ts',
+  'test/h5-attachment-artifact-loop.test.mjs',
+  'test/p22-assisted-research.test.mjs',
+  'services/harness-gateway/test/workflow-catalog.test.mjs',
   // G1 generation execution layer (accepted image-contract repair + video
   // status/artifact preview repair): exact modified paths only.
   'services/generation-worker/bailian-adapter.mjs',
@@ -150,6 +160,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/conversation-sanitize.mjs',
   'services/harness-gateway/test/conversation-runner.test.mjs',
   'services/harness-gateway/task-projector.mjs',
+  'services/harness-gateway/test/task-projector.test.mjs',
   'services/harness-gateway/plugins/ams-conversation-runner/index.mjs',
   'services/harness-gateway/plugins/ams-conversation-runner/package.json',
   'supabase/migrations/20260820170554_g3_provider_registry_routing_v1.sql',
@@ -169,6 +180,15 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/package-lock.json',
   'services/harness-gateway/init-profile.mjs',
   'services/harness-gateway/profile/cordis.patch.yml',
+  // H5 verified private attachment -> analysis -> knowledge -> Brief loop.
+  // Exact files only; no directory-level expansion.
+  'src/services/p19-contracts.js',
+  'src/services/p19-workspace-service.js',
+  'src/services/p22-research-assist.js',
+  'supabase/functions/p22-research-assist/assist-core.mjs',
+  'supabase/functions/p22-research-assist/index.ts',
+  'test/h5-attachment-artifact-loop.test.mjs',
+  'test/p22-assisted-research.test.mjs',
   // ams-harness-rc8-isolated-upgrade: exact rc.8 paths only (no directory
   // wildcard expansion).
   'services/harness-gateway/compose.yaml',
@@ -204,6 +224,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/conversation-projector.mjs',
   'services/harness-gateway/conversation-sanitize.mjs',
   'services/harness-gateway/task-projector.mjs',
+  'services/harness-gateway/test/task-projector.test.mjs',
   'services/harness-gateway/plugins/ams-conversation-runner/**',
   'services/harness-gateway/plugins/ams-tools/index.mjs',
   'services/harness-gateway/profile/package.json',

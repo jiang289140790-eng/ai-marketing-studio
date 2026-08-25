@@ -911,7 +911,7 @@
   .conversation-connection { font-size: 0; }
   .conversation-connection i { width: 10px; height: 10px; }
   .conversation-workspace.has-conversation { height: calc(100dvh - 205px); min-height: 540px; border-radius: 0; border-inline: 0; }
-  .conversation-workspace.is-empty { min-height: calc(100dvh - 176px); border-radius: 0; border-inline: 0; }
+  .conversation-workspace.is-empty { min-height: calc(100dvh - 190px); border-radius: 0; border-inline: 0; }
   .conversation-quick-prompts { grid-template-columns: 1fr; margin-top: 20px; }
   .conversation-quick-prompts button:first-child { grid-column: auto; }
   .message-body, .conversation-card { max-width: 96%; }

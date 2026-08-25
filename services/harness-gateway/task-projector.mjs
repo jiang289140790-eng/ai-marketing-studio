@@ -13,6 +13,7 @@ function eventKey(event) {
 export function createTaskProjector({ callbackBase, secret, ackFile, fetchImpl = fetch, retryMs = 2_000 } = {}) {
   const pending = new Map();
   const acknowledged = new Set();
+  const bindings = new Map();
   let timer = null;
   let draining = false;
   if (ackFile && existsSync(ackFile)) {
@@ -35,7 +36,8 @@ export function createTaskProjector({ callbackBase, secret, ackFile, fetchImpl =
     draining = true;
     try {
       for (const [key, event] of pending) {
-        const rawBody = JSON.stringify({ schema_version: 1, event });
+        const binding = bindings.get(event.task_id) || null;
+        const rawBody = JSON.stringify({ schema_version: 1, binding, event });
         const timestamp = String(Date.now());
         const userId = event.user_id;
         const signature = signRequest(secret, { method: 'POST', path: CALLBACK_PATH, userId, timestamp, rawBody });
@@ -45,7 +47,15 @@ export function createTaskProjector({ callbackBase, secret, ackFile, fetchImpl =
             headers: { 'content-type': 'application/json', 'x-ams-user-id': userId, 'x-ams-timestamp': timestamp, 'x-ams-signature': signature },
             signal: AbortSignal.timeout(20_000),
           });
-          if (!response.ok) break;
+          if (!response.ok) {
+            const payload = await response.json?.().catch(() => null);
+            if (response.status === 409 && ['THREAD_NOT_BOUND', 'PROJECTION_BINDING_INVALID'].includes(payload?.code)) {
+              pending.delete(key);
+              acknowledge(key);
+              continue;
+            }
+            break;
+          }
           pending.delete(key);
           acknowledge(key);
         } catch { break; }
@@ -65,6 +75,25 @@ export function createTaskProjector({ callbackBase, secret, ackFile, fetchImpl =
     return true;
   };
 
+  const bindTask = (taskId, binding) => {
+    const normalized = {
+      user_id: String(binding?.user_id || ''),
+      thread_id: String(binding?.thread_id || ''),
+      task_id: String(taskId || ''),
+      project_id: binding?.project_id == null ? null : String(binding.project_id),
+    };
+    const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+    if (!new RegExp(`^ht-${uuid}$`).test(normalized.task_id)
+      || !new RegExp(`^${uuid}$`).test(normalized.user_id)
+      || !new RegExp(`^thr_${uuid}$`).test(normalized.thread_id)
+      || (normalized.project_id !== null && !/^prj-[0-9a-f]{24}$/.test(normalized.project_id))) return false;
+    const existing = bindings.get(normalized.task_id);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(normalized)) return false;
+    bindings.set(normalized.task_id, Object.freeze(normalized));
+    schedule();
+    return true;
+  };
+
   const close = () => { if (timer) clearTimeout(timer); timer = null; };
-  return Object.freeze({ enqueue, drain, close, pendingCount: () => pending.size });
+  return Object.freeze({ enqueue, bindTask, drain, close, pendingCount: () => pending.size });
 }

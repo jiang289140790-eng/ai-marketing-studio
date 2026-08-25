@@ -191,6 +191,57 @@ const WORKFLOW_DEFINITIONS = Object.freeze([
   }),
 
   Object.freeze({
+    id: 'inspect_private_attachments',
+    title: '验证并分析私有附件',
+    description: '验证当前任务绑定的私有图片、视频或文档，执行有界内容提取，并可保存为 Evidence、Analysis、Knowledge Card 与待审核 Brief。',
+    slots: Object.freeze({
+      persist: booleanSlot({ default: true, note: '保存经过服务端验证的附件 Evidence。' }),
+      analyze: booleanSlot({ default: true, note: '保存附件内容分析。' }),
+      card: booleanSlot({ default: true, note: '从附件分析生成知识卡。' }),
+      brief: booleanSlot({ default: false, note: '从知识卡生成待审核 Brief。' }),
+    }),
+    terminal_artifacts: Object.freeze(['evidence', 'analysis', 'card', 'brief']),
+    steps: Object.freeze([
+      Object.freeze(readStateStep()),
+      Object.freeze({
+        ...toolStep('inspect', '验证并理解附件', 'research.inspect_attachments', {
+          depends_on: Object.freeze(['read_state']),
+          terminal_artifact: 'analysis',
+          gate: null,
+        }),
+      }),
+      Object.freeze({
+        ...toolStep('save_evidence', '保存附件证据', 'workspace.evidence.create', {
+          depends_on: Object.freeze(['inspect']),
+          terminal_artifact: 'evidence',
+          gate: 'persist',
+        }),
+      }),
+      Object.freeze({
+        ...toolStep('save_analysis', '保存附件分析', 'workspace.analysis.create', {
+          depends_on: Object.freeze(['save_evidence']),
+          terminal_artifact: 'analysis',
+          gate: 'analyze',
+        }),
+      }),
+      Object.freeze({
+        ...toolStep('make_card', '生成附件知识卡', 'workspace.card.create', {
+          depends_on: Object.freeze(['save_analysis']),
+          terminal_artifact: 'card',
+          gate: 'card',
+        }),
+      }),
+      Object.freeze({
+        ...toolStep('assemble_brief', '生成待审核 Brief', 'workspace.brief.assemble', {
+          depends_on: Object.freeze(['make_card']),
+          terminal_artifact: 'brief',
+          gate: 'brief',
+        }),
+      }),
+    ]),
+  }),
+
+  Object.freeze({
     id: 'search_x',
     title: '搜索 X 热门主题',
     description: '按关键词搜索 X 公开内容，可选把搜索到的前 N 条保存为证据。',

@@ -329,6 +329,77 @@ export async function toP19EvidenceInput(item) {
   };
 }
 
+export async function toP19AttachmentEvidenceInput(item) {
+  const provenance = item?.provenance || {};
+  if (String(item?.platform || '') !== 'private_attachment') {
+    throw safeError('H5_ATTACHMENT_EVIDENCE_INVALID', 'Attachment evidence platform is invalid.');
+  }
+  const contentText = requireText(item?.content_text, 'attachment extracted content', 5000);
+  const contentSha256 = String(item?.content_sha256 || '').toLowerCase();
+  if (!SHA256_PATTERN.test(contentSha256) || await sha256Hex(contentText) !== contentSha256) {
+    throw safeError('H5_ATTACHMENT_HASH_MISMATCH', 'Attachment evidence content hash is invalid.');
+  }
+  const bindings = Array.isArray(provenance.object_bindings) ? provenance.object_bindings : [];
+  if (bindings.length < 1 || bindings.length > 10) {
+    throw safeError('H5_ATTACHMENT_BINDING_INVALID', 'Attachment evidence object bindings are invalid.');
+  }
+  const seen = new Set();
+  for (const binding of bindings) {
+    const ref = String(binding?.ref || '');
+    if (!/^harness-thread-attachments:[^\s]{1,900}$/.test(ref) || seen.has(ref)
+      || typeof binding?.name !== 'string' || !binding.name.trim() || binding.name.length > 200
+      || !Number.isSafeInteger(binding?.size) || binding.size < 1 || binding.size > 25 * 1024 * 1024
+      || typeof binding?.mime_type !== 'string' || !binding.mime_type.trim() || binding.mime_type.length > 120
+      || !SHA256_PATTERN.test(String(binding?.sha256 || ''))) {
+      throw safeError('H5_ATTACHMENT_BINDING_INVALID', 'Attachment evidence contains a missing, duplicate, or malformed object binding.');
+    }
+    seen.add(ref);
+  }
+  const sourceUrl = requireText(item?.source_url, 'attachment source URL', 1000);
+  const collectedAt = requireText(provenance.collected_at, 'attachment verification time', 80);
+  const runId = requireText(provenance.run_id, 'attachment task identity', 200);
+  const threadId = requireText(provenance.thread_id, 'attachment thread identity', 200);
+  const sourceId = requireText(item?.id, 'attachment source identity', 160);
+  return {
+    source_url: sourceUrl,
+    label: String(item.label || `Private attachments (${bindings.length})`).slice(0, 200),
+    platform: 'Private attachment (verified)',
+    content_text: contentText,
+    recorded_at: collectedAt,
+    provenance: {
+      schema_version: 'h5_verified_attachment_provenance_v1',
+      manual: false,
+      method: 'verified_private_attachment',
+      provider: 'supabase-storage+dashscope',
+      source_platform: 'private_attachment',
+      source_id: sourceId,
+      source_url: sourceUrl,
+      run_id: runId,
+      thread_id: threadId,
+      collected_at: collectedAt,
+      usage_total_usd: Number(provenance.usage_total_usd || 0),
+      budget_reservation_id: requireText(provenance.budget_reservation_id, 'attachment reservation identity', 80),
+      content_sha256: contentSha256,
+      collection_proof: requireText(item.collection_proof, 'attachment verification proof', 256),
+      object_bindings: bindings.map((binding) => ({
+        ref: binding.ref,
+        name: binding.name,
+        size: binding.size,
+        mime_type: binding.mime_type,
+        sha256: binding.sha256,
+      })),
+      statement: 'Private attachments were verified against authenticated Storage objects and analyzed through the bounded H5 server pipeline.',
+    },
+    media_metadata: {
+      filename: `h5-${sourceId}.txt`,
+      mime_type: 'text/plain; charset=utf-8',
+      byte_size: new globalThis.TextEncoder().encode(contentText).byteLength,
+      last_modified: collectedAt,
+      sha256: contentSha256,
+    },
+  };
+}
+
 // ---- P32-B 批量导入：搜索批次重验证（前端工作区层面的原子门禁）----
 
 /**

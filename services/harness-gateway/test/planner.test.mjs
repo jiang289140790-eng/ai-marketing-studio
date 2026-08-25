@@ -42,6 +42,32 @@ test('unknown or ambiguous intents fail closed', () => {
   assert.equal(classifyIntent('x'.repeat(12_001)).code, 'PLANNER_INTENT_INVALID');
 });
 
+test('private attachments force the verified attachment workflow and bind one exact user/thread set', async () => {
+  const userId = '11111111-1111-4111-8111-111111111111';
+  const threadId = 'thr_22222222-2222-4222-8222-222222222222';
+  const attachments = [{
+    ref: `harness-thread-attachments:${userId}/${threadId}/req-1/photo.png`,
+    name: 'photo.png', size: 128, mime_type: 'image/png',
+  }];
+  const planner = createPlanner({ modelPlanner: async () => { throw new Error('must not run'); } });
+  const verdict = await planner.plan({ taskId: TASK_ID, request: request('请理解附件并生成知识卡', { user_id: userId, attachments }) });
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.value.workflow, 'inspect_private_attachments');
+  assert.deepEqual(verdict.value.attachments, attachments);
+  assert.deepEqual(verdict.value.steps.map((step) => step.operation), [
+    'workspace.project.read', 'research.inspect_attachments', 'workspace.evidence.create',
+    'workspace.analysis.create', 'workspace.card.create',
+  ]);
+  assert.equal(verdict.value.approvals.paid_external_calls, true);
+  assert.equal(verdict.value.approvals.online_writes, true);
+
+  const foreign = globalThis.structuredClone(attachments);
+  foreign[0].ref = `harness-thread-attachments:33333333-3333-4333-8333-333333333333/${threadId}/req-1/photo.png`;
+  const denied = await planner.plan({ taskId: TASK_ID, request: request('理解附件', { user_id: userId, attachments: foreign }) });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.code, 'PLAN_ATTACHMENT_INVALID');
+});
+
 test('Chinese highest-metric intents select compare_project with the exact metric', () => {
   const cases = [
     ['你能分析下近期展现量最高的X帖子吗', 'views'],

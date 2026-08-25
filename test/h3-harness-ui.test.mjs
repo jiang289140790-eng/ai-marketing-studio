@@ -61,6 +61,38 @@ test('attachment upload uses the private thread-owned bucket path', async () => 
   assert.equal(uploads[0].options.upsert, false);
 });
 
+test('attachment preview uses a short-lived authenticated URL and rejects foreign object paths', async () => {
+  const signed = [];
+  const client = authenticatedClient(async () => ({ data: { ok: true }, error: null }));
+  client.storage.from = (bucket) => ({
+    createSignedUrl: async (path, expiresIn, options) => {
+      signed.push({ bucket, path, expiresIn, options });
+      return { data: { signedUrl: 'https://staging.example.test/signed/private-object' }, error: null };
+    },
+  });
+  const harness = createHarnessClient({ client });
+  const ref = `harness-thread-attachments:user-1/${threadId}/request-1/source.png`;
+  assert.deepEqual(await harness.createAttachmentPreview({ ref, name: 'source.png' }), {
+    signedUrl: 'https://staging.example.test/signed/private-object',
+    expiresIn: 300,
+  });
+  assert.deepEqual(signed[0], {
+    bucket: 'harness-thread-attachments',
+    path: `user-1/${threadId}/request-1/source.png`,
+    expiresIn: 300,
+    options: undefined,
+  });
+  await assert.rejects(
+    harness.createAttachmentPreview({ ref: `harness-thread-attachments:other-user/${threadId}/request-1/source.png` }),
+    (error) => error.code === 'ATTACHMENT_BINDING_MISMATCH',
+  );
+  await assert.rejects(
+    harness.createAttachmentPreview({ ref: 'harness-thread-attachments:user-1/../source.png' }),
+    (error) => error.code === 'ATTACHMENT_REF_INVALID',
+  );
+  assert.equal(signed.length, 1);
+});
+
 test('SSE client replays from cursor and advances only from server event ids', async () => {
   const encoder = new TextEncoder();
   let calls = 0;
@@ -141,4 +173,17 @@ test('task results bind generation job identity to signed preview, download, and
   assert.match(page, /data-testid="ai-task-generation-preview"/);
   assert.match(page, /GenerationArtifactViewer/);
   assert.match(page, /artifacts=\{generationJob\.artifacts \|\| \[\]\}/);
+});
+
+test('task results recover verified private attachments and create a guarded Brief reassembly plan', async () => {
+  const page = await readFile(new globalThis.URL('../src/pages/TaskResultsPage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /result_data\?\.attachment_pipeline/);
+  assert.match(page, /createAttachmentPreview\(\{ ref: binding\.ref, name: binding\.name \}\)/);
+  assert.match(page, /createAttachmentPreview\(\{ ref: binding\.ref, name: binding\.name, download: true \}\)/);
+  assert.match(page, /data-testid="ai-task-attachment-preview"/);
+  assert.match(page, /attachmentPipeline\.analysis\.result/);
+  assert.match(page, /intent: '重新组装当前项目的待审核 Brief'/);
+  assert.match(page, /newHarnessRequestId\(\)/);
+  assert.match(page, /onNavigate\?\.\('ai-execution', nextTaskId\)/);
+  assert.match(page, /旧版本会保留/);
 });

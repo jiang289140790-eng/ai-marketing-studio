@@ -385,6 +385,95 @@
   margin-top: 0;
 }
 
+.ai-attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.ai-attachment-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ai-line);
+  border-radius: 12px;
+  background: rgba(5, 14, 30, .55);
+}
+
+.ai-attachment-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.ai-attachment-card-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-attachment-card-head strong,
+.ai-attachment-card-head small,
+.ai-attachment-card code {
+  overflow-wrap: anywhere;
+}
+
+.ai-attachment-card-head small,
+.ai-attachment-card code {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-attachment-media,
+.ai-attachment-document {
+  display: block;
+  width: 100%;
+  max-height: 440px;
+  border: 0;
+  border-radius: 10px;
+  background: #050b16;
+  object-fit: contain;
+}
+
+.ai-attachment-document {
+  min-height: 360px;
+}
+
+.ai-attachment-open {
+  justify-self: start;
+}
+
+.ai-result-copy pre {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #b9c8dd;
+  font: inherit;
+}
+
+.ai-brief-reassemble {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ai-line);
+}
+
+.ai-brief-reassemble p {
+  flex: 1 1 420px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-brief-reassemble .notice {
+  flex-basis: 100%;
+}
+
 /* 工具调用（真实服务端 tool_calls 记录；缺失显示明确空态） */
 .ai-tool-calls {
   list-style: none;

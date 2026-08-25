@@ -74,8 +74,11 @@ test('both profile layers fail closed before importing subprocess/node-pty', asy
   }
 });
 
-test('persistent profile version advances for the corrected loader tree', async () => {
-  assert.match(await text('init-profile.mjs'), /const version = 'ams-profile-v12';/);
+test('persistent profile version advances for the agent-first conversation tool catalog', async () => {
+  const init = await text('init-profile.mjs');
+  const plugin = await text('plugins/ams-tools/index.mjs');
+  assert.match(plugin, /name: 'ams_request_plan'/);
+  assert.match(init, /const version = 'ams-profile-v13';/);
 });
 
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {

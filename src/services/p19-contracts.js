@@ -82,6 +82,7 @@ export const ISO8601_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?
 export const PROJECT_SCHEMA_VERSION = 'p19_research_project_v1';
 export const EVIDENCE_SCHEMA_VERSION = 'p19_evidence_record_v1';
 export const P22_EVIDENCE_PROVENANCE_SCHEMA_VERSION = 'p22_apify_evidence_provenance_v1';
+export const H5_ATTACHMENT_PROVENANCE_SCHEMA_VERSION = 'h5_verified_attachment_provenance_v1';
 export const ANALYSIS_SCHEMA_VERSION = 'p19_analysis_v1';
 export const KNOWLEDGE_CARD_SCHEMA_VERSION = 'content_knowledge_card_v1';
 export const BRIEF_SCHEMA_VERSION = 'ams_content_brief_v1';
@@ -705,6 +706,44 @@ export function validateEvidenceRecord(record) {
     if (typeof record.provenance.statement !== 'string') issue(issues, '证据来源 statement 必须是字符串。');
   } else if (record.provenance.manual === false) {
     const provenance = record.provenance;
+    if (provenance.schema_version === H5_ATTACHMENT_PROVENANCE_SCHEMA_VERSION) {
+      const allowed = [
+        'schema_version','manual','method','provider','source_platform','source_id',
+        'source_url','run_id','thread_id','collected_at','usage_total_usd',
+        'budget_reservation_id','content_sha256','collection_proof','object_bindings','statement',
+      ];
+      if (Object.keys(provenance).some((key) => !allowed.includes(key))) issue(issues, 'H5 attachment provenance contains an unknown field.');
+      if (provenance.method !== 'verified_private_attachment') issue(issues, 'H5 attachment provenance method is invalid.');
+      if (provenance.provider !== 'supabase-storage+dashscope') issue(issues, 'H5 attachment provenance provider is invalid.');
+      if (provenance.source_platform !== 'private_attachment') issue(issues, 'H5 attachment source platform is invalid.');
+      if (!isNonEmptyString(provenance.source_id) || !/^h5-att-[0-9a-f]{24}$/.test(provenance.source_id)) issue(issues, 'H5 attachment source identity is invalid.');
+      if (provenance.source_url !== record.source_url) issue(issues, 'H5 attachment source URL does not match the evidence record.');
+      if (!isNonEmptyString(provenance.run_id) || !/^ht-[0-9a-f-]{36}$/.test(provenance.run_id)) issue(issues, 'H5 attachment task identity is invalid.');
+      if (!isNonEmptyString(provenance.thread_id) || !/^thr_[0-9a-f-]{36}$/.test(provenance.thread_id)) issue(issues, 'H5 attachment thread identity is invalid.');
+      if (!isNonEmptyString(provenance.collected_at) || provenance.collected_at !== record.recorded_at || !ISO8601_PATTERN.test(provenance.collected_at)) issue(issues, 'H5 attachment verification time is invalid.');
+      if (!Number.isFinite(provenance.usage_total_usd) || provenance.usage_total_usd < 0 || provenance.usage_total_usd > 10) issue(issues, 'H5 attachment model usage is invalid.');
+      if (typeof provenance.budget_reservation_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(provenance.budget_reservation_id)) issue(issues, 'H5 attachment reservation identity is invalid.');
+      if (typeof provenance.content_sha256 !== 'string' || !SHA256_PATTERN.test(provenance.content_sha256)) issue(issues, 'H5 attachment evidence SHA-256 is invalid.');
+      if (typeof provenance.collection_proof !== 'string' || !/^\d{10}\.[0-9a-f]{64}$/i.test(provenance.collection_proof)) issue(issues, 'H5 attachment verification proof is invalid.');
+      if (!isNonEmptyString(provenance.statement) || provenance.statement.length > 500) issue(issues, 'H5 attachment provenance statement is invalid.');
+      if (!Array.isArray(provenance.object_bindings) || provenance.object_bindings.length < 1 || provenance.object_bindings.length > 10) {
+        issue(issues, 'H5 attachment object bindings must contain 1..10 records.');
+      } else {
+        const refs = new Set();
+        provenance.object_bindings.forEach((binding, index) => {
+          if (!isPlainObject(binding)) { issue(issues, `H5 attachment binding #${index + 1} is invalid.`); return; }
+          const keys = Object.keys(binding);
+          if (keys.some((key) => !['ref','name','size','mime_type','sha256'].includes(key))) issue(issues, `H5 attachment binding #${index + 1} contains an unknown field.`);
+          if (!isNonEmptyString(binding.ref) || !/^harness-thread-attachments:[^\s]{1,900}$/.test(binding.ref)) issue(issues, `H5 attachment binding #${index + 1} ref is invalid.`);
+          if (refs.has(binding.ref)) issue(issues, `H5 attachment binding #${index + 1} is duplicated.`);
+          refs.add(binding.ref);
+          if (!isNonEmptyString(binding.name) || binding.name.length > 200) issue(issues, `H5 attachment binding #${index + 1} name is invalid.`);
+          if (!Number.isSafeInteger(binding.size) || binding.size < 1 || binding.size > 25 * 1024 * 1024) issue(issues, `H5 attachment binding #${index + 1} size is invalid.`);
+          if (!isNonEmptyString(binding.mime_type) || binding.mime_type.length > 120) issue(issues, `H5 attachment binding #${index + 1} MIME is invalid.`);
+          if (typeof binding.sha256 !== 'string' || !SHA256_PATTERN.test(binding.sha256)) issue(issues, `H5 attachment binding #${index + 1} SHA-256 is invalid.`);
+        });
+      }
+    } else {
     const allowed = [
       'schema_version','manual','method','provider','source_platform','source_id','external_id',
       'source_url','run_id','collected_at','usage_total_usd','budget_reservation_id',
@@ -728,6 +767,7 @@ export function validateEvidenceRecord(record) {
     if (typeof provenance.content_sha256 !== 'string' || !SHA256_PATTERN.test(provenance.content_sha256)) issue(issues, 'P22 正文 SHA-256 无效。');
     if (typeof provenance.collection_proof !== 'string' || !/^\d{10}\.[0-9a-f]{64}$/i.test(provenance.collection_proof)) issue(issues, 'P22 服务端来源证明无效。');
     if (!isNonEmptyString(provenance.statement) || provenance.statement.length > 500) issue(issues, 'P22 来源说明缺失或超长。');
+    }
   } else {
     issue(issues, '证据来源 manual 必须是严格布尔值。');
   }

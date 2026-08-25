@@ -21,6 +21,27 @@ export function classifyDeliveryResponse(status, payload) {
   return 'confirmation_unknown';
 }
 
+const BOUNDED_GATEWAY_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+const BOUNDED_GATEWAY_FIELD = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+
+export function classifyPlanRejection(status, payload) {
+  const code = BOUNDED_GATEWAY_CODE.test(String(payload?.code || ''))
+    ? String(payload.code)
+    : 'GATEWAY_PLAN_REJECTED';
+  const candidateField = payload?.diagnostics?.field ?? payload?.field ?? null;
+  const field = candidateField != null && BOUNDED_GATEWAY_FIELD.test(String(candidateField))
+    ? String(candidateField)
+    : null;
+  return Object.freeze({
+    code,
+    diagnostics: Object.freeze({
+      stage: 'gateway_plan',
+      field,
+      status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+    }),
+  });
+}
+
 export function isOrdinaryConversationIntent(content) {
   const normalized = String(content || '').trim().replace(/[？?。!！]+$/u, '');
   if (!normalized) return false;

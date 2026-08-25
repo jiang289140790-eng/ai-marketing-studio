@@ -121,6 +121,13 @@ const conversationDeliveries = createConversationDeliveryQueue({
     intent: proposal.intent,
   }),
   onEvent: (event) => {
+    if (event.event_type === 'agent_plan_created' && event.payload?.task?.id) {
+      taskProjector.bindTask(event.payload.task.id, {
+        user_id: event.user_id,
+        thread_id: event.thread_id,
+        project_id: event.payload.task.request?.project_id ?? null,
+      });
+    }
     appendConversationEvent(CONVERSATION_EVENT_FILE, event);
     conversationProjector.enqueue(event);
   },

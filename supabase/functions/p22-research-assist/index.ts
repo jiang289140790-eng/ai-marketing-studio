@@ -16,6 +16,7 @@ function headers(request: Request) {
 }
 function respond(request: Request, body: unknown, status=200) { return new Response(JSON.stringify(body), {status, headers:headers(request)}); }
 async function sha256(value: string) { const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)); return [...new Uint8Array(bytes)].map((b)=>b.toString(16).padStart(2,'0')).join(''); }
+async function sha256Bytes(value: Uint8Array) { const owned=new Uint8Array(value.byteLength); owned.set(value); const bytes=await crypto.subtle.digest('SHA-256',owned.buffer); return [...new Uint8Array(bytes)].map((b)=>b.toString(16).padStart(2,'0')).join(''); }
 function canonicalJson(value: unknown, depth=0, state={nodes:0}): string {
   state.nodes+=1;
   if(state.nodes>4096||depth>16) throw new P22Error('REQUEST_CANONICALIZATION_FAILED','Request cannot be safely canonicalized.',400);
@@ -154,6 +155,108 @@ async function collect(db, userId: string, input, proofSecret: string) {
   finally { clearTimeout(timer); }
 }
 
+function attachmentObjectPath(ref: string) {
+  const prefix='harness-thread-attachments:';
+  if(!ref.startsWith(prefix)) throw new P22Error('ATTACHMENT_BINDING_INVALID','附件来源绑定无效。',400,{field:'attachments.ref'});
+  return {bucket:'harness-thread-attachments',path:ref.slice(prefix.length)};
+}
+
+async function extractPdfText(bytes: Uint8Array) {
+  if(bytes.byteLength>8*1024*1024) throw new P22Error('ATTACHMENT_PDF_TOO_LARGE','PDF 超过可解析上限。',413,{field:'attachments.size'});
+  try {
+    const pdfjsSpecifier='npm:pdfjs-dist@4.10.38/legacy/build/pdf.mjs';
+    const pdfjs=await import(pdfjsSpecifier);
+    const document=await pdfjs.getDocument({data:bytes,disableWorker:true,useWorkerFetch:false,isEvalSupported:false}).promise;
+    if(!Number.isInteger(document.numPages)||document.numPages<1||document.numPages>50) throw new P22Error('ATTACHMENT_PDF_PAGE_LIMIT','PDF 页数超过上限。',413,{field:'attachments.pages'});
+    const pages=[];
+    for(let pageNumber=1;pageNumber<=document.numPages;pageNumber+=1) {
+      const page=await document.getPage(pageNumber);
+      const content=await page.getTextContent();
+      pages.push(content.items.map((item)=>typeof item?.str==='string'?item.str:'').filter(Boolean).join(' '));
+      if(pages.join('\n').length>65536) throw new P22Error('ATTACHMENT_TEXT_TOO_LARGE','PDF 提取文本超过上限。',413,{field:'attachments.text'});
+    }
+    return pages.join('\n').trim();
+  } catch(error) {
+    if(error instanceof P22Error) throw error;
+    throw new P22Error('ATTACHMENT_PDF_INVALID','PDF 无法安全解析。',422,{field:'attachments'});
+  }
+}
+
+async function inspectAttachments(db,userId:string,input,proofSecret:string) {
+  const [{data:taskThread,error:taskError},{data:thread,error:threadError}]=await Promise.all([
+    db.schema('api').rpc('harness_get_thread_by_task_v1',{p_user_id:userId,p_task_id:input.harness_task_id}),
+    db.schema('api').rpc('harness_get_thread_v1',{p_user_id:userId,p_thread_id:input.thread_id}),
+  ]);
+  if(taskError||threadError||taskThread?.threadId!==input.thread_id||taskThread?.currentTaskId!==input.harness_task_id
+    ||thread?.thread?.id!==input.thread_id||thread?.thread?.projectId!==input.project_id) {
+    throw new P22Error('ATTACHMENT_TASK_BINDING_INVALID','附件、会话、任务或项目绑定不一致。',409,{field:'thread_id'});
+  }
+  const verified=[]; const media=[]; const extracted=[];
+  for(const [index,attachment] of input.attachments.entries()) {
+    const expectedPrefix=`${userId}/${input.thread_id}/`;
+    const object=attachmentObjectPath(attachment.ref);
+    if(!object.path.startsWith(expectedPrefix)) throw new P22Error('ATTACHMENT_OWNER_MISMATCH','附件不属于当前用户和会话。',403,{field:`attachments.${index}.ref`});
+    const {data:blob,error}=await db.storage.from(object.bucket).download(object.path);
+    if(error||!blob) throw new P22Error('ATTACHMENT_OBJECT_UNAVAILABLE','附件对象无法读取。',404,{field:`attachments.${index}.ref`});
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    if(bytes.byteLength!==attachment.size) throw new P22Error('ATTACHMENT_SIZE_MISMATCH','附件实际大小与声明不一致。',409,{field:`attachments.${index}.size`});
+    const observedType=String(blob.type||'').toLowerCase();
+    if(observedType!==attachment.mime_type) throw new P22Error('ATTACHMENT_MIME_MISMATCH','附件实际类型与声明不一致。',409,{field:`attachments.${index}.mime_type`});
+    const digest=await sha256Bytes(bytes);
+    verified.push({...attachment,sha256:digest});
+    if(/^(text\/|application\/json)/.test(attachment.mime_type)) {
+      if(bytes.byteLength>65536) throw new P22Error('ATTACHMENT_TEXT_TOO_LARGE','文本附件超过提取上限。',413,{field:`attachments.${index}.size`});
+      let value='';
+      try { value=new TextDecoder('utf-8',{fatal:true}).decode(bytes); } catch { throw new P22Error('ATTACHMENT_TEXT_INVALID','文本附件不是有效 UTF-8。',422,{field:`attachments.${index}`}); }
+      extracted.push({name:attachment.name,text:value.trim().slice(0,65536)});
+    } else if(attachment.mime_type==='application/pdf') {
+      extracted.push({name:attachment.name,text:await extractPdfText(bytes)});
+    } else {
+      const {data:signed,error:signedError}=await db.storage.from(object.bucket).createSignedUrl(object.path,300);
+      if(signedError||!signed?.signedUrl) throw new P22Error('ATTACHMENT_SIGNING_FAILED','附件无法创建有界分析地址。',503,{field:`attachments.${index}.ref`});
+      media.push({id:`m-${(await sha256(`${attachment.ref}\n${digest}`)).slice(0,24)}`,kind:attachment.mime_type.startsWith('image/')?'image':'video',url:signed.signedUrl,name:attachment.name});
+    }
+  }
+  const stableObjects=verified.map(({ref,name,size,mime_type,sha256})=>({ref,name,size,mime_type,sha256}));
+  const sourceDigest=await sha256(canonicalJson({project_id:input.project_id,thread_id:input.thread_id,objects:stableObjects}));
+  const sourceId=`h5-att-${sourceDigest.slice(0,24)}`;
+  const baseText=[`Verified private attachment bundle (${stableObjects.length} files).`,...extracted.map((entry)=>`[${entry.name}]\n${entry.text}`)].join('\n\n').slice(0,65536);
+  const firstObject=attachmentObjectPath(stableObjects[0].ref);
+  const sourceUrl=`${Deno.env.get('SUPABASE_URL')}/storage/v1/object/authenticated/${firstObject.bucket}/${firstObject.path.split('/').map(encodeURIComponent).join('/')}`;
+  const modelItem={id:sourceId,source_url:sourceUrl,content_text:baseText||'Verified visual attachment bundle.',content_sha256:await sha256(baseText||'Verified visual attachment bundle.'),media_assets:media.map((entry)=>({id:entry.id,kind:entry.kind,media_url:entry.url}))};
+  const key=Deno.env.get('DASHSCOPE_API_KEY');
+  if(!key) throw new P22Error('QWEN_NOT_CONFIGURED','Qwen 尚未配置。',503);
+  const requestBinding={action:input.action,project_id:input.project_id,thread_id:input.thread_id,harness_task_id:input.harness_task_id,attachments:stableObjects};
+  const costRecord=await recordProviderCost(db,userId,'qwen',input.action,P22_LIMITS.qwen_reservation_cny,input.idempotency_key,0,requestBinding);
+  const prompt=[
+    'You are a read-only private attachment research analyst. Return strict JSON only.',
+    `Return {"analyses":[{"source_id":"${sourceId}","text_expression":"...","hook":"...","copy_pattern":"...","target_audience":"...","audience_need_emotion":"...","media_analysis":[${media.map((entry)=>`{"media_id":"${entry.id}","visual_content":"...","composition":"...","people":"...","scene":"...","emotion":"...","visual_selling_points":["..."],"style_pattern":"..."}`).join(',')}],"virality_drivers":["..."],"reusable_methods":["..."],"rewrite_suggestions":["..."],"signals":["..."],"risks":["..."]}]}.`,
+    'Bind every media_id exactly once in the supplied order. Analyze only supplied verified content. Do not invent facts, publish, route, or generate final marketing assets.',
+    `Verified filenames and extracted text:\n${baseText.slice(0,48000)}`,
+  ].join('\n');
+  const parts:any[]=[{type:'text',text:prompt}];
+  for(const entry of media) parts.push(entry.kind==='image'?{type:'image_url',image_url:{url:entry.url}}:{type:'video_url',video_url:{url:entry.url}});
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),120000);
+  try {
+    const model=media.length?'qwen3.5-omni-flash':'qwen-plus';
+    const response=await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model,temperature:0.2,max_tokens:2600,response_format:{type:'json_object'},messages:[{role:'user',content:media.length?parts:prompt}]}),signal:controller.signal});
+    if(!response.ok) throw new P22Error('QWEN_REQUEST_FAILED','附件分析失败。',502);
+    const payload=await response.json(); const totalTokens=Number(payload?.usage?.total_tokens);
+    if(!Number.isFinite(totalTokens)||totalTokens<=0) throw new P22Error('QWEN_COST_UNVERIFIABLE','无法验证附件分析用量。',502);
+    const parsed=(media.length?parseQwenMultimodalAnalyses(payload,[modelItem]):parseQwenAnalyses(payload,[modelItem]))[0];
+    const executedAt=new Date().toISOString();
+    const persistedText=[baseText.slice(0,2500),`Model analysis (${model}):`,JSON.stringify(parsed)].join('\n\n').slice(0,P22_LIMITS.persist_text);
+    const item:any={
+      id:sourceId,source_url:sourceUrl,label:`Private attachments (${stableObjects.length})`,platform:'private_attachment',external_id:sourceId,
+      content_text:persistedText,content_sha256:await sha256(persistedText),
+      provenance:{schema_version:'h5_verified_attachment_provenance_v1',provider:'supabase-storage+dashscope',run_id:input.harness_task_id,thread_id:input.thread_id,collected_at:executedAt,usage_total_usd:0,budget_reservation_id:costRecord.reservation_id,object_bindings:stableObjects},
+    };
+    item.collection_proof=await issueCollectionProof(proofSecret,userId,item);
+    return {items:[item],analyses:[{...parsed,model,executed_at:executedAt,usage:{total_tokens:totalTokens},cost:{recorded_cny:P22_LIMITS.qwen_reservation_cny,reservation_id:costRecord.reservation_id}}],usage:{total_tokens:totalTokens},cost:{recorded_cny:P22_LIMITS.qwen_reservation_cny,tracking:costRecord}};
+  } catch(error) { if(error?.name==='AbortError') throw new P22Error('QWEN_TIMEOUT','附件分析超时。',504); throw error; }
+  finally { clearTimeout(timer); }
+}
+
 async function analyze(db,userId:string,items,proofSecret:string,{persisted=false,idempotencyKey=null,operation='analyze',requestBinding={action:operation,items}}:{persisted?:boolean,idempotencyKey?:string|null,operation?:string,requestBinding?:unknown}={}) {
   // 按媒体分组调用模型：带媒体来源 → qwen3.5-omni-flash 多模态契约（逐媒体绑定，
   // 绝不静默回退到纯文本分析）；纯文本来源 → 既有 qwen-plus 文本契约。
@@ -253,13 +356,14 @@ Deno.serve(async (request)=>{
     if(!['operator','admin'].includes(role)) throw new P22Error('OPERATOR_REQUIRED','智能研究仅向 operator 开放。',403);
     const result=(input.action==='collect'||input.action==='collect_url'||input.action==='search'||input.action==='search_reddit')
       ? await collect(db,userId,input,proofSecret)
-      : input.action==='analyze_persisted' ? await analyzePersisted(db,userId,input,proofSecret)
+      : input.action==='inspect_attachments' ? await inspectAttachments(db,userId,input,proofSecret)
+        : input.action==='analyze_persisted' ? await analyzePersisted(db,userId,input,proofSecret)
         : input.action==='generate_similar' ? await generateSimilar(db,userId,input)
           : await analyze(db,userId,input.items,proofSecret,{idempotencyKey:input.idempotency_key,operation:input.action,requestBinding:input});
     return respond(request,{ok:true,schema_version:P22_SCHEMA_VERSION,action:input.action,...result,execution_flags:P22_EXECUTION_FLAGS});
   } catch(error) {
     const safe=publicError(error);
     console.error(JSON.stringify({event:'p22_research_assist_failure',code:safe.code,status:safe.status,details:safe.details}));
-    return respond(request,{ok:false,code:safe.code,message:safe.message,details:safe.details,execution_flags:P22_EXECUTION_FLAGS},safe.status);
+    return respond(request,{ok:false,code:safe.code,message:safe.message,details:safe.details,...(safe.diagnostics?{diagnostics:safe.diagnostics}:{}),execution_flags:P22_EXECUTION_FLAGS},safe.status);
   }
 });

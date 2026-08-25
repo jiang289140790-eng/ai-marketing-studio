@@ -21,7 +21,7 @@
 // value is never forwarded to the client.
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import { p22ItemFromEvidence, toP19EvidenceInput } from '../../src/services/p22-research-assist.js';
+import { p22ItemFromEvidence, toP19AttachmentEvidenceInput, toP19EvidenceInput } from '../../src/services/p22-research-assist.js';
 import { ANALYSIS_ENGINE_VERSION, deriveHandoffPackage, runDeterministicRules } from '../../src/services/p19-workspace-service.js';
 import {
   ANALYSIS_KIND,
@@ -153,6 +153,111 @@ function boundedError(code, message, diagnostics = {}) {
 
 function plainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+const SAFE_DIAGNOSTIC_TYPES = new Set(['array', 'null', 'object', 'string', 'number', 'boolean', 'undefined', 'function', 'bigint', 'symbol']);
+const SAFE_JSON_ROOT_KEYS = new Set(['analyses']);
+const SAFE_ANALYSIS_KEYS = new Set([
+  'source_id', 'text_expression', 'hook', 'copy_pattern', 'target_audience', 'audience_need_emotion',
+  'media_analysis', 'virality_drivers', 'reusable_methods', 'rewrite_suggestions', 'signals', 'risks',
+]);
+const SAFE_MEDIA_KEYS = new Set([
+  'media_id', 'visual_content', 'composition', 'people', 'scene', 'emotion', 'visual_selling_points', 'style_pattern',
+]);
+
+function boundedDiagnosticCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 1_000_000_000) : null;
+}
+
+function boundedDiagnosticType(value) {
+  const text = bounded(value, 24);
+  return SAFE_DIAGNOSTIC_TYPES.has(text) ? text : 'unknown';
+}
+
+function boundedDiagnosticKey(value, allowlist = null) {
+  const text = bounded(value, 64);
+  if (allowlist && !allowlist.has(text)) return '<unrecognized-key>';
+  return /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(text) || text === '<nonstandard-key>'
+    ? text
+    : '<nonstandard-key>';
+}
+
+function boundedDiagnosticKeys(value, limit, allowlist = null) {
+  return Array.isArray(value) ? value.slice(0, limit).map((key) => boundedDiagnosticKey(key, allowlist)) : [];
+}
+
+function boundedDiagnosticFieldTypes(value, limit, allowlist = null) {
+  if (!plainObject(value)) return {};
+  return Object.fromEntries(Object.entries(value).slice(0, limit).map(([key, type]) => [
+    boundedDiagnosticKey(key, allowlist),
+    boundedDiagnosticType(type),
+  ]));
+}
+
+function boundedDiagnosticMediaRow(value) {
+  if (!plainObject(value)) return null;
+  return {
+    row_type: boundedDiagnosticType(value.row_type),
+    keys: boundedDiagnosticKeys(value.keys, 16, SAFE_MEDIA_KEYS),
+    field_types: boundedDiagnosticFieldTypes(value.field_types, 16, SAFE_MEDIA_KEYS),
+  };
+}
+
+function boundedDiagnosticAnalysisRow(value) {
+  if (!plainObject(value)) return null;
+  return {
+    row_type: boundedDiagnosticType(value.row_type),
+    keys: boundedDiagnosticKeys(value.keys, 24, SAFE_ANALYSIS_KEYS),
+    field_types: boundedDiagnosticFieldTypes(value.field_types, 24, SAFE_ANALYSIS_KEYS),
+    media_count: boundedDiagnosticCount(value.media_count),
+    media_rows: Array.isArray(value.media_rows)
+      ? value.media_rows.slice(0, 8).map(boundedDiagnosticMediaRow).filter(Boolean)
+      : [],
+  };
+}
+
+function boundedResponseShape(value) {
+  if (!plainObject(value)) return null;
+  return {
+    root_type: boundedDiagnosticType(value.root_type),
+    known_root_keys: Array.isArray(value.known_root_keys)
+      ? value.known_root_keys.filter((key) => ['choices', 'output', 'usage'].includes(key)).slice(0, 3)
+      : [],
+    compatible_choice_count: boundedDiagnosticCount(value.compatible_choice_count),
+    native_choice_count: boundedDiagnosticCount(value.native_choice_count),
+    content_type: boundedDiagnosticType(value.content_type),
+    content_length: boundedDiagnosticCount(value.content_length),
+    content_part_count: boundedDiagnosticCount(value.content_part_count),
+    content_parts: Array.isArray(value.content_parts) ? value.content_parts.slice(0, 8).map((part) => ({
+      part_type: ['text', 'output_text', 'other'].includes(part?.part_type) ? part.part_type : null,
+      value_type: boundedDiagnosticType(part?.value_type),
+      text_type: boundedDiagnosticType(part?.text_type),
+      text_length: boundedDiagnosticCount(part?.text_length),
+    })) : [],
+    json_root_type: value.json_root_type == null ? null : boundedDiagnosticType(value.json_root_type),
+    ...(Array.isArray(value.json_root_keys) ? { json_root_keys: boundedDiagnosticKeys(value.json_root_keys, 24, SAFE_JSON_ROOT_KEYS) } : {}),
+    ...(value.analyses_type != null ? { analyses_type: boundedDiagnosticType(value.analyses_type) } : {}),
+    ...(value.analysis_count != null ? { analysis_count: boundedDiagnosticCount(value.analysis_count) } : {}),
+    ...(Array.isArray(value.analysis_rows) ? {
+      analysis_rows: value.analysis_rows.slice(0, 4).map(boundedDiagnosticAnalysisRow).filter(Boolean),
+    } : {}),
+  };
+}
+
+function boundedModelFailureDiagnostics(value) {
+  if (!plainObject(value)) return {};
+  const responseShape = boundedResponseShape(value.response_shape);
+  const field = typeof value.field === 'string' && /^[A-Za-z_][A-Za-z0-9_.[\]-]{0,95}$/.test(value.field)
+    ? value.field
+    : null;
+  const reason = typeof value.reason === 'string' && /^[A-Z][A-Z0-9_]{1,95}$/.test(value.reason)
+    ? value.reason
+    : null;
+  return {
+    ...(field ? { field } : {}),
+    ...(reason ? { reason } : {}),
+    ...(responseShape ? { response_shape: responseShape } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +455,18 @@ function deriveEvidenceRecord(item) {
   // toP19EvidenceInput throws bounded errors (P22_EVIDENCE_HASH_MISMATCH,
   // P22_EVIDENCE_INVALID) when the collected item is not exact; a failed
   // derivation is a bounded step failure, never a guessed record.
-  return toP19EvidenceInput(item);
+  return item?.platform === 'private_attachment'
+    ? toP19AttachmentEvidenceInput(item)
+    : toP19EvidenceInput(item);
+}
+
+function attachmentThreadId(plan) {
+  const ref = plan?.attachments?.[0]?.ref;
+  const match = typeof ref === 'string'
+    ? /^harness-thread-attachments:[0-9a-f-]{36}\/(thr_[0-9a-f-]{36})\//i.exec(ref)
+    : null;
+  if (!match) throw boundedError('INTERNAL_PLAN_VALIDATION_ERROR', '附件计划缺少准确的会话身份。');
+  return match[1];
 }
 
 function deriveAnalysisRecord({ plan, evidence, modelResult, existing }) {
@@ -915,7 +1031,7 @@ export async function executeConfirmedPlan({
       : { step: 'st-0', label: '校验执行计划', operation: null };
     const failed = stepSnapshot(firstStep, {
       state: STEP_STATE_FAILED,
-      failed_count: 1,
+      failed_count: 0,
       finished_at: now(),
       error: {
         code: 'INTERNAL_PLAN_VALIDATION_ERROR',
@@ -956,6 +1072,7 @@ export async function executeConfirmedPlan({
   const results = {};
   const ctx = { plan, derived, revision: null, evidenceId: null, analysisId: null };
   let retryUnsafeStep = null;
+  const actualCallCounts = new Map();
 
   // On a retry the deterministic context is rebuilt from the fresh project
   // state by exact canonical identity (never from guesses or refs), so no
@@ -997,6 +1114,10 @@ export async function executeConfirmedPlan({
 
   const resumeOutputFor = (step) => {
     switch (step.operation) {
+      case 'research.inspect_attachments':
+        return derived.collected_item
+          ? boundedResumeOutput({ collected_item: derived.collected_item, attachment_model_result: derived.attachment_model_result })
+          : null;
       case 'research.collect_url':
         return derived.collected_item ? boundedResumeOutput({ collected_item: derived.collected_item }) : null;
       case 'research.search_x':
@@ -1025,6 +1146,7 @@ export async function executeConfirmedPlan({
     const resume = prior?.resume_output;
     if (!plainObject(resume)) return;
     const allowed = {
+      'research.inspect_attachments': ['collected_item', 'attachment_model_result'],
       'research.collect_url': ['collected_item'],
       'research.search_x': ['search_items', 'search_x_items'],
       'research.search_reddit': ['search_items', 'search_reddit_items', 'combined_items'],
@@ -1057,6 +1179,13 @@ export async function executeConfirmedPlan({
 
   const captureDerived = (step, result, item) => {
     switch (step.operation) {
+      case 'research.inspect_attachments': {
+        const collected = itemsFromResult(result, 'items')?.[0] || result?.entity || null;
+        const modelResult = itemsFromResult(result, 'analyses')?.[0] || normalizedModelResult(result);
+        if (collected && plainObject(collected)) derived.collected_item = collected;
+        if (modelResult && plainObject(modelResult)) derived.attachment_model_result = modelResult;
+        break;
+      }
       case 'research.collect_url': {
         const collected = itemsFromResult(result, 'items')?.[0] || result?.entity || null;
         if (collected && plainObject(collected)) derived.collected_item = collected;
@@ -1167,6 +1296,12 @@ export async function executeConfirmedPlan({
         return () => ({ project_id: plan.project_id });
       case 'research.collect_url':
         return () => ({ ...(plan.project_id ? { project_id: plan.project_id } : {}), url: plan.slots.url });
+      case 'research.inspect_attachments':
+        return () => ({
+          project_id: plan.project_id,
+          thread_id: attachmentThreadId(plan),
+          attachments: structuredClone(plan.attachments),
+        });
       case 'research.search_x':
       case 'research.search_reddit':
         return () => searchPayload(plan, step.operation);
@@ -1329,6 +1464,7 @@ export async function executeConfirmedPlan({
     // performs the single bridge-boundary validation on it.
     const call = exactToolCall(taskView.id, plan, trustedContext, step, itemIndex, await payloadBuilder());
     recordStep(step, { state: STEP_STATE_RUNNING });
+    actualCallCounts.set(step.step, (actualCallCounts.get(step.step) || 0) + 1);
     const result = await toolClient(call, trustedContext, signal);
     if (!result || result.ok !== true) {
       const code = String(result?.code || 'BOUNDARY_FAILED');
@@ -1337,7 +1473,7 @@ export async function executeConfirmedPlan({
       throw boundedError(code, result?.diagnostics?.issues?.[0] || `边界拒绝了操作：${code}。`, {
         step: step.step,
         operation: bounded(result?.diagnostics?.operation || step.operation, 80),
-        ...(result?.diagnostics?.field ? { field: bounded(result.diagnostics.field, 80) } : {}),
+        ...boundedModelFailureDiagnostics(result?.diagnostics),
         retry_unsafe: ambiguous === true,
       });
     }
@@ -1498,7 +1634,11 @@ export async function executeConfirmedPlan({
 
     let stepProgress = null;
     const retrySnapshot = isRetryTarget ? structuredClone(stepStates[step.step] || {}) : null;
-    recordStep(step, { state: STEP_STATE_RUNNING, started_at: now(), error: null });
+    const priorActualCalls = isRetryTarget && Number.isSafeInteger(retrySnapshot?.failed_count)
+      ? Math.max(0, retrySnapshot.failed_count)
+      : 0;
+    actualCallCounts.set(step.step, priorActualCalls);
+    recordStep(step, { state: STEP_STATE_RUNNING, failed_count: priorActualCalls, started_at: now(), error: null });
     try {
       if (step.kind === 'read_state') {
         if (!plan.project_id) throw boundedError('PROJECT_BINDING_REQUIRED', '当前任务未绑定项目，无法读取项目状态。');
@@ -1545,6 +1685,7 @@ export async function executeConfirmedPlan({
       if (step.operation === 'workspace.lineage.audit') {
         const call = exactToolCall(taskView.id, plan, trustedContext, step, 0, { project_id: plan.project_id });
         recordStep(step, { state: STEP_STATE_RUNNING });
+        actualCallCounts.set(step.step, (actualCallCounts.get(step.step) || 0) + 1);
         const result = await toolClient(call, trustedContext, signal);
         if (!result || result.ok !== true) {
           throw boundedError(String(result?.code || 'BOUNDARY_FAILED'), result?.diagnostics?.issues?.[0] || '血缘审计失败。', {
@@ -1651,6 +1792,12 @@ export async function executeConfirmedPlan({
             const saved = (derived.project?.evidence || []).find((record) => record.id === derived.created_evidence_id);
             if (!saved) throw boundedError('EVIDENCE_NOT_FOUND', '保存的证据未出现在项目状态中。');
             derived.collected_evidence = saved;
+            if (plainObject(derived.attachment_model_result)) {
+              derived.analysis_results = {
+                ...(derived.analysis_results || {}),
+                [saved.id]: derived.attachment_model_result,
+              };
+            }
           }
         }
       }
@@ -1688,11 +1835,16 @@ export async function executeConfirmedPlan({
           const saved = (derived.project?.evidence || []).find((record) => record.id === derived.created_evidence_id);
           if (!saved) throw boundedError('EVIDENCE_NOT_FOUND', '保存的证据未出现在项目状态中。');
           derived.collected_evidence = saved;
+          if (plainObject(derived.attachment_model_result)) {
+            derived.analysis_results = {
+              ...(derived.analysis_results || {}),
+              [saved.id]: derived.attachment_model_result,
+            };
+          }
         }
       }
     } catch (error) {
       if (error?.code === 'CANCELLED') throw error;
-      const previousSnapshot = stepStates[step.step] || {};
       const completedOutcomes = stepProgress?.outcomes || [];
       const completedRefs = [...new Set(stepProgress?.refs || [])].slice(0, 50);
       const resumeOutput = resumeOutputFor(step);
@@ -1702,7 +1854,7 @@ export async function executeConfirmedPlan({
         ...(stepProgress ? { source_count: stepProgress.sourceCount } : {}),
         reused_count: completedOutcomes.filter((entry) => entry.reused).length,
         executed_count: completedOutcomes.filter((entry) => !entry.reused).length,
-        failed_count: Math.max(1, Number(previousSnapshot.failed_count) || 1),
+        failed_count: actualCallCounts.get(step.step) || 0,
         refs: completedRefs,
         ...(stepProgress ? { completed_items: stepProgress.completed_items.slice(0, MAX_FAN_OUT) } : {}),
         ...(resumeOutput ? { resume_output: resumeOutput } : {}),
@@ -1712,7 +1864,7 @@ export async function executeConfirmedPlan({
           code: String(error?.code || 'HARNESS_FAILED').slice(0, 80),
           operation: bounded(error?.diagnostics?.operation || step.operation, 80),
           message: String(error?.message || '步骤执行失败。').slice(0, 240),
-          ...(error?.diagnostics?.field ? { field: bounded(error.diagnostics.field, 80) } : {}),
+          ...boundedModelFailureDiagnostics(error?.diagnostics),
           ...(error?.diagnostics?.job_id ? { job_id: bounded(error.diagnostics.job_id, 200) } : {}),
           ...(error?.diagnostics?.g1_terminal === true ? { g1_terminal: true } : {}),
           ...(error?.diagnostics?.g1_needs_attention === true ? { g1_needs_attention: true } : {}),
@@ -1820,6 +1972,21 @@ export async function executeConfirmedPlan({
   if (plan.workflow === 'generate_media' && plainObject(derived.job)) {
     const statusView = boundedGenerationStatusView(derived.job);
     if (statusView) derived.terminal_results = { ...(derived.terminal_results || {}), generation_status: statusView };
+  }
+  // H5 result recovery: persist only stable private-object identities and the
+  // bounded model result. Signed URLs are intentionally created on demand by
+  // the authenticated browser and are never stored in the task snapshot.
+  if (plan.workflow === 'inspect_private_attachments' && plainObject(derived.collected_item)) {
+    const attachmentPipeline = boundedTerminalResult({
+      source: derived.collected_item,
+      analysis: plainObject(derived.attachment_model_result) ? derived.attachment_model_result : null,
+    });
+    if (attachmentPipeline) {
+      derived.terminal_results = {
+        ...(derived.terminal_results || {}),
+        attachment_pipeline: attachmentPipeline,
+      };
+    }
   }
   if (plainObject(derived.terminal_results) && Object.keys(derived.terminal_results).length > 0) {
     response.result_data = boundedTerminalResult(derived.terminal_results);

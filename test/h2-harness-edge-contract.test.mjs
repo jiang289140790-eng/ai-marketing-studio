@@ -20,6 +20,7 @@ async function loadP22CostContract() {
   const costSource = edge.slice(edge.indexOf('async function paidReservationId'), edge.indexOf('async function costStatus'));
   let source = `${shaSource}\n${costSource}`
     .replace('async function sha256(value: string)', 'async function sha256(value)')
+    .replace('async function sha256Bytes(value: Uint8Array)', 'async function sha256Bytes(value)')
     .replace('function canonicalJson(value: unknown, depth=0, state={nodes:0}): string', 'function canonicalJson(value, depth=0, state={nodes:0})')
     .replace('const record=value as Record<string,unknown>;', 'const record=value;')
     .replace('async function canonicalRequestSha256(value: unknown)', 'async function canonicalRequestSha256(value)')
@@ -195,6 +196,39 @@ test('G1 command schema version is immutable across gateway, bridge and edge, an
     assert.equal(duplicateSameValue.code, 'BOUNDARY_SCHEMA_VERSION_OVERRIDE', `${operation} 即使重复注入同值也必须 fail closed`);
     assert.equal(duplicateSameValue.diagnostics.field, 'schema_version');
   }
+});
+
+test('private attachment inspection binds the bridge task id and rejects substitution', () => {
+  const threadId = 'thread-11111111-1111-4111-8111-111111111111';
+  const payload = {
+    project_id: projectId,
+    thread_id: threadId,
+    attachments: [{
+      ref: `harness-thread-attachments:${userId}/${threadId}/source.png`,
+      name: 'source.png',
+      size: 4,
+      mime_type: 'image/png',
+    }],
+  };
+  const call = {
+    schema_version: TOOL_SCHEMA_VERSION,
+    task_id: 'ht-11111111-1111-4111-8111-111111111111',
+    user_id: userId,
+    project_id: projectId,
+    operation: 'research.inspect_attachments',
+    payload,
+    idempotency_key: 'idem-attachment-binding',
+    expected_revision: null,
+  };
+  const boundary = toBoundaryRequest(call);
+  assert.equal(validateBridgeEnvelope({ schema_version: 'ams_harness_bridge_v1', call, boundary }, userId).ok, true);
+  const substituted = validateBridgeEnvelope({
+    schema_version: 'ams_harness_bridge_v1',
+    call,
+    boundary: { ...boundary, body: { ...boundary.body, harness_task_id: 'ht-22222222-2222-4222-8222-222222222222' } },
+  }, userId);
+  assert.equal(substituted.code, 'TASK_BINDING_MISMATCH');
+  assert.equal(substituted.diagnostics.field, 'harness_task_id');
 });
 
 test('tool bridge fails closed for invented operation, identity, or boundary substitution', () => {

@@ -6,13 +6,13 @@ import { harnessJourney, navigationItems, compatibilitySections, routablePageIds
 
 const VISIBLE_BUSINESS_IDS = [
   'research', 'knowledge', 'generation', 'publish',
-  'characters', 'accounts', 'assets',
-  'connections',
+  'characters', 'assets',
 ];
 
 const HIDDEN_LEGACY_IDS = [
   'prompts', 'campaigns', 'workspace', 'intelligence', 'data-analytics',
   'analytics', 'dailyreport', 'workflows', 'health',
+  'accounts', 'connections',
 ];
 
 test('H9 shell keeps one primary Harness entry and only business result/asset pages', () => {
@@ -23,7 +23,7 @@ test('H9 shell keeps one primary Harness entry and only business result/asset pa
 
   const compatIds = compatibilitySections.flatMap((section) => section.items.map((item) => item.id));
   assert.deepEqual([...compatIds].sort(), [...VISIBLE_BUSINESS_IDS].sort());
-  assert.equal(navigationItems.length, 9);
+  assert.equal(navigationItems.length, 7);
   assert.equal(new Set(navigationItems.map((item) => item.id)).size, navigationItems.length);
   assert.ok(navigationItems.some((item) => item.id === 'ai'));
 

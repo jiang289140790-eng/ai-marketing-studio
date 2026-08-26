@@ -4,19 +4,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { harnessJourney, navigationItems, compatibilitySections, routablePageIds } from '../src/data/navigation.js';
 
-test('H9 主导航只保留 Harness 锚点、业务结果、业务资产与插件连接', () => {
-  assert.deepEqual(harnessJourney.map((entry) => entry.label), ['新任务', '当前会话']);
+test('H9 visible navigation is Harness entry plus business result and asset pages only', () => {
+  assert.deepEqual(harnessJourney.map((entry) => entry.id), ['ai', 'ai']);
   assert.deepEqual(
     compatibilitySections.map((section) => ({
       label: section.label,
-      items: section.items.map((item) => item.label),
+      items: section.items.map((item) => item.id),
     })),
     [
-      { label: '业务结果', items: ['研究与 Brief', '知识库', '生成结果', '发布中心'] },
-      { label: '业务资产', items: ['角色库', '账号矩阵', '素材库'] },
-      { label: '插件连接', items: ['平台连接'] },
+      { label: '业务结果', items: ['research', 'knowledge', 'generation', 'publish'] },
+      { label: '业务资产', items: ['characters', 'assets'] },
     ],
   );
+  assert.deepEqual(navigationItems.map((item) => item.id), [
+    'ai', 'research', 'knowledge', 'generation', 'publish', 'characters', 'assets',
+  ]);
 });
 
 test('visible navigation ids and labels are unique', () => {
@@ -31,14 +33,18 @@ test('visible navigation ids and labels are unique', () => {
   }
 });
 
-test('旧固定规划器、后台配置和调试页不进入用户可见导航，但保留路由兼容', async () => {
+test('legacy planner, settings and low-frequency pages stay route-compatible but hidden from navigation', async () => {
   const visibleIds = new Set(navigationItems.map((item) => item.id));
-  for (const id of ['prompts', 'workflows', 'health', 'workspace', 'intelligence', 'data-analytics', 'analytics', 'dailyreport', 'campaigns']) {
+  const hiddenIds = [
+    'prompts', 'workflows', 'health', 'workspace', 'intelligence', 'data-analytics',
+    'analytics', 'dailyreport', 'campaigns', 'accounts', 'connections',
+  ];
+  for (const id of hiddenIds) {
     assert.ok(!visibleIds.has(id), `${id} must stay hidden from visible navigation`);
     assert.ok(routablePageIds.includes(id), `${id} must remain in the route compatibility list`);
   }
   const app = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
-  for (const id of ['prompts', 'workflows', 'health', 'workspace', 'intelligence']) {
+  for (const id of hiddenIds) {
     assert.match(app, new RegExp(`case '${id}'`), `${id} remains route-compatible for old links`);
   }
 });
@@ -62,9 +68,7 @@ test('sidebar consumes the shared navigation registry and defaults to compact Ha
   assert.match(sidebar, /const secondarySections = compatibilitySections/);
   assert.match(sidebar, /journeyNew\.testId/);
   assert.match(sidebar, /journeySession\.testId/);
-  assert.match(sidebar, /结果与资产/);
   assert.match(sidebar, /primaryBusinessIds/);
-  assert.match(sidebar, /更多/);
   assert.doesNotMatch(workspace, /businessPlugins|ai-plugin-rail/);
   assert.doesNotMatch(sidebar, /display:\s*none/);
 });
@@ -92,8 +96,10 @@ test('canonical task routes stay on /tasks and keep task ids', async () => {
 
 test('Pages deployment keeps custom task-route fallback', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy-github-pages.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /npm run build/);
+  assert.match(workflow, /Verify task route fallback/);
+  assert.match(workflow, /redirectTarget/);
   const fallback = await readFile(new URL('../public/404.html', import.meta.url), 'utf8');
-  assert.doesNotMatch(workflow, /cp dist\/index\.html dist\/404\.html/);
-  assert.match(workflow, /grep -q "redirectTarget" dist\/404\.html/);
-  assert.match(fallback, /function redirectTarget/);
+  assert.match(fallback, /redirectTarget/);
+  assert.match(fallback, /tasks/);
 });

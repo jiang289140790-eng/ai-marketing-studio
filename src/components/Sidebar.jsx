@@ -6,6 +6,7 @@ import { compatibilitySections, harnessJourney } from '../data/navigation';
 const [journeyNew, journeySession] = harnessJourney;
 
 const secondarySections = compatibilitySections;
+const primaryBusinessIds = new Set(['research', 'knowledge', 'generation', 'characters']);
 
 export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeView = '' }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -19,7 +20,7 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
     () => compatibilitySections.find((section) => section.items.some((item) => item.id === activePage))?.label,
     [activePage],
   );
-  const [expandedSections, setExpandedSections] = useState(() => new Set([activeSectionLabel || secondarySections[0]?.label].filter(Boolean)));
+  const [expandedSections, setExpandedSections] = useState(() => new Set([activeSectionLabel].filter(Boolean)));
 
   useEffect(() => {
     if (!activeSectionLabel) return;
@@ -31,7 +32,12 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
     });
   }, [activeSectionLabel]);
 
-  const allExpanded = secondarySections.every((section) => expandedSections.has(section.label));
+  const primaryBusinessItems = secondarySections.flatMap((section) => section.items).filter((item) => primaryBusinessIds.has(item.id));
+  const moreSections = secondarySections.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => !primaryBusinessIds.has(item.id)),
+  })).filter((section) => section.items.length > 0);
+  const allExpanded = moreSections.every((section) => expandedSections.has(section.label));
 
   function navigate(pageId) {
     onNavigate(pageId);
@@ -53,7 +59,7 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
   }
 
   function toggleAllSections() {
-    setExpandedSections(allExpanded ? new Set(activeSectionLabel ? [activeSectionLabel] : []) : new Set(secondarySections.map((section) => section.label)));
+    setExpandedSections(allExpanded ? new Set(activeSectionLabel ? [activeSectionLabel] : []) : new Set(moreSections.map((section) => section.label)));
   }
 
   return (
@@ -103,11 +109,33 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
 
       <nav className="nav-list" aria-label="主导航">
         <div className="nav-overview harness-more-heading">
-          <span>业务页面</span>
-          <span className="sr-only">业务结果、资产与插件连接页面</span>
+          <span>结果与资产</span>
+          <span className="sr-only">常用结果和资产页面</span>
+        </div>
+        <div className="nav-section expanded" data-nav-section="常用入口">
+          <div className="nav-section-items">
+            {primaryBusinessItems.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+                data-testid={item.testId}
+                onClick={() => navigate(item.id)}
+                type="button"
+                title={collapsed ? item.label : undefined}
+                aria-label={collapsed ? item.label : undefined}
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="nav-overview harness-more-heading">
+          <span>更多</span>
+          <span className="sr-only">低频业务页面和插件连接页面</span>
           <button type="button" onClick={toggleAllSections}>{allExpanded ? '收起' : '展开'}</button>
         </div>
-        {secondarySections.map((section) => {
+        {moreSections.map((section) => {
           const expanded = expandedSections.has(section.label);
           const sectionId = `nav-section-${section.items[0]?.id || section.label}`;
           return (
@@ -143,10 +171,10 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
         })}
       </nav>
 
-      <div className="sidebar-note">
-        <span>安全边界</span>
-        <p>浏览器只负责计划、确认和查看结果。Harness、模型密钥、生成与发布执行始终通过可信服务端。</p>
-      </div>
+      <details className="sidebar-note">
+        <summary>边界说明</summary>
+        <p>浏览器只负责对话、确认和查看结果；模型、生成与发布由服务端插件执行。</p>
+      </details>
     </aside>
   );
 }

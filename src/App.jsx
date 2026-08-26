@@ -177,7 +177,7 @@ export default function App() {
       <div className="main-shell">
         <Header description={auxiliaryDescription} title={pageTitle} />
         {userId && contextPages.has(activePage) && !auxiliaryDescription && <CampaignContextBar onNavigate={navigate} />}
-        {authLoading && <div className="notice">正在恢复登录状态...</div>}
+        {authLoading && <div className="notice auth-status">正在连接工作区…</div>}
         {authError && !session && <div className="notice error">{authError}</div>}
         <PageErrorBoundary resetKey={`${activePage}:${routeView || ''}:${detailId || ''}`} onNavigate={navigate}>
           <Suspense fallback={<div className="notice">正在加载页面...</div>}>

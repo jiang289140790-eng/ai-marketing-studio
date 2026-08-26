@@ -55,14 +55,16 @@ test('Harness journey is the only primary operation entry; business pages do not
   }
 });
 
-test('sidebar consumes the shared navigation registry and does not hide duplicate menus with CSS', async () => {
+test('sidebar consumes the shared navigation registry and defaults to compact Harness shell', async () => {
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
   const workspace = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.match(sidebar, /import \{ compatibilitySections, harnessJourney \} from '\.\.\/data\/navigation'/);
   assert.match(sidebar, /const secondarySections = compatibilitySections/);
   assert.match(sidebar, /journeyNew\.testId/);
   assert.match(sidebar, /journeySession\.testId/);
-  assert.match(sidebar, /业务页面/);
+  assert.match(sidebar, /结果与资产/);
+  assert.match(sidebar, /primaryBusinessIds/);
+  assert.match(sidebar, /更多/);
   assert.doesNotMatch(workspace, /businessPlugins|ai-plugin-rail/);
   assert.doesNotMatch(sidebar, /display:\s*none/);
 });

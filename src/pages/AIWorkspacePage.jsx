@@ -12,11 +12,9 @@ const ACCEPT = 'image/*,video/mp4,application/pdf,text/plain,text/markdown,text/
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const QUICK_PROMPTS = [
-  '读取当前项目已有 Evidence 和 Knowledge，并告诉我可以完成什么',
-  '总结当前项目最重要的营销洞察',
-  '基于已有 Evidence 生成一份 Brief 计划',
-  '检查当前任务的进度和阻断项',
-  '告诉我下一步最值得执行的营销动作',
+  '帮我找最近 AI 营销里值得跟进的内容，并保存证据',
+  '读取当前项目已有内容，告诉我下一步最值得做什么',
+  '根据当前项目的知识和 Brief，生成一组可执行内容方案',
 ];
 
 function messagePayload(message) {
@@ -379,23 +377,23 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   return (
     <main className="ai-workspace conversation-page" data-testid="harness-ai-workspace">
       <section className="conversation-heading">
-        <div><span>AMS × DeepSeek Harness</span><h1>{messages.length ? 'AI 营销工作区' : '今天想完成什么？'}</h1><p>问答、计划、执行进度和结果都保留在同一个会话中。</p></div>
+        <div><span>AMS × DeepSeek Harness</span><h1>{messages.length ? 'AI 工作台' : '今天想完成什么？'}</h1><p>直接说目标。Harness 会自己选择插件工具，结果沉淀到研究、知识、Brief 或成品页。</p></div>
         <div className="conversation-heading-actions">
-          <label className="conversation-project-compact" data-testid="harness-active-project">当前项目<select value={activeProjectId || ''} onChange={(event) => switchProject(event.target.value)} disabled={!projects.length}>{!projects.length && <option value={activeProjectId || ''}>{activeProjectId || '尚未选择项目'}</option>}{projects.map((project) => <option key={project.id} value={project.id}>{project.topic || project.title || project.id}</option>)}</select></label>
+          {projects.length > 0 && <label className="conversation-project-compact" data-testid="harness-active-project">当前项目<select value={activeProjectId || ''} onChange={(event) => switchProject(event.target.value)} disabled={!projects.length}>{projects.map((project) => <option key={project.id} value={project.id}>{project.topic || project.title || project.id}</option>)}</select></label>}
           <div className={`conversation-connection ${connection}`}><i />{connectionLabel}</div>
         </div>
       </section>
 
-      <nav className="ai-task-flow" aria-label="三页任务流程" data-testid="ai-task-flow">
+      {currentTaskId && <nav className="ai-task-flow" aria-label="任务流程" data-testid="ai-task-flow">
         <button className="active" type="button" data-testid="ai-task-flow-home"><b>1</b><span><strong>对话工作区</strong><small>问答、计划和摘要</small></span></button>
         <button type="button" data-testid="ai-task-flow-execution" disabled={!currentTaskId} onClick={() => onNavigate?.('ai-execution', currentTaskId)}><b>2</b><span><strong>执行详情</strong><small>步骤、工具与错误</small></span></button>
         <button type="button" data-testid="ai-task-flow-results" disabled={!currentTaskId} onClick={() => onNavigate?.('ai-results', currentTaskId)}><b>3</b><span><strong>结果与审核</strong><small>Evidence、Brief 与成品</small></span></button>
-      </nav>
+      </nav>}
 
       <section className={`conversation-workspace ${messages.length === 0 && !liveText ? 'is-empty' : 'has-conversation'}`} data-testid="conversation-workspace">
         {messages.length > 0 && <header className="conversation-toolbar"><div><span className="harness-mark">H</span><div><strong>DeepSeek Harness</strong><small>{currentTaskId ? '已关联当前任务' : '对话会话'}</small></div></div><div>{currentTaskId && <><button type="button" onClick={() => onNavigate?.('ai-execution', currentTaskId)}>执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', currentTaskId)}>结果与审核</button></>}</div></header>}
         <div className="conversation-transcript" ref={transcriptRef} aria-live="polite" data-testid="conversation-transcript" onScroll={(event) => { const node = event.currentTarget; setUserNearBottom(node.scrollHeight - node.scrollTop - node.clientHeight < 96); }}>
-          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>今天想完成什么？</h2><p>直接提问，或描述一个需要执行的营销任务。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onConfirm={confirmPlan} confirming={confirming} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
+          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>只管说你想完成什么</h2><p>不用先选“研究 / 生成 / Brief”。Harness 会按你的目标调用已接入插件；需要付费或写入时再让你确认。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onConfirm={confirmPlan} confirming={confirming} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
           {liveText && <article className="conversation-message assistant streaming"><MessageIcon role="assistant" kind="text" /><div className="message-body"><span className="message-author">DeepSeek Harness</span><div>{liveText}<span className="stream-caret" /></div></div></article>}
           {sending && !liveText && <div className="conversation-thinking"><i /><span>正在思考…</span></div>}
         </div>

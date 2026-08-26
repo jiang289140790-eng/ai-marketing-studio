@@ -89,7 +89,7 @@ test('H9：三页旅程可确定性导航，直达/刷新保持 taskId', async (
   }
 });
 
-test('H9：侧栏主旅程锚点 + 业务页面披露区，键盘可达且不用 CSS 隐藏', async () => {
+test('H9：侧栏主旅程锚点 + 常用结果入口 + 更多披露区，键盘可达且不用 CSS 隐藏', async () => {
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
   const navigation = await readFile(new URL('../src/data/navigation.js', import.meta.url), 'utf8');
   // 主旅程锚点渲染：新任务（默认入口）+ 当前会话（恢复会话）。
@@ -97,9 +97,11 @@ test('H9：侧栏主旅程锚点 + 业务页面披露区，键盘可达且不用
   assert.match(sidebar, /data-testid=\{journeySession\.testId\}/);
   assert.match(sidebar, /startNewTask/);
   assert.match(sidebar, /onNavigate\('ai', '', \{ new: String\(Date\.now\(\)\) \}\)/);
-  // 业务页面披露区：明确标注为结果、资产和插件连接，展开/收起可键盘操作。
-  assert.match(sidebar, /<span>业务页面<\/span>/);
-  assert.match(sidebar, /业务结果、资产与插件连接页面/);
+  // 默认只露出常用结果和资产入口，低频业务页通过“更多”披露区展开。
+  assert.match(sidebar, /<span>结果与资产<\/span>/);
+  assert.match(sidebar, /primaryBusinessIds/);
+  assert.match(sidebar, /<span>更多<\/span>/);
+  assert.match(sidebar, /低频业务页面和插件连接页面/);
   assert.match(sidebar, /aria-expanded=\{expanded\}/);
   assert.match(sidebar, /aria-controls=\{sectionId\}/);
   assert.match(sidebar, /hidden=\{!expanded && !collapsed\}/);
@@ -107,7 +109,7 @@ test('H9：侧栏主旅程锚点 + 业务页面披露区，键盘可达且不用
   // 兼容区条目全部派生自唯一注册源。
   assert.match(navigation, /export const compatibilitySections/);
   assert.match(sidebar, /const secondarySections = compatibilitySections/);
-  assert.match(sidebar, /secondarySections\.map/);
+  assert.match(sidebar, /moreSections\.map/);
 });
 
 test('H9：三页旅程继续使用既有 harness-client 后端契约，无 mock 成功路径', async () => {

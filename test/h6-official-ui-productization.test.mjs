@@ -17,7 +17,7 @@ test('H6 execution page leads with user-readable status and keeps backend noise 
   assert.match(page, /任务需要处理/);
   assert.match(page, /查看产物/);
   assert.match(page, /data-testid="ai-task-step-details"/);
-  assert.match(page, /高级诊断（开发用）/);
+  assert.match(page, /技术诊断（默认隐藏）/);
   assert.match(page, /展开完整内部字段/);
   assert.match(css, /\.ai-task-user-summary/);
   assert.match(css, /@media \(max-width: 760px\)/);
@@ -35,7 +35,7 @@ test('H6 results page leads with outcomes, artifacts and recovery actions', asyn
   assert.match(page, /data-testid="ai-task-attachment-preview"/);
   assert.match(page, /data-testid="ai-task-generation-preview"/);
   assert.match(page, /完整产物/);
-  assert.match(page, /高级诊断（开发用）/);
+  assert.match(page, /技术诊断（默认隐藏）/);
 });
 
 test('H6 AI workspace and generation page keep official UI responsibilities separated', async () => {
@@ -44,7 +44,7 @@ test('H6 AI workspace and generation page keep official UI responsibilities sepa
 
   assert.match(aiPage, /AMS × DeepSeek Harness/);
   assert.match(aiPage, /data-testid="ai-task-flow"/);
-  assert.match(aiPage, /高级诊断（开发用）/);
+  assert.match(aiPage, /技术诊断（默认隐藏）/);
   assert.match(aiPage, /Harness 已批准能力与对应页面/);
   assert.match(generationPage, /G2 · 简洁生成工作台/);
   assert.match(generationPage, /查看报价不会调用生成模型，也不会产生费用/);

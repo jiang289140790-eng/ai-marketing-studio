@@ -428,25 +428,25 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
           {task.plan && (
             <details className="ai-task-panel ai-collapsed-panel" data-testid="ai-task-tool-calls">
               <summary>
-                <span><span className="eyebrow">真实执行记录</span><strong>工具调用</strong></span>
+                <span><span className="eyebrow">后台记录</span><strong>服务调用明细</strong></span>
                 <small>{toolCalls.present ? `${toolCalls.calls.length} 条记录` : '暂无记录'}</small>
               </summary>
               <div className="ai-task-panel-head">
                 <div>
-                  <p className="eyebrow">真实执行记录</p>
-                  <h3>工具调用</h3>
+                  <p className="eyebrow">后台记录</p>
+                  <h3>服务调用明细</h3>
                 </div>
               </div>
               {!toolCalls.present ? (
                 <div className="ai-task-empty" data-testid="ai-task-no-tool-calls">
-                  服务端没有该任务的工具调用记录；计划步骤不等于已调用的工具。
+                  服务端没有该任务的后台调用记录；计划步骤不等于已实际执行的服务。
                 </div>
               ) : (
                 <ul className="ai-tool-calls" data-testid="ai-task-tool-call-list">
                   {toolCalls.calls.map((call, index) => (
                     <li key={`${call.step || 'task'}-${call.tool || 'tool'}-${index}`} data-testid={`ai-task-tool-call-${index}`}>
                       <div className="ai-tool-call-copy">
-                        <strong>{call.tool || call.operation || '工具调用'}</strong>
+                        <strong>{call.tool || call.operation || '服务调用'}</strong>
                         {call.operation && <small>{call.operation}</small>}
                         {call.step && <small>步骤 {call.step}</small>}
                       </div>
@@ -481,7 +481,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
           {technical && (
             <details className="ai-technical-details" data-testid="ai-task-technical-details">
-              <summary>高级诊断（开发用）</summary>
+              <summary>技术诊断（默认隐藏）</summary>
               <dl className="ai-task-technical">
                 <div><dt>内部状态</dt><dd>{technical.state || '—'}</dd></div>
                 <div><dt>任务编号</dt><dd><code>{technical.task_id}</code></dd></div>

@@ -118,7 +118,7 @@ function MessageCard({ message, onNavigate, onConfirm, canConfirm, currentTaskId
     return <article className={`conversation-message ${message.role === 'user' ? 'user' : 'assistant'}`} data-kind={kind} data-testid="conversation-message"><MessageIcon role={message.role} kind={kind} /><div className="message-body"><span className="message-author">{message.role === 'user' ? '你' : 'DeepSeek Harness'}</span><div>{displayText}</div></div></article>;
   }
   const labels = {
-    plan: '执行计划', tool_call: 'Tool Call', tool_result: '工具结果', approval: '等待确认',
+    plan: '执行计划', tool_call: '准备执行', tool_result: '执行结果', approval: '等待确认',
     progress: '执行进度', evidence: 'Evidence', analysis: 'Analysis', knowledge: 'Knowledge', brief: 'Brief',
     artifact: 'Artifact', error: '错误',
   };
@@ -129,13 +129,13 @@ function MessageCard({ message, onNavigate, onConfirm, canConfirm, currentTaskId
       <header><strong>{labels[kind] || readableLabel(kind)}</strong><span className={`message-status status-${message.status || 'ready'}`}>{message.status || 'ready'}</span></header>
       {safeContent && <p>{safeContent}</p>}
       {kind === 'plan' && Array.isArray(payload.steps) && <ol className="conversation-plan-steps">{payload.steps.map((step, index) => <li key={step.step || index}><span>{index + 1}</span><div><b>{step.label || step.title || `步骤 ${index + 1}`}</b><small>{step.operation || step.tool || ''}</small></div></li>)}</ol>}
-      {kind === 'plan' && <div className="conversation-plan-risk"><span>费用风险：{payload.cost_indicators?.paid_calls > 0 ? `${payload.cost_indicators.paid_calls} 次付费调用` : '无付费调用'}</span><span>在线写入：{payload.cost_indicators?.online_writes > 0 ? `${payload.cost_indicators.online_writes} 步` : '无'}</span><span>计划指纹：<code>{String(payload.fingerprint || '').slice(0, 12) || '缺失'}</code></span></div>}
+      {kind === 'plan' && <div className="conversation-plan-risk"><span>费用风险：{payload.cost_indicators?.paid_calls > 0 ? `${payload.cost_indicators.paid_calls} 次付费调用` : '无付费调用'}</span><span>在线写入：{payload.cost_indicators?.online_writes > 0 ? `${payload.cost_indicators.online_writes} 步` : '无'}</span></div>}
       {kind === 'plan' && canConfirm && <fieldset className="conversation-approval-scopes"><legend>逐项确认本计划</legend>{HARNESS_APPROVAL_SCOPES.map((scope) => <label key={scope}><input type="checkbox" checked={approval[scope]} disabled={!requiredApprovals.includes(scope) || confirming} onChange={(event) => setApproval((current) => ({ ...current, [scope]: event.target.checked }))} />{APPROVAL_LABELS[scope]}{!requiredApprovals.includes(scope) && <small>（本计划不需要）</small>}</label>)}</fieldset>}
       {kind === 'plan' && Array.isArray(payload.steps) && payload.steps.some((step) => String(step.operation || '').startsWith('generation.')) && <p className="conversation-generation-gate">生成任务必须先取得精确报价；请在生成工作台确认金额后提交，不在通用对话中盲批费用。</p>}
       {kind === 'tool_call' && <details className="conversation-tool-details"><summary>查看工具与参数摘要</summary><StructuredSummary payload={payload} kind={kind} /></details>}
       {['tool_result', 'evidence', 'analysis', 'knowledge', 'brief', 'artifact'].includes(kind) && <StructuredSummary payload={payload} kind={kind} />}
       {messageTaskId && !taskId && <p className="conversation-historical-note">历史任务记录，仅供查看。</p>}
-      {taskId && <footer>{kind === 'plan' && canConfirm && <button type="button" className="primary" disabled={!exactApprovalReady || confirming || !/^[0-9a-f]{64}$/.test(String(payload.fingerprint || ''))} onClick={() => onConfirm?.({ taskId, planFingerprint: payload.fingerprint, approval })}>{confirming ? '正在确认…' : '按此指纹确认计划'}</button>}<button type="button" onClick={() => onNavigate?.('ai-execution', taskId)}>查看执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', taskId)}>查看完整结果</button></footer>}
+      {taskId && <footer>{kind === 'plan' && canConfirm && <button type="button" className="primary" disabled={!exactApprovalReady || confirming || !/^[0-9a-f]{64}$/.test(String(payload.fingerprint || ''))} onClick={() => onConfirm?.({ taskId, planFingerprint: payload.fingerprint, approval })}>{confirming ? '正在确认…' : '确认并开始执行'}</button>}<button type="button" onClick={() => onNavigate?.('ai-execution', taskId)}>查看进度</button><button type="button" onClick={() => onNavigate?.('ai-results', taskId)}>查看结果</button></footer>}
       </div>
     </article>
   );
@@ -408,7 +408,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         <p>AI 工作台负责理解、计划、确认和跟踪；研究、知识与生成页面负责专业查看和人工操作。未登记能力不会被执行。</p>
       </details>
       {error && <div className="notice error" role="alert">{error}<button type="button" onClick={() => { reconnectAttemptRef.current = 0; setError(''); if (thread?.id) { loadHistory(thread.id); refreshThread(thread.id); setStreamEpoch((value) => value + 1); } }}>重新连接</button></div>}
-      {thread?.id && <details className="ai-technical-details"><summary>高级诊断（开发用）</summary><dl><div><dt>thread_id</dt><dd><code>{thread.id}</code></dd></div>{currentTaskId && <div><dt>task_id</dt><dd><code>{currentTaskId}</code></dd></div>}<div><dt>event_cursor</dt><dd>{eventCursor}</dd></div></dl></details>}
+      {thread?.id && <details className="ai-technical-details"><summary>技术诊断（默认隐藏）</summary><dl><div><dt>thread_id</dt><dd><code>{thread.id}</code></dd></div>{currentTaskId && <div><dt>task_id</dt><dd><code>{currentTaskId}</code></dd></div>}<div><dt>event_cursor</dt><dd>{eventCursor}</dd></div></dl></details>}
     </main>
   );
 }

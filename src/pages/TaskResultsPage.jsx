@@ -542,7 +542,7 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
               {attachmentPipeline?.source?.content_text && <div className="ai-result-copy" data-testid="ai-task-attachment-content">{attachmentPipeline.source.content_text}</div>}
               {attachmentPipeline?.analysis?.result && (
                 <details className="ai-result-copy ai-compact-json" data-testid="ai-task-attachment-analysis">
-                  <summary>{attachmentPipeline.analysis.model || '多模态模型'} · 第 {attachmentPipeline.analysis.analysis_version || 1} 版完整结构</summary>
+                  <summary>{attachmentPipeline.analysis.model || '多模态模型'} · 第 {attachmentPipeline.analysis.analysis_version || 1} 版完整分析明细</summary>
                   <pre>{JSON.stringify(attachmentPipeline.analysis.result, null, 2)}</pre>
                 </details>
               )}
@@ -656,7 +656,7 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
 
           {technical && (
             <details className="ai-technical-details" data-testid="ai-task-technical-details">
-              <summary>高级诊断（开发用）</summary>
+              <summary>技术诊断（默认隐藏）</summary>
               <dl className="ai-task-technical">
                 <div><dt>内部状态</dt><dd>{technical.state || '—'}</dd></div>
                 <div><dt>任务编号</dt><dd><code>{technical.task_id}</code></dd></div>

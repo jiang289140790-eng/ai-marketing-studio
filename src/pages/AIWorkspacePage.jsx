@@ -1,17 +1,25 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { readHarnessActiveProject } from '../services/harness-client.js';
 import './AIWorkspacePage.css';
 
 const DEFAULT_HARNESS_WEB_URL = 'https://harness-web.47-251-244-196.sslip.io';
 
+function getHarnessWebUrl() {
+  return String(
+    import.meta.env.VITE_DSH_WEB_URL
+      || import.meta.env.VITE_DEEPSEEK_HARNESS_WEB_URL
+      || DEFAULT_HARNESS_WEB_URL,
+  ).trim();
+}
+
 function businessLinks(onNavigate) {
   return [
-    { id: 'research', label: '研究与 Brief', detail: '查看 Evidence、分析、知识卡和待审核 Brief。' },
-    { id: 'knowledge', label: '知识库', detail: '沉淀账号、内容、策略和复盘知识。' },
-    { id: 'generation', label: '生成结果', detail: '查看图片、视频、Artifact、下载和版本历史。' },
-    { id: 'assets', label: '素材库', detail: '管理可复用图片、视频、参考素材。' },
-    { id: 'characters', label: '角色库', detail: '长期角色、视觉资产和账号人设。' },
-    { id: 'publish', label: '发布中心', detail: '高风险发布动作统一人工确认。' },
+    { id: 'research', label: '研究与 Brief' },
+    { id: 'knowledge', label: '知识库' },
+    { id: 'generation', label: '生成结果' },
+    { id: 'assets', label: '素材库' },
+    { id: 'characters', label: '角色库' },
+    { id: 'publish', label: '发布中心' },
   ].map((item) => ({
     ...item,
     onClick: () => onNavigate?.(item.id),
@@ -19,13 +27,10 @@ function businessLinks(onNavigate) {
 }
 
 export function AIWorkspacePage({ onNavigate }) {
-  const harnessWebUrl = String(
-    import.meta.env.VITE_DSH_WEB_URL
-      || import.meta.env.VITE_DEEPSEEK_HARNESS_WEB_URL
-      || DEFAULT_HARNESS_WEB_URL,
-  ).trim();
+  const harnessWebUrl = getHarnessWebUrl();
   const activeProjectId = readHarnessActiveProject();
   const links = useMemo(() => businessLinks(onNavigate), [onNavigate]);
+  const [frameUnavailable, setFrameUnavailable] = useState(false);
 
   const openHarness = () => {
     if (!harnessWebUrl) return;
@@ -33,17 +38,18 @@ export function AIWorkspacePage({ onNavigate }) {
   };
 
   return (
-    <main className="ai-workspace ai-native-shell" data-testid="ai-native-shell">
-      <section className="native-hero">
-        <p className="eyebrow">AMS × DeepSeek Harness</p>
-        <h1>只用 Harness 做事</h1>
-        <p>
-          自然语言、规划、工具选择和连续执行交给 DeepSeek Harness。
-          AMS 网站只保留项目绑定、业务结果、资产和人工确认入口。
-        </p>
-        <div className="native-actions">
+    <main className="ai-workspace ai-official-harness-page" data-testid="ai-official-harness-page">
+      <section className="official-harness-strip" aria-label="DeepSeek Harness 入口">
+        <div>
+          <p>AMS × DeepSeek Harness</p>
+          <h1>直接使用官方 Harness</h1>
+          <span>
+            自然语言、规划、工具选择和执行交给 Harness；AMS 只负责项目绑定、业务结果、资产和人工确认。
+          </span>
+        </div>
+        <div className="official-harness-actions">
           <button type="button" className="primary" onClick={openHarness}>
-            打开官方 Harness
+            新窗口打开 Harness
           </button>
           <button type="button" className="secondary-button" onClick={() => onNavigate?.('research')}>
             查看业务结果
@@ -51,29 +57,40 @@ export function AIWorkspacePage({ onNavigate }) {
         </div>
       </section>
 
-      <section className="native-project-card">
-        <span>当前项目</span>
-        <strong>{activeProjectId || '尚未绑定'}</strong>
-        <small>项目上下文会由 AMS 插件工具读取；不是在前端硬编码任务流程。</small>
+      <section className="official-harness-frame-card" aria-label="官方 DeepSeek Harness Web">
+        <div className="official-harness-frame-toolbar">
+          <span>
+            当前项目：
+            <strong>{activeProjectId || '未绑定'}</strong>
+          </span>
+          <small>如果嵌入视图异常，请点“新窗口打开 Harness”。</small>
+        </div>
+        {!frameUnavailable ? (
+          <iframe
+            title="DeepSeek Harness Web"
+            src={harnessWebUrl}
+            className="official-harness-frame"
+            data-testid="official-harness-frame"
+            onError={() => setFrameUnavailable(true)}
+          />
+        ) : (
+          <div className="official-harness-fallback" role="status">
+            <h2>官方 Harness 需要新窗口打开</h2>
+            <p>浏览器阻止了嵌入视图，但服务仍可用。</p>
+            <button type="button" className="primary" onClick={openHarness}>
+              打开官方 Harness
+            </button>
+          </div>
+        )}
       </section>
 
-      <section className="native-business-grid" aria-label="业务结果入口">
+      <nav className="official-business-links" aria-label="AMS 业务结果入口">
         {links.map((item) => (
           <button type="button" key={item.id} onClick={item.onClick}>
-            <strong>{item.label}</strong>
-            <span>{item.detail}</span>
+            {item.label}
           </button>
         ))}
-      </section>
-
-      <section className="native-boundary">
-        <h2>现在的分工</h2>
-        <ul>
-          <li>Harness：理解目标、规划步骤、选择插件工具、执行和恢复任务。</li>
-          <li>AMS 插件：研究采集、Evidence、Analysis、Knowledge、Brief、生成和 Storage。</li>
-          <li>AMS 页面：只展示业务资产和可审核结果，不再维护第二套智能路由。</li>
-        </ul>
-      </section>
+      </nav>
     </main>
   );
 }

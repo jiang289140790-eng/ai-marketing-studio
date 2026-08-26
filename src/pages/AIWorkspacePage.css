@@ -1075,3 +1075,170 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* H9.1: /ai is no longer a self-made planner UI. It is a thin AMS shell
+   around the official DeepSeek Harness Web surface. */
+.ai-official-harness-page {
+  width: min(100% - 32px, 1600px);
+  max-width: none;
+  min-height: calc(100dvh - 96px);
+  margin: 0 auto;
+  padding: 16px 0 28px;
+  color: #18251f;
+}
+
+.official-harness-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+  padding: 14px 18px;
+  border: 1px solid #dbe7e1;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 8px 30px rgba(34, 75, 58, .06);
+}
+
+.official-harness-strip p {
+  margin: 0 0 4px;
+  color: #168052;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.official-harness-strip h1 {
+  margin: 0;
+  font-size: clamp(22px, 2vw, 32px);
+  letter-spacing: -.04em;
+}
+
+.official-harness-strip span {
+  display: block;
+  margin-top: 4px;
+  color: #66756f;
+  font-size: 13px;
+}
+
+.official-harness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  justify-content: flex-end;
+}
+
+.official-harness-actions .primary,
+.official-harness-actions .secondary-button {
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 0 16px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.official-harness-frame-card {
+  overflow: hidden;
+  border: 1px solid #dbe7e1;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 14px 45px rgba(34, 75, 58, .08);
+}
+
+.official-harness-frame-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 42px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e6eee9;
+  background: #fbfdfc;
+  color: #65746d;
+  font-size: 12px;
+}
+
+.official-harness-frame-toolbar strong {
+  margin-left: 4px;
+  color: #173a28;
+  word-break: break-all;
+}
+
+.official-harness-frame-toolbar small {
+  color: #8b9992;
+}
+
+.official-harness-frame {
+  display: block;
+  width: 100%;
+  height: calc(100dvh - 220px);
+  min-height: 680px;
+  border: 0;
+  background: #f6faf8;
+}
+
+.official-harness-fallback {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 420px;
+  padding: 32px;
+  text-align: center;
+}
+
+.official-harness-fallback h2,
+.official-harness-fallback p {
+  margin: 0;
+}
+
+.official-business-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.official-business-links button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid #d6e3dd;
+  border-radius: 999px;
+  background: #fff;
+  color: #385248;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.official-business-links button:hover {
+  border-color: #8ab7a6;
+  background: #f3faf6;
+}
+
+@media (max-width: 760px) {
+  .ai-official-harness-page {
+    width: min(100% - 20px, 1600px);
+    padding-top: 10px;
+  }
+
+  .official-harness-strip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .official-harness-actions {
+    justify-content: flex-start;
+  }
+
+  .official-harness-frame-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .official-harness-frame {
+    height: calc(100dvh - 260px);
+    min-height: 620px;
+  }
+}

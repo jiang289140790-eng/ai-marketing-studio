@@ -34,9 +34,7 @@ const PRIMARY_WORKSPACE_PAGES = new Set(['tasks', 'ai', 'research', 'generation'
 const pageTitles = {
   ai: 'AI 工作台',
   tasks: { new: 'AI 工作台', execution: '任务执行详情', results: '任务结果与审核' },
-  dashboard: 'AI 工作台',
-  campaigns: '运营活动',
-  plan: '内容计划',
+  campaigns: '活动与计划',
   research: '研究工作台',
   workspace: '内容工作台',
   intelligence: '内容情报',
@@ -125,8 +123,6 @@ export default function App() {
         return <AIWorkspacePage key={routeParams?.agent === '1' ? 'agent-first' : 'legacy'} {...props} />;
       case 'campaigns':
         return <CampaignStrategyPage {...props} />;
-      case 'plan':
-        return <CampaignStrategyPage {...props} />;
       case 'research':
         return <ResearchWorkspacePage {...props} />;
       case 'workspace':
@@ -165,8 +161,8 @@ export default function App() {
   }, [activePage, auxiliaryMode, auxiliaryScope, campaignState.activeCampaignId, campaignState.campaignContext, campaignState.refreshCampaignContext, detailId, navigate, routeParams, routeView, userId]);
 
   const pageTitle = typeof pageTitles[activePage] === 'object' && pageTitles[activePage] !== null
-    ? pageTitles[activePage][routeView] || pageTitles.dashboard
-    : pageTitles[activePage] || pageTitles.dashboard;
+    ? pageTitles[activePage][routeView] || pageTitles.tasks.new
+    : pageTitles[activePage] || pageTitles.tasks.new;
 
   return (
     <div className={`app-shell harness-app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>

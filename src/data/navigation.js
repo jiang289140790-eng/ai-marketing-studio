@@ -1,55 +1,37 @@
-// 导航唯一注册源：左侧菜单的全部可见条目只在这里注册一次。
-// Sidebar 的 corePlugins 与任何页面内插件栏都必须从此处派生，禁止在
-// 组件里复制第二份菜单配置（此前 AIWorkspacePage 的 businessPlugins 重复
-// 注册了同一批插件，仅靠 CSS display:none 掩盖，导致同一可见菜单标签与
-// data-testid 在同一屏出现两次）。
+// 导航唯一注册源。核心流程只展示 Harness 的编排入口及其三个权威专业页面；
+// Evidence、Brief 和生成 Artifact 在对应专业页面内查看，不再伪装成独立产品。
 export const harnessPlugins = [
   { id: 'ai', label: 'AI 工作台', icon: '✦', testId: 'harness-plugin-ai' },
-  { id: 'research', label: '研究工作台', icon: '⌕', testId: 'harness-plugin-research' },
-  { id: 'research-evidence', route: 'research', routeParams: { focus: 'collect' }, label: 'Evidence', icon: '◇', testId: 'harness-plugin-research-evidence' },
-  { id: 'knowledge', label: 'Knowledge', icon: '◈', testId: 'harness-plugin-knowledge' },
-  { id: 'research-brief', route: 'research', routeParams: { focus: 'outputs' }, label: 'Brief 审核', icon: '✓', testId: 'harness-plugin-research-brief' },
-  { id: 'generation', label: '生成中心', icon: '✦', testId: 'harness-plugin-generation' },
-  { id: 'assets', label: '成品库', icon: '▣', testId: 'harness-plugin-assets' },
+  { id: 'research', label: '研究与 Brief', icon: '⌕', testId: 'harness-plugin-research' },
+  { id: 'knowledge', label: '知识库', icon: '◈', testId: 'harness-plugin-knowledge' },
+  { id: 'generation', label: '生成工作台', icon: '▣', testId: 'harness-plugin-generation' },
 ];
 
 export const navigationSections = [
   {
-    label: '智能工作',
-    items: [{ id: 'ai', label: 'AI 工作台', icon: '✦' }],
-  },
-  {
-    label: '总览',
-    items: [{ id: 'dashboard', label: 'AI 运营指挥中心', icon: '◉' }],
-  },
-  {
-    label: 'AI 运营',
+    label: '内容生产',
     items: [
-      { id: 'campaigns', label: '运营活动', icon: '◆' },
-      { id: 'plan', label: '内容计划', icon: '▤' },
-      { id: 'research', label: '研究工作台', icon: '⌖' },
+      { id: 'campaigns', label: '活动与计划', icon: '◆' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
-      { id: 'intelligence', label: '内容情报', icon: '⌕' },
+      { id: 'assets', label: '素材库', icon: '■' },
       { id: 'publish', label: '发布中心', icon: '↗' },
     ],
   },
   {
-    label: '资产中心',
+    label: '运营资源',
     items: [
       { id: 'accounts', label: '账号矩阵', icon: '●' },
       { id: 'characters', label: '角色库', icon: '✦' },
-      { id: 'assets', label: '素材库', icon: '■' },
-      { id: 'generation', label: '生成工作台', icon: '◫' },
       { id: 'prompts', label: '提示词库', icon: '✎' },
     ],
   },
   {
-    label: '智能分析',
+    label: '洞察与复盘',
     items: [
+      { id: 'intelligence', label: '内容情报', icon: '⌕' },
       { id: 'data-analytics', label: '数据分析', icon: '▥' },
       { id: 'analytics', label: 'AI 复盘', icon: '◇' },
       { id: 'dailyreport', label: '运营日报', icon: '▦' },
-      { id: 'knowledge', label: '知识库', icon: '🧠' },
     ],
   },
   {
@@ -62,7 +44,11 @@ export const navigationSections = [
   },
 ];
 
-export const navigationItems = navigationSections.flatMap((section) => section.items);
+// 路由白名单同时覆盖核心流程和管理页面，但每个可见入口只有一个定义。
+export const navigationItems = [
+  ...harnessPlugins.map(({ id, label, icon }) => ({ id, label, icon })),
+  ...navigationSections.flatMap((section) => section.items),
+];
 
 export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];
 

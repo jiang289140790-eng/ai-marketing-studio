@@ -12,6 +12,18 @@ The generated `.runtime-build` directory is ignored by Git and must never be com
 docker build -t ai-marketing-studio-runtime .\.runtime-build
 ```
 
+Source resolution is deterministic: an explicit `-MarketingStudioMcpDir`
+parameter wins, then `runtime-source.config.json`, then the canonical sibling
+`video-generator/mcp-servers/marketing-studio` path. The script validates the
+required MCP files and fails closed instead of searching old worktrees.
+
+Resolve and validate the source without creating a bundle:
+
+```powershell
+.\Prepare-RuntimeBundle.ps1 -ResolveSourceOnly
+.\Test-PrepareRuntimeBundleSource.ps1
+```
+
 Provide all secrets only through the deployment platform secret store:
 
 ```text

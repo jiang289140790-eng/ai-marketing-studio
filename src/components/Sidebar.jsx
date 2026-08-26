@@ -5,10 +5,7 @@ import { harnessPlugins, navigationSections } from '../data/navigation';
 // （harnessPlugins + navigationSections）；组件内不再复制第二份菜单配置。
 const corePlugins = harnessPlugins;
 
-const coreRouteIds = new Set(['ai', 'research', 'knowledge', 'generation', 'assets']);
-const secondarySections = navigationSections
-  .map((section) => ({ ...section, items: section.items.filter((item) => !coreRouteIds.has(item.id)) }))
-  .filter((section) => section.items.length > 0);
+const secondarySections = navigationSections;
 
 export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeParams = {}, routeView = '' }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -21,7 +18,7 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
     () => navigationSections.find((section) => section.items.some((item) => item.id === activeNavigationId))?.label,
     [activeNavigationId],
   );
-  const [expandedSections, setExpandedSections] = useState(() => new Set(['智能工作', activeSectionLabel].filter(Boolean)));
+  const [expandedSections, setExpandedSections] = useState(() => new Set([activeSectionLabel || secondarySections[0]?.label].filter(Boolean)));
 
   useEffect(() => {
     if (!activeSectionLabel) return;
@@ -105,7 +102,7 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
 
       <nav className="nav-list" aria-label="主导航">
         <div className="nav-overview">
-          <span>业务插件</span>
+          <span>核心流程</span>
           <span>{corePlugins.length}</span>
         </div>
         <div className="harness-core-plugins">
@@ -131,8 +128,8 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
         </div>
 
         <div className="nav-overview harness-more-heading">
-          <span>更多工具</span>
-          <span className="sr-only">全部功能</span>
+          <span>管理与查看</span>
+          <span className="sr-only">辅助业务页面</span>
           <button type="button" onClick={toggleAllSections}>{allExpanded ? '收起' : '展开'}</button>
         </div>
         {secondarySections.map((section) => {

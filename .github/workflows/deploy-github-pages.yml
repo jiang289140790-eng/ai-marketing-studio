@@ -35,8 +35,8 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/
         run: npm run build
-      - name: Add SPA route fallback
-        run: cp dist/index.html dist/404.html
+      - name: Verify SPA route fallback
+        run: test -f dist/404.html && grep -q "redirectTarget" dist/404.html
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

@@ -138,7 +138,7 @@ test('conversation workspace renders transcript, structured cards, fixed compose
   assert.match(page, /ACTIVE_THREAD_KEY/);
   assert.match(page, /ACTIVE_AGENT_THREAD_KEY/);
   assert.match(page, /agentFirst \? ACTIVE_AGENT_THREAD_KEY : ACTIVE_THREAD_KEY/);
-  assert.match(app, /key=\{routeParams\?\.agent === '1' \? 'agent-first' : 'legacy'\}/);
+  assert.match(app, /key=\{routeParams\?\.legacy === '1' \? 'legacy' : 'harness-native'\}/);
   assert.match(page, /onNavigate\?\.\('ai-execution', currentTaskId\)/);
   assert.match(page, /onNavigate\?\.\('ai-results', currentTaskId\)/);
   assert.doesNotMatch(page, /随机|fake/i);

@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
-import { harnessPlugins, navigationSections } from '../data/navigation';
+import { compatibilitySections, harnessJourney } from '../data/navigation';
 
-// 侧栏核心插件与“更多工具”全部派生自 navigation.js 的唯一注册源
-// （harnessPlugins + navigationSections）；组件内不再复制第二份菜单配置。
-const corePlugins = harnessPlugins;
+// 侧栏主旅程与业务页面全部派生自 navigation.js 的唯一注册源
+// （harnessJourney + compatibilitySections）；组件内不再复制第二份菜单配置。
+const [journeyNew, journeySession] = harnessJourney;
 
-const secondarySections = navigationSections;
+const secondarySections = compatibilitySections;
 
-export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeParams = {}, routeView = '' }) {
+export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNavigate, routeView = '' }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}ai-marketing-logo.png`;
-  // 规范任务路由 /tasks/... 高亮侧栏对应条目：新任务视图高亮 AI 工作台。
-  const activeNavigationId = activePage === 'tasks'
-    ? (routeView === 'new' ? 'ai' : activePage)
-    : activePage === 'dashboard' ? 'ai' : activePage;
+  // 规范任务路由 /tasks/... 高亮主旅程锚点：新任务视图高亮“新任务”，
+  // 执行/结果视图高亮“当前会话”；兼容区条目按所在页面高亮。
+  const journeyActiveKey = activePage === 'ai' || (activePage === 'tasks' && !routeView)
+    ? 'new'
+    : activePage === 'tasks' ? 'session' : null;
   const activeSectionLabel = useMemo(
-    () => navigationSections.find((section) => section.items.some((item) => item.id === activeNavigationId))?.label,
-    [activeNavigationId],
+    () => compatibilitySections.find((section) => section.items.some((item) => item.id === activePage))?.label,
+    [activePage],
   );
   const [expandedSections, setExpandedSections] = useState(() => new Set([activeSectionLabel || secondarySections[0]?.label].filter(Boolean)));
 
@@ -34,11 +35,6 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
 
   function navigate(pageId) {
     onNavigate(pageId);
-    setMobileOpen(false);
-  }
-
-  function navigatePlugin(plugin) {
-    onNavigate(plugin.route || plugin.id, '', plugin.routeParams || {});
     setMobileOpen(false);
   }
 
@@ -88,48 +84,27 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
         </button>
       </div>
 
-      <button className="harness-new-task" type="button" onClick={startNewTask}>
-        <span className="nav-label">新任务</span>
+      <button className="harness-new-task" type="button" data-testid={journeyNew.testId} onClick={startNewTask}>
+        <span className="nav-label">{journeyNew.label}</span>
         <span aria-hidden="true">＋</span>
       </button>
 
       <div className="harness-session-shortcuts" aria-label="最近会话">
         <span className="harness-sidebar-caption">会话</span>
-        <button type="button" onClick={() => navigate('ai')}>
-          <span className="nav-label">当前工作会话</span><span aria-hidden="true">•••</span>
+        <button
+          type="button"
+          data-testid={journeySession.testId}
+          className={journeyActiveKey === 'session' ? 'active' : ''}
+          onClick={() => navigate('ai')}
+        >
+          <span className="nav-label">{journeySession.label}</span><span aria-hidden="true">•••</span>
         </button>
       </div>
 
       <nav className="nav-list" aria-label="主导航">
-        <div className="nav-overview">
-          <span>核心流程</span>
-          <span>{corePlugins.length}</span>
-        </div>
-        <div className="harness-core-plugins">
-          {corePlugins.map((plugin) => {
-            const route = plugin.route || plugin.id;
-            const requiredFocus = plugin.routeParams?.focus;
-            const active = activeNavigationId === route && (requiredFocus ? routeParams.focus === requiredFocus : !routeParams.focus);
-            return (
-              <button
-                key={plugin.id}
-                className={`nav-item harness-core-plugin ${active ? 'active' : ''}`}
-                data-testid={plugin.testId}
-                onClick={() => navigatePlugin(plugin)}
-                type="button"
-                title={collapsed ? plugin.label : undefined}
-                aria-label={collapsed ? plugin.label : undefined}
-              >
-                <span className="nav-icon">{plugin.icon}</span>
-                <span className="nav-label">{plugin.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
         <div className="nav-overview harness-more-heading">
-          <span>资源 / 高级模式</span>
-          <span className="sr-only">辅助业务页面</span>
+          <span>业务页面</span>
+          <span className="sr-only">业务结果、资产与插件连接页面</span>
           <button type="button" onClick={toggleAllSections}>{allExpanded ? '收起' : '展开'}</button>
         </div>
         {secondarySections.map((section) => {
@@ -151,7 +126,8 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
                 {section.items.map((item) => (
                   <button
                     key={item.id}
-                    className={`nav-item ${activeNavigationId === item.id ? 'active' : ''}`}
+                    className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+                    data-testid={item.testId}
                     onClick={() => navigate(item.id)}
                     type="button"
                     title={collapsed ? item.label : undefined}

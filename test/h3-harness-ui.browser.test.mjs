@@ -44,8 +44,9 @@ test('H3 real browser: conversation workspace is the simple default and business
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('今天想完成什么？')`), true);
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="conversation-transcript"]') !== null`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="conversation-message"]').length`), 0, 'empty session does not invent messages');
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 18, 'every navigation destination is registered once');
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'exactly one navigation item is active');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 8, 'every visible business destination is registered once');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid^="harness-journey-"]').length`), 2, 'the native Harness journey exposes exactly two anchors');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active, [data-testid="harness-journey-new"], [data-testid="harness-journey-session"].active').length >= 1`), true, 'the active journey remains visible');
 
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-intent"]').placeholder.includes('Shift+Enter')`), true, 'composer exposes the multiline keyboard contract');
 

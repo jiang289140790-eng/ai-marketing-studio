@@ -52,6 +52,14 @@ function readableLabel(value) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+// 计划步骤只向用户展示能力级说法（“搜索 X 热门主题”），原始操作标识
+// 属于执行器术语，保留在 title 提示里，不占默认正文。
+function capabilityLabelFor(operation) {
+  const id = String(operation || '').split('.').pop();
+  const match = HARNESS_CAPABILITY_MAP.find((capability) => capability.id === id);
+  return match ? match.label : '自动执行步骤';
+}
+
 function summarizeValue(value) {
   if (value == null || value === '') return '未提供';
   if (typeof value === 'boolean') return value ? '是' : '否';
@@ -128,12 +136,13 @@ function MessageCard({ message, onNavigate, onConfirm, canConfirm, currentTaskId
       <div className="conversation-card-body">
       <header><strong>{labels[kind] || readableLabel(kind)}</strong><span className={`message-status status-${message.status || 'ready'}`}>{message.status || 'ready'}</span></header>
       {safeContent && <p>{safeContent}</p>}
-      {kind === 'plan' && Array.isArray(payload.steps) && <ol className="conversation-plan-steps">{payload.steps.map((step, index) => <li key={step.step || index}><span>{index + 1}</span><div><b>{step.label || step.title || `步骤 ${index + 1}`}</b><small>{step.operation || step.tool || ''}</small></div></li>)}</ol>}
+      {kind === 'plan' && Array.isArray(payload.steps) && <ol className="conversation-plan-steps">{payload.steps.map((step, index) => <li key={step.step || index}><span>{index + 1}</span><div><b>{step.label || step.title || `步骤 ${index + 1}`}</b><small title={step.operation || ''}>{capabilityLabelFor(step.operation)}</small></div></li>)}</ol>}
       {kind === 'plan' && <div className="conversation-plan-risk"><span>费用风险：{payload.cost_indicators?.paid_calls > 0 ? `${payload.cost_indicators.paid_calls} 次付费调用` : '无付费调用'}</span><span>在线写入：{payload.cost_indicators?.online_writes > 0 ? `${payload.cost_indicators.online_writes} 步` : '无'}</span></div>}
       {kind === 'plan' && canConfirm && <fieldset className="conversation-approval-scopes"><legend>逐项确认本计划</legend>{HARNESS_APPROVAL_SCOPES.map((scope) => <label key={scope}><input type="checkbox" checked={approval[scope]} disabled={!requiredApprovals.includes(scope) || confirming} onChange={(event) => setApproval((current) => ({ ...current, [scope]: event.target.checked }))} />{APPROVAL_LABELS[scope]}{!requiredApprovals.includes(scope) && <small>（本计划不需要）</small>}</label>)}</fieldset>}
       {kind === 'plan' && Array.isArray(payload.steps) && payload.steps.some((step) => String(step.operation || '').startsWith('generation.')) && <p className="conversation-generation-gate">生成任务必须先取得精确报价；请在生成工作台确认金额后提交，不在通用对话中盲批费用。</p>}
       {kind === 'tool_call' && <details className="conversation-tool-details"><summary>查看工具与参数摘要</summary><StructuredSummary payload={payload} kind={kind} /></details>}
-      {['tool_result', 'evidence', 'analysis', 'knowledge', 'brief', 'artifact'].includes(kind) && <StructuredSummary payload={payload} kind={kind} />}
+      {kind === 'tool_result' && <details className="conversation-tool-details"><summary>查看执行结果摘要</summary><StructuredSummary payload={payload} kind={kind} /></details>}
+      {['evidence', 'analysis', 'knowledge', 'brief', 'artifact'].includes(kind) && <StructuredSummary payload={payload} kind={kind} />}
       {messageTaskId && !taskId && <p className="conversation-historical-note">历史任务记录，仅供查看。</p>}
       {taskId && <footer>{kind === 'plan' && canConfirm && <button type="button" className="primary" disabled={!exactApprovalReady || confirming || !/^[0-9a-f]{64}$/.test(String(payload.fingerprint || ''))} onClick={() => onConfirm?.({ taskId, planFingerprint: payload.fingerprint, approval })}>{confirming ? '正在确认…' : '确认并开始执行'}</button>}<button type="button" onClick={() => onNavigate?.('ai-execution', taskId)}>查看进度</button><button type="button" onClick={() => onNavigate?.('ai-results', taskId)}>查看结果</button></footer>}
       </div>
@@ -145,7 +154,9 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const client = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
   const projectStore = useMemo(() => providedProjectStore || (!providedHarnessClient ? createP20OnlineStore() : null), [providedHarnessClient, providedProjectStore]);
   const routeContext = useMemo(() => parseHarnessContextParams(routeParams), [routeParams]);
-  const agentFirst = routeParams?.agent === '1';
+  // H9: new user tasks are Harness-native by default. The old deterministic
+  // planner is kept only as an explicit legacy recovery path.
+  const agentFirst = routeParams?.legacy === '1' ? false : true;
   const activeThreadKey = agentFirst ? ACTIVE_AGENT_THREAD_KEY : ACTIVE_THREAD_KEY;
   const [thread, setThread] = useState(null);
   const [messages, setMessages] = useState([]);

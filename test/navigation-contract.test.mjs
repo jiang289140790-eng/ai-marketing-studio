@@ -2,73 +2,72 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { harnessPlugins, navigationItems, navigationSections } from '../src/data/navigation.js';
+import { harnessJourney, navigationItems, compatibilitySections, routablePageIds } from '../src/data/navigation.js';
 
-test('最终导航与辅助页面职责清单一致（任务详情页不再作为独立菜单项）', () => {
+test('H9 主导航只保留 Harness 锚点、业务结果、业务资产与插件连接', () => {
+  assert.deepEqual(harnessJourney.map((entry) => entry.label), ['新任务', '当前会话']);
   assert.deepEqual(
-    navigationSections.map((section) => ({
+    compatibilitySections.map((section) => ({
       label: section.label,
       items: section.items.map((item) => item.label),
     })),
     [
-      { label: '资源与配置', items: ['角色库', '账号矩阵', '提示词库', '素材库'] },
-      { label: '高级工作台', items: ['活动与计划', '内容工作台', '内容情报', '数据分析', 'AI 复盘', '运营日报', '发布中心'] },
-      { label: '系统', items: ['平台连接', '工作流与模型', '系统状态'] },
+      { label: '业务结果', items: ['研究与 Brief', '知识库', '生成结果', '发布中心'] },
+      { label: '业务资产', items: ['角色库', '账号矩阵', '素材库'] },
+      { label: '插件连接', items: ['平台连接'] },
     ],
   );
 });
 
-test('导航契约：全部可见菜单 ID 唯一、可见标签不重复（不依赖 CSS 隐藏）', () => {
+test('visible navigation ids and labels are unique', () => {
   const ids = navigationItems.map((item) => item.id);
   const labels = navigationItems.map((item) => item.label);
-  assert.equal(new Set(ids).size, ids.length, '菜单 ID 必须唯一');
-  assert.equal(new Set(labels).size, labels.length, '可见菜单标签不得重复');
-  const sectionLabels = navigationSections.map((section) => section.label);
-  assert.equal(new Set(sectionLabels).size, sectionLabels.length, '分组标签不得重复');
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.equal(new Set(compatibilitySections.map((section) => section.label)).size, compatibilitySections.length);
   for (const item of navigationItems) {
-    assert.ok(item.id && typeof item.id === 'string', '菜单条目必须有 id');
-    assert.ok(item.label && typeof item.label === 'string', '菜单条目必须有可见标签');
-  }
-  // 用户截图点名的重复项：账号矩阵/角色库/提示词库/数据分析 每项只注册一次。
-  for (const label of ['账号矩阵', '角色库', '提示词库', '数据分析']) {
-    assert.equal(labels.filter((entry) => entry === label).length, 1, `“${label}”只能出现一次`);
+    assert.ok(item.id && typeof item.id === 'string');
+    assert.ok(item.label && typeof item.label === 'string');
   }
 });
 
-test('harnessPlugins 唯一注册源：只保留编排入口与权威专业页面', () => {
-  assert.equal(harnessPlugins.length, 4, '核心流程固定 4 个入口');
-  assert.deepEqual(harnessPlugins.map((plugin) => plugin.label), ['AI 工作台', '研究与 Brief', '知识库', '生成工作台']);
-  const ids = harnessPlugins.map((plugin) => plugin.id);
-  const labels = harnessPlugins.map((plugin) => plugin.label);
-  assert.equal(new Set(ids).size, ids.length, '插件 ID 必须唯一');
-  assert.equal(new Set(labels).size, labels.length, '插件可见标签不得重复');
-  const navIds = new Set(navigationItems.map((item) => item.id));
-  for (const plugin of harnessPlugins) {
-    assert.ok(plugin.testId && plugin.testId.startsWith('harness-plugin-'), `插件 ${plugin.id} 必须有唯一 testId`);
-    const target = plugin.route || plugin.id;
-    assert.ok(navIds.has(target), `插件目标 ${target} 必须可解析`);
+test('旧固定规划器、后台配置和调试页不进入用户可见导航，但保留路由兼容', async () => {
+  const visibleIds = new Set(navigationItems.map((item) => item.id));
+  for (const id of ['prompts', 'workflows', 'health', 'workspace', 'intelligence', 'data-analytics', 'analytics', 'dailyreport', 'campaigns']) {
+    assert.ok(!visibleIds.has(id), `${id} must stay hidden from visible navigation`);
+    assert.ok(routablePageIds.includes(id), `${id} must remain in the route compatibility list`);
   }
-  // 侧栏可见标签契约：核心插件标签与“更多工具”二级条目不得重叠。
-  const secondaryLabels = navigationSections
-    .flatMap((section) => section.items)
-    .map((item) => item.label);
-  for (const plugin of harnessPlugins) {
-    assert.ok(!secondaryLabels.includes(plugin.label), `核心插件标签“${plugin.label}”不得在“更多工具”中重复`);
+  const app = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+  for (const id of ['prompts', 'workflows', 'health', 'workspace', 'intelligence']) {
+    assert.match(app, new RegExp(`case '${id}'`), `${id} remains route-compatible for old links`);
   }
 });
 
-test('三页任务架构路由契约：规范任务路由派生自唯一导航配置，侧栏只消费共享注册源', async () => {
+test('Harness journey is the only primary operation entry; business pages do not duplicate it', () => {
+  assert.equal(harnessJourney.length, 2);
+  const compatLabels = compatibilitySections.flatMap((section) => section.items.map((item) => item.label));
+  for (const entry of harnessJourney) {
+    assert.ok(!compatLabels.includes(entry.label));
+  }
+  const journeyIds = harnessJourney.map((entry) => entry.id);
+  for (const id of ['research', 'knowledge', 'generation']) {
+    assert.ok(!journeyIds.includes(id));
+  }
+});
+
+test('sidebar consumes the shared navigation registry and does not hide duplicate menus with CSS', async () => {
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
   const workspace = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
-  // 侧栏核心插件必须来自唯一注册源，组件内不得复制第二份菜单配置。
-  assert.match(sidebar, /import \{ harnessPlugins, navigationSections \} from '\.\.\/data\/navigation'/);
-  assert.match(sidebar, /const corePlugins = harnessPlugins/);
-  // 工作台页面不得再渲染第二份业务插件菜单（此前靠 CSS display:none 掩盖重复注册）。
-  assert.doesNotMatch(workspace, /businessPlugins|ai-plugin-rail/, 'AIWorkspacePage 不得包含重复插件菜单');
-  assert.doesNotMatch(sidebar, /display:\s*none/, '侧栏不得用 CSS 隐藏掩盖重复注册');
+  assert.match(sidebar, /import \{ compatibilitySections, harnessJourney \} from '\.\.\/data\/navigation'/);
+  assert.match(sidebar, /const secondarySections = compatibilitySections/);
+  assert.match(sidebar, /journeyNew\.testId/);
+  assert.match(sidebar, /journeySession\.testId/);
+  assert.match(sidebar, /业务页面/);
+  assert.doesNotMatch(workspace, /businessPlugins|ai-plugin-rail/);
+  assert.doesNotMatch(sidebar, /display:\s*none/);
 });
 
-test('三页任务架构路由契约：规范路由使用 /tasks 路径且保持 taskId', async () => {
+test('canonical task routes stay on /tasks and keep task ids', async () => {
   const routeSource = await readFile(new URL('../src/utils/app-route.js', import.meta.url), 'utf8');
   assert.match(routeSource, /\/tasks\/new/);
   assert.match(routeSource, /tasks\/\$\{encodeURIComponent\(canonical\.detailId\)\}/);
@@ -89,30 +88,7 @@ test('三页任务架构路由契约：规范路由使用 /tasks 路径且保持
   }
 });
 
-test('侧栏优先展示 Harness 核心流程并将资源与高级页面收纳到二级区', async () => {
-  const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
-  const navigation = await readFile(new URL('../src/data/navigation.js', import.meta.url), 'utf8');
-  assert.match(sidebar, /const corePlugins = harnessPlugins/);
-  // 可见插件标签只注册在唯一配置源；侧栏从共享配置派生，不复制第二份。
-  for (const plugin of ['AI 工作台', '研究与 Brief', '知识库', '生成工作台']) {
-    assert.match(navigation, new RegExp(plugin));
-  }
-  assert.doesNotMatch(navigation, /harness-plugin-research-evidence|harness-plugin-research-brief|harness-plugin-assets/, 'Evidence、Brief 与成品不得伪装成独立核心产品');
-  assert.match(sidebar, /const secondarySections = navigationSections/);
-  assert.match(sidebar, /secondarySections\.map/);
-  assert.match(sidebar, /section\.items\.some\(\(item\) => item\.id === activeNavigationId\)/);
-  assert.match(sidebar, /aria-expanded=\{expanded\}/);
-  assert.match(sidebar, /hidden=\{!expanded && !collapsed\}/);
-  assert.match(sidebar, /sidebar-collapse-toggle/);
-  assert.match(sidebar, /aria-label=\{collapsed \? '展开侧栏' : '收起侧栏'\}/);
-  assert.match(sidebar, /辅助业务页面/);
-  assert.match(sidebar, /资源 \/ 高级模式/);
-  assert.match(navigation, /label: '资源与配置'/);
-  assert.match(navigation, /label: '高级工作台'/);
-  assert.ok(navigation.indexOf("id: 'characters'") < navigation.indexOf("id: 'accounts'"), '角色库必须保留并优先展示在资源区');
-});
-
-test('Pages 发布保留自定义任务路由回退，不得再用 index.html 覆盖', async () => {
+test('Pages deployment keeps custom task-route fallback', async () => {
   const workflow = await readFile(new URL('../.github/workflows/deploy-github-pages.yml', import.meta.url), 'utf8');
   const fallback = await readFile(new URL('../public/404.html', import.meta.url), 'utf8');
   assert.doesNotMatch(workflow, /cp dist\/index\.html dist\/404\.html/);

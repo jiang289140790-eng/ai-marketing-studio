@@ -1,49 +1,56 @@
-// 导航唯一注册源。核心流程只展示 Harness 的编排入口及其三个权威专业页面；
-// Evidence、Brief 和生成 Artifact 在对应专业页面内查看，不再伪装成独立产品。
-export const harnessPlugins = [
-  { id: 'ai', label: 'AI 工作台', icon: '✦', testId: 'harness-plugin-ai' },
-  { id: 'research', label: '研究与 Brief', icon: '⌕', testId: 'harness-plugin-research' },
-  { id: 'knowledge', label: '知识库', icon: '◈', testId: 'harness-plugin-knowledge' },
-  { id: 'generation', label: '生成工作台', icon: '▣', testId: 'harness-plugin-generation' },
+// 导航唯一注册源。用户可见入口只保留 Harness 对话入口、插件连接
+// 和业务结果/资产业务页；旧固定规划器、调试页和后台配置页仍保留
+// 路由兼容，但不再作为产品入口展示。
+export const harnessJourney = [
+  { id: 'ai', key: 'new', label: '新任务', icon: '✦', testId: 'harness-journey-new' },
+  { id: 'ai', key: 'session', label: '当前会话', icon: '⋯', testId: 'harness-journey-session' },
 ];
 
-export const navigationSections = [
+export const compatibilitySections = [
   {
-    label: '资源与配置',
+    label: '业务结果',
     items: [
-      { id: 'characters', label: '角色库', icon: '✦' },
-      { id: 'accounts', label: '账号矩阵', icon: '●' },
-      { id: 'prompts', label: '提示词库', icon: '✎' },
-      { id: 'assets', label: '素材库', icon: '■' },
-    ],
-  },
-  {
-    label: '高级工作台',
-    items: [
-      { id: 'campaigns', label: '活动与计划', icon: '◆' },
-      { id: 'workspace', label: '内容工作台', icon: '✓' },
-      { id: 'intelligence', label: '内容情报', icon: '⌕' },
-      { id: 'data-analytics', label: '数据分析', icon: '▥' },
-      { id: 'analytics', label: 'AI 复盘', icon: '◇' },
-      { id: 'dailyreport', label: '运营日报', icon: '▦' },
+      { id: 'research', label: '研究与 Brief', icon: '⌕', testId: 'harness-plugin-research' },
+      { id: 'knowledge', label: '知识库', icon: '◈', testId: 'harness-plugin-knowledge' },
+      { id: 'generation', label: '生成结果', icon: '▣', testId: 'harness-plugin-generation' },
       { id: 'publish', label: '发布中心', icon: '↗' },
     ],
   },
   {
-    label: '系统',
+    label: '业务资产',
+    items: [
+      { id: 'characters', label: '角色库', icon: '✦' },
+      { id: 'accounts', label: '账号矩阵', icon: '●' },
+      { id: 'assets', label: '素材库', icon: '■' },
+    ],
+  },
+  {
+    label: '插件连接',
     items: [
       { id: 'connections', label: '平台连接', icon: '🔗' },
-      { id: 'workflows', label: '工作流与模型', icon: '⚙' },
-      { id: 'health', label: '系统状态', icon: '▣' },
     ],
   },
 ];
 
-// 路由白名单同时覆盖核心流程和管理页面，但每个可见入口只有一个定义。
+// 用户可见导航唯一来源：主旅程入口 + 业务页，每页只有一个定义。
 export const navigationItems = [
-  ...harnessPlugins.map(({ id, label, icon }) => ({ id, label, icon })),
-  ...navigationSections.flatMap((section) => section.items),
+  { id: 'ai', label: '新任务', icon: '✦' },
+  ...compatibilitySections.flatMap((section) => section.items),
 ];
+
+// 可见导航保持精简；旧页面仍在路由白名单中，以保证书签和历史深链接可用。
+export const routablePageIds = Object.freeze([
+  ...navigationItems.map((item) => item.id),
+  'prompts',
+  'workflows',
+  'health',
+  'workspace',
+  'intelligence',
+  'data-analytics',
+  'analytics',
+  'dailyreport',
+  'campaigns',
+]);
 
 export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];
 

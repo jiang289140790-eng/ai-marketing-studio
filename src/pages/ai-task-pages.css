@@ -1,4 +1,4 @@
-/* 三页任务架构：任务执行详情页 + 任务结果与审核页（页面专属，使用全局主题变量）。 */
+/* ?????????????? + ???????????????????????? */
 
 .ai-task-page {
   --ai-line: rgba(125, 151, 190, .2);
@@ -117,7 +117,7 @@
 }
 
 .ai-collapsed-panel > summary::after {
-  content: "展开";
+  content: "??";
   flex: 0 0 auto;
   padding: 4px 10px;
   border-radius: 999px;
@@ -131,7 +131,7 @@
 }
 
 .ai-collapsed-panel[open] > summary::after {
-  content: "收起";
+  content: "??";
 }
 
 .ai-collapsed-panel > summary > span {
@@ -501,6 +501,20 @@
   font-size: 12px;
 }
 
+.ai-technical-subdetails {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(120, 136, 162, .16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .025);
+}
+
+.ai-technical-subdetails > summary {
+  cursor: pointer;
+  color: #8fa0b8;
+  font-size: 12px;
+}
+
 .ai-task-nav {
   display: flex;
   justify-content: flex-end;
@@ -653,7 +667,7 @@
   flex-basis: 100%;
 }
 
-/* 工具调用（真实服务端 tool_calls 记录；缺失显示明确空态） */
+/* ?????????? tool_calls ???????????? */
 .ai-tool-calls {
   list-style: none;
   margin: 0;
@@ -704,7 +718,7 @@
   color: #b9a6ff;
 }
 
-/* 结果五分类（Evidence / Analysis / Knowledge / Brief / Artifact） */
+/* ??????Evidence / Analysis / Knowledge / Brief / Artifact? */
 .ai-result-sections {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -767,7 +781,7 @@
   overflow-wrap: anywhere;
 }
 
-/* 技术详情（默认折叠）：task_id/project_id/指纹/内部状态/审批字段等 */
+/* ???????????task_id/project_id/??/????/????? */
 .ai-task-technical {
   margin: 10px 0 0;
   display: grid;

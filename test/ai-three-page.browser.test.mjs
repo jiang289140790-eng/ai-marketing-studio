@@ -38,12 +38,12 @@ test('real browser: conversation workspace route, empty state, composer, respons
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.clear();` });
     await navigateAndWait(cdp, tracker, `${baseUrl}tasks/new`, { label: '/tasks/new' });
     await waitForSelector(cdp, '[data-testid="conversation-workspace"]', { label: 'conversation workspace', timeout: 30_000 });
-    await waitForSelector(cdp, '[data-testid="conversation-transcript"]', { label: 'conversation transcript' });
     await waitForSelector(cdp, '[data-testid="harness-intent"]', { label: 'composer' });
     assert.equal(await cdp.evaluate(`location.pathname.endsWith('/tasks/new')`), true);
-    assert.match(await cdp.evaluate(`document.querySelector('[data-testid="conversation-transcript"]').innerText`), /今天想完成什么/);
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-task-flow button').length`), 3);
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-task-flow button')[1].disabled && document.querySelectorAll('.ai-task-flow button')[2].disabled`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="conversation-workspace"]').classList.contains('is-empty')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="conversation-transcript"]').length`), 0);
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.conversation-quick-prompts button').length`), 0);
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.ai-task-flow button').length`), 0);
     const navLabels = await cdp.evaluate(`Array.from(document.querySelectorAll('.nav-item .nav-label'), (item) => item.textContent).filter(Boolean)`);
     assert.equal(new Set(navLabels).size, navLabels.length, 'sidebar labels remain unique');
 
@@ -52,8 +52,8 @@ test('real browser: conversation workspace route, empty state, composer, respons
       await waitFor(async () => await cdp.evaluate(`innerWidth === ${width} && innerHeight === ${height}`), { label: `${width}px viewport settlement` });
       const layout = await cdp.evaluate(`(() => { const box = document.querySelector('.conversation-workspace').getBoundingClientRect(); const composer = document.querySelector('.conversation-composer').getBoundingClientRect(); return { boxWidth: box.width, boxHeight: box.height, composerBottom: composer.bottom, viewport: innerHeight, overflow: document.documentElement.scrollWidth > innerWidth }; })()`);
       assert.equal(layout.overflow, false, `${width}px has no horizontal overflow`);
-      assert.ok(layout.boxHeight >= 400, `${width}px keeps the empty workspace useful without a forced blank transcript`);
-      assert.ok(layout.composerBottom <= layout.viewport + 420, `${width}px composer remains reachable without nested-page overflow: ${JSON.stringify(layout)}`);
+      assert.ok(layout.boxHeight < 260, `${width}px keeps the empty workspace compact: ${JSON.stringify(layout)}`);
+      assert.ok(layout.composerBottom <= layout.viewport + 80, `${width}px composer remains immediately reachable: ${JSON.stringify(layout)}`);
       if (process.env.AMS_CAPTURE_ACCEPTANCE_SCREENSHOTS === '1') {
         mkdirSync(SCREENSHOT_DIR, { recursive: true });
         const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -64,6 +64,20 @@ test('real browser: conversation workspace route, empty state, composer, respons
     await reloadAndWait(cdp, tracker, { label: 'conversation refresh' });
     await waitForSelector(cdp, '[data-testid="conversation-workspace"]', { label: 'conversation workspace after refresh' });
     assert.equal(await cdp.evaluate(`location.pathname.endsWith('/tasks/new')`), true);
+
+    // H9 mobile direct-route acceptance: execution/results pages must render
+    // truthfully even when the local browser has no configured backend.
+    const taskId = 'ht-00000000-0000-4000-8000-000000000001';
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await navigateAndWait(cdp, tracker, `${baseUrl}tasks/${taskId}`, { label: 'mobile /tasks/:id' });
+    await waitForSelector(cdp, '[data-testid="ai-task-execution"]', { label: 'mobile execution page' });
+    await waitForSelector(cdp, '[data-testid="ai-task-read-error"]', { label: 'truthful unconfigured execution state' });
+    assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'mobile execution route has no horizontal overflow');
+
+    await navigateAndWait(cdp, tracker, `${baseUrl}tasks/${taskId}/results`, { label: 'mobile /tasks/:id/results' });
+    await waitForSelector(cdp, '[data-testid="ai-task-results"]', { label: 'mobile results page' });
+    await waitForSelector(cdp, '[data-testid="ai-task-read-error"]', { label: 'truthful unconfigured results state' });
+    assert.equal(await cdp.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'mobile results route has no horizontal overflow');
   } finally {
     try { await cdp?.close(); } catch { /* noop */ }
     await shutdownEdge(debugPort);

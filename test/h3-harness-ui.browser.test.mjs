@@ -41,14 +41,15 @@ test('H3 real browser: conversation workspace is the simple default and business
     await waitFor(() => cdp.evaluate(`location.pathname.endsWith('/tasks/new') && document.readyState === 'complete'`), { label: 'canonical conversation route' });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'conversation workspace' });
     await waitForSelector(cdp, '[data-testid="harness-intent"]', { label: 'conversation composer' });
-    assert.equal(await cdp.evaluate(`document.body.innerText.includes('今天想完成什么？')`), true);
-    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="conversation-transcript"]') !== null`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="conversation-workspace"]').classList.contains('is-empty')`), true);
+    assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="conversation-transcript"]') === null`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="conversation-message"]').length`), 0, 'empty session does not invent messages');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 8, 'every visible business destination is registered once');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid^="harness-journey-"]').length`), 2, 'the native Harness journey exposes exactly two anchors');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active, [data-testid="harness-journey-new"], [data-testid="harness-journey-session"].active').length >= 1`), true, 'the active journey remains visible');
 
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-intent"]').placeholder.includes('Shift+Enter')`), true, 'composer exposes the multiline keyboard contract');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="harness-capability-map"]').length`), 0, 'workspace no longer exposes the old fixed capability panel');
 
     await click(cdp, { selector: '[data-testid="harness-plugin-generation"]', label: 'generation business plugin' });
     await waitFor(() => cdp.evaluate(`location.hash === '#/generation'`), { label: 'generation plugin route' });

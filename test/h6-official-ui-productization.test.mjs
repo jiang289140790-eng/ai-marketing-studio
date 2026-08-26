@@ -42,10 +42,11 @@ test('H6 AI workspace and generation page keep official UI responsibilities sepa
   const aiPage = await read('src/pages/AIWorkspacePage.jsx');
   const generationPage = await read('src/pages/GenerationTasksPage.jsx');
 
-  assert.match(aiPage, /AMS × DeepSeek Harness/);
+  assert.match(aiPage, /conversation-workspace/);
   assert.match(aiPage, /data-testid="ai-task-flow"/);
   assert.match(aiPage, /技术诊断（默认隐藏）/);
-  assert.match(aiPage, /Harness 已批准能力与对应页面/);
+  assert.doesNotMatch(aiPage, /Harness 已批准能力与对应页面/);
+  assert.doesNotMatch(aiPage, /conversation-quick-prompts/);
   assert.match(generationPage, /G2 · 简洁生成工作台/);
   assert.match(generationPage, /查看报价不会调用生成模型，也不会产生费用/);
   assert.match(generationPage, /GenerationArtifactViewer/);

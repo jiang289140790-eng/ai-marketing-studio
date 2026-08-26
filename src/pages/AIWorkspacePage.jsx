@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createHarnessClient, HARNESS_ACTIVE_PROJECT_KEY, HARNESS_APPROVAL_SCOPES, newHarnessRequestId, readHarnessActiveProject } from '../services/harness-client.js';
 import { createP20OnlineStore } from '../services/p20-online-store.js';
-import { capabilityModeLabel, HARNESS_CAPABILITY_MAP } from '../services/harness-capability-map.js';
+import { HARNESS_CAPABILITY_MAP } from '../services/harness-capability-map.js';
 import { parseHarnessContextParams } from '../utils/app-route.js';
 import './AIWorkspacePage.css';
 
@@ -11,11 +11,6 @@ const WORKSPACE_ID = String(import.meta.env.VITE_AMS_WORKSPACE_ID || 'ai-marketi
 const ACCEPT = 'image/*,video/mp4,application/pdf,text/plain,text/markdown,text/csv,application/json';
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-const QUICK_PROMPTS = [
-  '帮我找最近 AI 营销里值得跟进的内容，并保存证据',
-  '读取当前项目已有内容，告诉我下一步最值得做什么',
-  '根据当前项目的知识和 Brief，生成一组可执行内容方案',
-];
 
 function messagePayload(message) {
   return message.structured_payload || message.structuredPayload || {};
@@ -370,19 +365,20 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
   const currentTaskId = thread?.currentTaskId || messages.findLast((message) => message.task_id)?.task_id || null;
   const generationActive = thread?.actions?.stopGeneration === true;
+  const isEmptyThread = messages.length === 0 && !liveText;
   const connectionLabel = {
     connected: generationActive ? '正在思考' : '已连接', connecting: '正在连接', disconnected: '正在重连',
     failed: '执行失败', blocked: '任务被阻断', idle: '等待开始', stopping: '正在停止',
   }[connection] || '等待开始';
   return (
     <main className="ai-workspace conversation-page" data-testid="harness-ai-workspace">
-      <section className="conversation-heading">
+      {!isEmptyThread && <section className="conversation-heading">
         <div><span>AMS × DeepSeek Harness</span><h1>{messages.length ? 'AI 工作台' : '今天想完成什么？'}</h1><p>直接说目标。Harness 会自己选择插件工具，结果沉淀到研究、知识、Brief 或成品页。</p></div>
         <div className="conversation-heading-actions">
           {projects.length > 0 && <label className="conversation-project-compact" data-testid="harness-active-project">当前项目<select value={activeProjectId || ''} onChange={(event) => switchProject(event.target.value)} disabled={!projects.length}>{projects.map((project) => <option key={project.id} value={project.id}>{project.topic || project.title || project.id}</option>)}</select></label>}
           <div className={`conversation-connection ${connection}`}><i />{connectionLabel}</div>
         </div>
-      </section>
+      </section>}
 
       {currentTaskId && <nav className="ai-task-flow" aria-label="任务流程" data-testid="ai-task-flow">
         <button className="active" type="button" data-testid="ai-task-flow-home"><b>1</b><span><strong>对话工作区</strong><small>问答、计划和摘要</small></span></button>
@@ -390,17 +386,17 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         <button type="button" data-testid="ai-task-flow-results" disabled={!currentTaskId} onClick={() => onNavigate?.('ai-results', currentTaskId)}><b>3</b><span><strong>结果与审核</strong><small>Evidence、Brief 与成品</small></span></button>
       </nav>}
 
-      <section className={`conversation-workspace ${messages.length === 0 && !liveText ? 'is-empty' : 'has-conversation'}`} data-testid="conversation-workspace">
+      <section className={`conversation-workspace ${isEmptyThread ? 'is-empty' : 'has-conversation'}`} data-testid="conversation-workspace">
         {messages.length > 0 && <header className="conversation-toolbar"><div><span className="harness-mark">H</span><div><strong>DeepSeek Harness</strong><small>{currentTaskId ? '已关联当前任务' : '对话会话'}</small></div></div><div>{currentTaskId && <><button type="button" onClick={() => onNavigate?.('ai-execution', currentTaskId)}>执行详情</button><button type="button" onClick={() => onNavigate?.('ai-results', currentTaskId)}>结果与审核</button></>}</div></header>}
-        <div className="conversation-transcript" ref={transcriptRef} aria-live="polite" data-testid="conversation-transcript" onScroll={(event) => { const node = event.currentTarget; setUserNearBottom(node.scrollHeight - node.scrollTop - node.clientHeight < 96); }}>
-          {messages.length === 0 && !liveText ? <div className="conversation-empty"><h2>只管说你想完成什么</h2><p>不用先选“研究 / 生成 / Brief”。Harness 会按你的目标调用已接入插件；需要付费或写入时再让你确认。</p><div className="conversation-quick-prompts" aria-label="快捷任务">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>)}</div></div> : messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onConfirm={confirmPlan} confirming={confirming} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
+        {!isEmptyThread && <div className="conversation-transcript" ref={transcriptRef} aria-live="polite" data-testid="conversation-transcript" onScroll={(event) => { const node = event.currentTarget; setUserNearBottom(node.scrollHeight - node.scrollTop - node.clientHeight < 96); }}>
+          {messages.map((message) => <MessageCard key={message.id} message={message} currentTaskId={currentTaskId} onNavigate={onNavigate} onConfirm={confirmPlan} confirming={confirming} canConfirm={thread?.status === 'waiting_confirmation' && (message.task_id || message.taskId) === currentTaskId} />)}
           {liveText && <article className="conversation-message assistant streaming"><MessageIcon role="assistant" kind="text" /><div className="message-body"><span className="message-author">DeepSeek Harness</span><div>{liveText}<span className="stream-caret" /></div></div></article>}
           {sending && !liveText && <div className="conversation-thinking"><i /><span>正在思考…</span></div>}
-        </div>
+        </div>}
 
         {attachments.length > 0 && <div className="conversation-attachments">{attachments.map((attachment) => <span key={attachment.id}>{attachment.file.name}<button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}>×</button></span>)}</div>}
         <div className="conversation-composer">
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder="输入问题或任务；Enter 发送，Shift+Enter 换行" rows={2} data-testid="harness-intent" />
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder="直接说你要完成什么；Enter 发送，Shift+Enter 换行" rows={2} data-testid="harness-intent" />
           <div>
             <input ref={fileInputRef} className="sr-only" type="file" multiple accept={ACCEPT} onChange={selectFiles} />
             <button type="button" className="composer-attach" onClick={() => fileInputRef.current?.click()} disabled={attachments.length >= MAX_ATTACHMENTS}>＋ 附件</button>
@@ -409,13 +405,6 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           </div>
         </div>
       </section>
-      <details className="conversation-capabilities" data-testid="harness-capability-map">
-        <summary>Harness 已批准能力与对应页面 <span>{HARNESS_CAPABILITY_MAP.length} 项</span></summary>
-        <div className="conversation-capability-grid">
-          {HARNESS_CAPABILITY_MAP.map((capability) => <button type="button" key={capability.id} onClick={() => onNavigate?.(capability.route)}><strong>{capability.label}</strong><small>{capabilityModeLabel(capability.mode)}</small><code>{capability.id}</code></button>)}
-        </div>
-        <p>AI 工作台负责理解、计划、确认和跟踪；研究、知识与生成页面负责专业查看和人工操作。未登记能力不会被执行。</p>
-      </details>
       {error && <div className="notice error" role="alert">{error}<button type="button" onClick={() => { reconnectAttemptRef.current = 0; setError(''); if (thread?.id) { loadHistory(thread.id); refreshThread(thread.id); setStreamEpoch((value) => value + 1); } }}>重新连接</button></div>}
       {thread?.id && <details className="ai-technical-details"><summary>技术诊断（默认隐藏）</summary><dl><div><dt>thread_id</dt><dd><code>{thread.id}</code></dd></div>{currentTaskId && <div><dt>task_id</dt><dd><code>{currentTaskId}</code></dd></div>}<div><dt>event_cursor</dt><dd>{eventCursor}</dd></div></dl></details>}
     </main>

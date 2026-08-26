@@ -174,7 +174,7 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
         </div>
         <div className="button-row">
           <button className="primary-button" type="button" onClick={() => onNavigate('research')}>
-            查看研究工作台
+            查看高级研究模式
           </button>
           <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>
             返回指挥中心
@@ -210,8 +210,11 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
             <p>验收演示项目：以下全部内容为固定的本地演示数据，不代表任何真实读取或执行。</p>
           </div>
           <div className="button-row">
+            <button className="ghost-button" type="button" onClick={() => onNavigate('ai')}>
+              AI 工作台
+            </button>
             <button className="ghost-button" type="button" onClick={() => onNavigate('research')}>
-              研究工作台
+              高级研究模式
             </button>
             <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>
               指挥中心
@@ -341,19 +344,23 @@ export function KnowledgeVaultPage({ userId, onNavigate }) {
       <div className="section-head">
         <div>
           <p className="eyebrow">知识引擎 · 线上只读预览</p>
-          <h2>当前账号的只读知识数据</h2>
+          <h2>当前项目沉淀的知识与 Brief</h2>
           <p>
-            本页通过已认证的服务端只读命令读取当前账号的知识卡、Brief 与交接包；浏览器不访问私有 schema，也不写入、不合并、不删除记录。
+            这里集中查看 Harness 任务沉淀出来的知识卡、Brief 与交接包；浏览器不访问私有 schema，也不写入、不合并、不删除记录。
           </p>
         </div>
         <div className="button-row">
-          <button className="ghost-button" type="button" onClick={() => onNavigate('research')}>
-            研究工作台
+          <button className="ghost-button" type="button" onClick={() => onNavigate('ai')}>
+            AI 工作台
           </button>
-          <button className="ghost-button" type="button" onClick={() => onNavigate('dashboard')}>
-            指挥中心
+          <button className="ghost-button" type="button" onClick={() => onNavigate('research')}>
+            高级研究模式
           </button>
         </div>
+      </div>
+      <div className="knowledge-path-note" data-testid="h7-knowledge-path-note">
+        <strong>推荐路径：</strong>
+        <span>AI 工作台发起任务 → 结果页确认 Evidence / Analysis → 本页查看 Knowledge / Brief → 生成工作台制作图片或视频。</span>
       </div>
 
       {/* ---- 整体状态 ---- */}

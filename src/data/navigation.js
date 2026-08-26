@@ -9,29 +9,24 @@ export const harnessPlugins = [
 
 export const navigationSections = [
   {
-    label: '内容生产',
+    label: '资源与配置',
+    items: [
+      { id: 'characters', label: '角色库', icon: '✦' },
+      { id: 'accounts', label: '账号矩阵', icon: '●' },
+      { id: 'prompts', label: '提示词库', icon: '✎' },
+      { id: 'assets', label: '素材库', icon: '■' },
+    ],
+  },
+  {
+    label: '高级工作台',
     items: [
       { id: 'campaigns', label: '活动与计划', icon: '◆' },
       { id: 'workspace', label: '内容工作台', icon: '✓' },
-      { id: 'assets', label: '素材库', icon: '■' },
-      { id: 'publish', label: '发布中心', icon: '↗' },
-    ],
-  },
-  {
-    label: '运营资源',
-    items: [
-      { id: 'accounts', label: '账号矩阵', icon: '●' },
-      { id: 'characters', label: '角色库', icon: '✦' },
-      { id: 'prompts', label: '提示词库', icon: '✎' },
-    ],
-  },
-  {
-    label: '洞察与复盘',
-    items: [
       { id: 'intelligence', label: '内容情报', icon: '⌕' },
       { id: 'data-analytics', label: '数据分析', icon: '▥' },
       { id: 'analytics', label: 'AI 复盘', icon: '◇' },
       { id: 'dailyreport', label: '运营日报', icon: '▦' },
+      { id: 'publish', label: '发布中心', icon: '↗' },
     ],
   },
   {

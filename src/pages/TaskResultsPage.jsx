@@ -94,6 +94,14 @@ const RESULT_SECTION_ORDER = [
   ['artifact', 'Artifact'],
 ];
 
+const RESULT_KIND_LABEL = {
+  evidence: '证据',
+  analysis: '分析',
+  knowledge: '知识卡',
+  brief: 'Brief',
+  artifact: '生成成品',
+};
+
 const ANALYSIS_HIGHLIGHT_KEYS = [
   'summary',
   'conclusion',
@@ -120,6 +128,14 @@ function boundedDisplayText(value, limit = 220) {
     return Object.entries(value).slice(0, 4).map(([key, item]) => `${key}: ${boundedDisplayText(item, 80)}`).filter(Boolean).join('；').slice(0, limit);
   }
   return '';
+}
+
+function readableSectionItem(item, label) {
+  const kind = RESULT_KIND_LABEL[item?.kind] || label || '产物';
+  const title = boundedDisplayText(item?.summary || item?.name, 120) || `${kind} 已保存`;
+  const id = String(item?.id || '').trim();
+  const suffix = id ? `${id.slice(0, 10)}…` : '无后台编号';
+  return { kind, title, suffix, id };
 }
 
 function collectAnalysisHighlights(value, maxItems = 6, seen = new Set(), depth = 0) {
@@ -156,8 +172,49 @@ function resultOverview({ attachmentPipeline, chain, sections, task }) {
     analysisCount: chain?.analysis?.length || sections?.analysis?.items?.length || 0,
     knowledgeCount: chain?.knowledge?.length || sections?.knowledge?.items?.length || 0,
     briefCount: chain?.brief?.length || sections?.brief?.items?.length || 0,
+    artifactCount: chain?.generation?.length || sections?.artifact?.items?.length || 0,
     briefStatus: task?.result?.result_data?.attachment_pipeline?.brief?.status || task?.result?.result_data?.brief?.status || '',
   };
+}
+
+function outcomeRoadmap({ overview, generationJobId, task }) {
+  const items = [];
+  if (overview.evidenceCount > 0 || overview.analysisCount > 0) {
+    items.push({
+      label: '研究与分析',
+      text: `${overview.evidenceCount} 条证据、${overview.analysisCount} 份分析已经进入当前任务结果。`,
+      next: '先看本页摘要，再展开来源媒体与执行详情。',
+    });
+  }
+  if (overview.knowledgeCount > 0) {
+    items.push({
+      label: '知识沉淀',
+      text: `${overview.knowledgeCount} 张知识卡已沉淀到当前项目。`,
+      next: '去知识库按项目复查，可继续复用到后续任务。',
+    });
+  }
+  if (overview.briefCount > 0) {
+    items.push({
+      label: 'Brief 草案',
+      text: `${overview.briefCount} 份 Brief 草案已生成${overview.briefStatus ? `，状态为 ${overview.briefStatus}` : ''}。`,
+      next: '审核后进入生成工作台，避免未审稿直接生成。',
+    });
+  }
+  if (generationJobId || overview.artifactCount > 0) {
+    items.push({
+      label: '生成成品',
+      text: '图片或视频成品已绑定 Storage Artifact。',
+      next: '在本页预览、下载，并查看版本历史。',
+    });
+  }
+  if (items.length === 0) {
+    items.push({
+      label: '当前状态',
+      text: task?.state === 'failed' || task?.state === 'blocked' ? '任务没有形成完整成果。' : '任务结果正在整理。',
+      next: task?.state === 'failed' || task?.state === 'blocked' ? '返回执行页处理阻断步骤。' : '稍后刷新会恢复同一服务端快照。',
+    });
+  }
+  return items.slice(0, 4);
 }
 
 function resultGuidance({ overview, generationJobId, task }) {
@@ -269,6 +326,7 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
   const privateAttachments = useMemo(() => attachmentBindings(attachmentPipeline), [attachmentPipeline]);
   const overview = useMemo(() => resultOverview({ attachmentPipeline, chain, sections, task }), [attachmentPipeline, chain, sections, task]);
   const guidance = useMemo(() => resultGuidance({ overview, generationJobId, task }), [overview, generationJobId, task]);
+  const outcomeItems = useMemo(() => outcomeRoadmap({ overview, generationJobId, task }), [overview, generationJobId, task]);
   const notTerminalText = task ? `任务还在 ${stateLabel(task.state)}，尚未产生最终结果。` : '';
 
   useEffect(() => {
@@ -405,8 +463,17 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
             <div className="ai-task-panel-head">
               <div>
                 <p className="eyebrow">成果摘要</p>
-                <h3>先看结论，再看技术细节</h3>
+                <h3>先看结论，再看产物流向</h3>
               </div>
+            </div>
+            <div className="ai-outcome-roadmap" data-testid="h7-outcome-roadmap">
+              {outcomeItems.map((item) => (
+                <article key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.text}</strong>
+                  <p>{item.next}</p>
+                </article>
+              ))}
             </div>
             <div className="ai-result-overview-grid">
               <div className="detail-card"><span>来源媒体</span><div>{overview.mediaCount || privateAttachments.length || 0} 个附件</div></div>
@@ -505,12 +572,18 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
                       <div className="ai-task-empty" data-testid={`ai-task-no-${key}`}>服务端没有记录该任务的 {label} 数据。</div>
                     ) : (
                       <ul className="ai-section-items" data-testid={`ai-task-${key}-items`}>
-                        {section.items.map((item) => (
-                          <li key={`${item.kind}-${item.id || item.summary || item.name}`}>
-                            {item.id && <code>{item.id}</code>}
-                            {(item.summary || item.name) && <span>{item.summary || item.name}</span>}
-                          </li>
-                        ))}
+                        {section.items.map((item) => {
+                          const readable = readableSectionItem(item, label);
+                          return (
+                            <li className="ai-readable-section-item" key={`${item.kind}-${item.id || item.summary || item.name}`}>
+                              <div>
+                                <span className="ai-section-kind">{readable.kind}</span>
+                                <strong>{readable.title}</strong>
+                              </div>
+                              <code title={readable.id}>{readable.suffix}</code>
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                   </div>

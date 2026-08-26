@@ -153,7 +153,7 @@ function buildOnlineCommand(previous, next) {
   throw workbenchError('ONLINE_COMMAND_MISSING', '无法将本次修改绑定到唯一在线命令，已拒绝保存。');
 }
 
-export function ResearchWorkspacePage({ routeParams = {} }) {
+export function ResearchWorkspacePage({ routeParams = {}, onNavigate }) {
   const { isAuthenticated, loading: authLoading, userId } = useAuth();
   const onlineMode = isAuthenticated && isServerWriteEnabled();
   // 稳定客户端实例：useState 惰性初始化（渲染期间绝不读写 ref.current）。
@@ -1112,11 +1112,17 @@ export function ResearchWorkspacePage({ routeParams = {} }) {
       {/* 顶部：标题 + 存储状态 + 项目选择 + 新建 + 更多（导入/导出/归档/删除/档案） */}
       <header className="p36-topbar">
         <div className="p36-topbar-left">
-          <p className="p19-eyebrow">研究工作台</p>
+          <p className="p19-eyebrow">高级研究模式 · 手动补录 / 对账 / 批量导入</p>
           <h2>{project ? `${project.topic.slice(0, 40)}` : '采集 → 分析 → 创作 → 产物'}</h2>
-          <p className="p36-topbar-sub">{onlineMode ? '在线工作区 · 保存经命令边界写入当前账号' : '本机草稿 · 有界本地存储，未写入任何后端'}</p>
+          <p className="p36-topbar-sub">{onlineMode ? '日常任务建议先从 AI 工作台发起；本页用于高级补录、修复、批量导入和对账。在线保存经命令边界写入当前账号。' : '日常任务建议先从 AI 工作台发起；本页当前为本机草稿，有界本地存储，未写入任何后端。'}</p>
         </div>
         <div className="p36-topbar-right">
+          <button className="p19-btn p19-btn-ghost" type="button" onClick={() => onNavigate?.('ai')} title="回到自然语言主入口">
+            回 AI 工作台
+          </button>
+          <button className="p19-btn p19-btn-ghost" type="button" onClick={() => onNavigate?.('knowledge')} title="查看已沉淀的知识卡、Brief 和交接包">
+            看知识库
+          </button>
           <span className={`p19-storage-chip ${onlineMode ? 'online' : 'off'}`} data-testid="p20-persistence-mode">
             {onlineMode ? '在线工作区 · 已同步' : '本机草稿 · 未上传'}
           </span>

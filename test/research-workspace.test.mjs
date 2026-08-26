@@ -296,9 +296,12 @@ test('导航：#/research 核心流程条目与页面 ID 一致，既有条目�
   assert.ok(researchItem, '导航必须包含 research 条目');
   assert.equal(researchItem.label, '研究与 Brief');
   assert.ok(!navigationSections.some((section) => section.items.some((item) => item.id === 'research')), '研究入口不得在二级导航重复');
-  for (const id of ['intelligence', 'workspace']) {
+  for (const id of ['intelligence', 'workspace', 'characters']) {
     assert.ok(navigationItems.some((item) => item.id === id), `既有导航条目缺失: ${id}`);
   }
+  assert.equal(navigationSections[0].label, '资源与配置');
+  assert.equal(navigationSections[0].items[0].id, 'characters');
+  assert.equal(navigationSections[1].label, '高级工作台');
 });
 
 test('hash 路由：#/research 直接解析为 research 页，构建与刷新可用', async () => {

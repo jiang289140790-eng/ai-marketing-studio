@@ -11,9 +11,8 @@ test('最终导航与辅助页面职责清单一致（任务详情页不再作�
       items: section.items.map((item) => item.label),
     })),
     [
-      { label: '内容生产', items: ['活动与计划', '内容工作台', '素材库', '发布中心'] },
-      { label: '运营资源', items: ['账号矩阵', '角色库', '提示词库'] },
-      { label: '洞察与复盘', items: ['内容情报', '数据分析', 'AI 复盘', '运营日报'] },
+      { label: '资源与配置', items: ['角色库', '账号矩阵', '提示词库', '素材库'] },
+      { label: '高级工作台', items: ['活动与计划', '内容工作台', '内容情报', '数据分析', 'AI 复盘', '运营日报', '发布中心'] },
       { label: '系统', items: ['平台连接', '工作流与模型', '系统状态'] },
     ],
   );
@@ -90,7 +89,7 @@ test('三页任务架构路由契约：规范路由使用 /tasks 路径且保持
   }
 });
 
-test('侧栏优先展示 Harness 核心流程并将辅助页面收纳为管理与查看', async () => {
+test('侧栏优先展示 Harness 核心流程并将资源与高级页面收纳到二级区', async () => {
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
   const navigation = await readFile(new URL('../src/data/navigation.js', import.meta.url), 'utf8');
   assert.match(sidebar, /const corePlugins = harnessPlugins/);
@@ -107,7 +106,10 @@ test('侧栏优先展示 Harness 核心流程并将辅助页面收纳为管理�
   assert.match(sidebar, /sidebar-collapse-toggle/);
   assert.match(sidebar, /aria-label=\{collapsed \? '展开侧栏' : '收起侧栏'\}/);
   assert.match(sidebar, /辅助业务页面/);
-  assert.match(sidebar, /管理与查看/);
+  assert.match(sidebar, /资源 \/ 高级模式/);
+  assert.match(navigation, /label: '资源与配置'/);
+  assert.match(navigation, /label: '高级工作台'/);
+  assert.ok(navigation.indexOf("id: 'characters'") < navigation.indexOf("id: 'accounts'"), '角色库必须保留并优先展示在资源区');
 });
 
 test('Pages 发布保留自定义任务路由回退，不得再用 index.html 覆盖', async () => {

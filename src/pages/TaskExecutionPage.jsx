@@ -69,6 +69,29 @@ function executionGuidance({ phase, stepSummary, task }) {
   return { headline: '执行已完成', next: '进入结果页查看 Evidence、分析、知识卡、Brief 或生成成品。', tone: 'done' };
 }
 
+function executionFocusCards({ stepSummary, task }) {
+  const cards = [];
+  const finishedText = `${stepSummary.succeeded}/${stepSummary.total || 0} 步已完成`;
+  cards.push({ label: '当前进度', value: finishedText, hint: task?.state === 'running' ? '系统仍在处理' : '刷新会恢复同一任务' });
+  if (stepSummary.failed + stepSummary.blocked > 0) {
+    cards.push({
+      label: '需要处理',
+      value: `${stepSummary.failed + stepSummary.blocked} 个阻断`,
+      hint: stepSummary.attentionStep?.label || '查看失败步骤后再决定是否重试',
+    });
+  } else if (stepSummary.running > 0) {
+    cards.push({ label: '正在执行', value: `${stepSummary.running} 步运行中`, hint: stepSummary.attentionStep?.label || '无需重复提交' });
+  } else {
+    cards.push({ label: '阻断状态', value: '暂无阻断', hint: '可以直接查看结果页' });
+  }
+  cards.push({
+    label: '安全边界',
+    value: `${stepSummary.cost} 个付费 · ${stepSummary.write} 个写入`,
+    hint: '未确认不会执行付费或写入',
+  });
+  return cards;
+}
+
 /**
  * 任务执行详情页：规范路由 `/tasks/<taskId>`（旧 `#/ai-execution/<taskId>` 兼容重定向）。
  *
@@ -162,6 +185,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
     : ['queued', 'running'].includes(task?.state) ? 'active'
       : ['partial', 'failed', 'blocked'].includes(task?.state) ? 'attention' : 'terminal';
   const guidance = useMemo(() => executionGuidance({ phase, stepSummary, task }), [phase, stepSummary, task]);
+  const focusCards = useMemo(() => executionFocusCards({ stepSummary, task }), [stepSummary, task]);
 
   async function confirmPlan() {
     if (!task?.plan || submitting || !approvalsReady) return;
@@ -289,6 +313,16 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
               {phase === 'attention' && stepSummary.attentionStep && <a href="#ai-task-plan">查看失败步骤</a>}
               {phase === 'terminal' && <button className="ghost-button compact" type="button" onClick={() => onNavigate?.('ai-results', task.id)}>查看产物</button>}
             </div>
+          </section>
+
+          <section className="ai-execution-focus-strip" data-testid="h7-execution-focus-strip" aria-label="任务摘要">
+            {focusCards.map((card) => (
+              <article key={card.label}>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+                <p>{card.hint}</p>
+              </article>
+            ))}
           </section>
 
           {phase === 'planned' && task.plan && (

@@ -135,6 +135,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/p36-research-ux-redesign.test.mjs',
   'test/research-live-data.test.mjs',
   'test/research-workspace.test.mjs',
+  'test/h7-product-path-consolidation.test.mjs',
   // AI 三页任务架构（新任务首页/执行详情/结果与审核）：精确路径清单。
   'src/pages/TaskExecutionPage.jsx',
   'src/pages/TaskResultsPage.jsx',
@@ -277,6 +278,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'test/p36-research-ux-redesign.test.mjs',
   'test/research-live-data.test.mjs',
   'test/research-workspace.test.mjs',
+  'test/h7-product-path-consolidation.test.mjs',
   'supabase/migrations/20260820071137_g1_existing_provider_task_artifact_recovery.sql',
   // G1 P19 Evidence quote binding final repair: the same exact paths
   // mirrored from HARNESS_INTEGRATION_OWNED_PATHS for the strict diff gate,

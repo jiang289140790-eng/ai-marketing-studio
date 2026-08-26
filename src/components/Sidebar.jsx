@@ -128,7 +128,7 @@ export function Sidebar({ activePage, collapsed = false, onCollapsedChange, onNa
         </div>
 
         <div className="nav-overview harness-more-heading">
-          <span>管理与查看</span>
+          <span>资源 / 高级模式</span>
           <span className="sr-only">辅助业务页面</span>
           <button type="button" onClick={toggleAllSections}>{allExpanded ? '收起' : '展开'}</button>
         </div>

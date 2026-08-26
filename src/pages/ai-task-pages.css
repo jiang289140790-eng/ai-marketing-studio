@@ -268,6 +268,41 @@
   background: rgba(113, 228, 212, .08);
 }
 
+.ai-execution-focus-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.ai-execution-focus-strip article {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(125, 151, 190, .18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .045);
+}
+
+.ai-execution-focus-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-execution-focus-strip strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 17px;
+}
+
+.ai-execution-focus-strip p {
+  margin: 6px 0 0;
+  color: #a9bad1;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .ai-task-step-summary .detail-card,
 .ai-result-overview-grid .detail-card {
   display: grid;
@@ -678,6 +713,45 @@
     rgba(8, 18, 35, .72);
 }
 
+.ai-outcome-roadmap {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.ai-outcome-roadmap article {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(130, 100, 255, .24);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(130, 100, 255, .16), rgba(10, 20, 38, .48));
+}
+
+.ai-outcome-roadmap span {
+  display: inline-flex;
+  margin-bottom: 7px;
+  color: #9ee9ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+}
+
+.ai-outcome-roadmap strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-outcome-roadmap p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .ai-analysis-highlights {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -825,8 +899,33 @@
 
 .ai-section-items li {
   display: grid;
-  gap: 4px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(125, 151, 190, .12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .035);
+}
+
+.ai-section-items li > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.ai-section-items strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ai-section-kind {
+  color: #9ee9ff;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .ai-section-items code {

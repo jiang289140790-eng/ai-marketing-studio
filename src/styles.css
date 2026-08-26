@@ -9324,6 +9324,29 @@ body {
   margin: 8px 0 14px;
 }
 
+.knowledge-path-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid rgba(113, 228, 212, .22);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(113, 228, 212, .10), rgba(130, 100, 255, .08)),
+    rgba(8, 18, 35, .62);
+  color: var(--text);
+}
+
+.knowledge-path-note strong {
+  color: #71e4d4;
+}
+
+.knowledge-path-note span {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .ke-data-grid {
   display: grid;
   gap: 14px;

@@ -5,13 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Marketing Studio</title>
     <script>
-      (function () {
-        var segments = window.location.pathname.split('/').filter(Boolean);
+      function redirectTarget(pathname, search) {
+        var segments = String(pathname || '').split('/').filter(Boolean);
         var base = segments.length > 0 ? '/' + segments[0] + '/' : '/';
         var route = segments.slice(1).join('/');
-        var query = window.location.search || '';
-        var hashRoute = route ? '#/' + route + query : '#/dashboard' + query;
-        window.location.replace(base + hashRoute);
+        var query = search || '';
+        if (route === 'tasks' || route.indexOf('tasks/') === 0) {
+          return base + '#/' + route + query;
+        }
+        if (!route) {
+          return base + '#/dashboard' + query;
+        }
+        return pathname;
+      }
+
+      (function () {
+        window.location.replace(redirectTarget(window.location.pathname, window.location.search || ''));
       })();
     </script>
   </head>

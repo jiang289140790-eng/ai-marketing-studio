@@ -408,7 +408,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
         <p>AI 工作台负责理解、计划、确认和跟踪；研究、知识与生成页面负责专业查看和人工操作。未登记能力不会被执行。</p>
       </details>
       {error && <div className="notice error" role="alert">{error}<button type="button" onClick={() => { reconnectAttemptRef.current = 0; setError(''); if (thread?.id) { loadHistory(thread.id); refreshThread(thread.id); setStreamEpoch((value) => value + 1); } }}>重新连接</button></div>}
-      {thread?.id && <details className="ai-technical-details"><summary>技术详情</summary><dl><div><dt>thread_id</dt><dd><code>{thread.id}</code></dd></div>{currentTaskId && <div><dt>task_id</dt><dd><code>{currentTaskId}</code></dd></div>}<div><dt>event_cursor</dt><dd>{eventCursor}</dd></div></dl></details>}
+      {thread?.id && <details className="ai-technical-details"><summary>高级诊断（开发用）</summary><dl><div><dt>thread_id</dt><dd><code>{thread.id}</code></dd></div>{currentTaskId && <div><dt>task_id</dt><dd><code>{currentTaskId}</code></dd></div>}<div><dt>event_cursor</dt><dd>{eventCursor}</dd></div></dl></details>}
     </main>
   );
 }

@@ -10,11 +10,11 @@ import {
 import './ai-task-pages.css';
 
 function boundedMessage(error) {
-  return String(error?.message || error || '?????').slice(0, 200);
+  return String(error?.message || error || '操作失败。').slice(0, 200);
 }
 
 function formatTime(value) {
-  if (!value) return '?';
+  if (!value) return '—';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString('zh-CN', { hour12: false });
@@ -55,20 +55,28 @@ function summarizeSteps(steps) {
 
 function stepSummaryText(step) {
   const parts = [step.operation];
-  if (step.cost) parts.push('????');
-  if (step.write) parts.push('?? staging');
-  if (step.attempts > 0) parts.push(`?? ${step.attempts} ?`);
-  return parts.filter(Boolean).join(' ? ');
+  if (step.cost) parts.push('可能付费');
+  if (step.write) parts.push('写入 staging');
+  if (step.attempts > 0) parts.push(`尝试 ${step.attempts} 次`);
+  return parts.filter(Boolean).join(' · ');
+}
+
+function executionGuidance({ phase, stepSummary, task }) {
+  if (!task) return { headline: '正在读取任务状态', next: '稍等片刻，系统会从服务端恢复同一任务。', tone: 'neutral' };
+  if (phase === 'planned') return { headline: '计划已准备好，等待你确认', next: '先检查是否包含付费或写入；确认后系统才会开始执行。', tone: 'review' };
+  if (stepSummary.running > 0) return { headline: '任务正在执行', next: '可以留在本页看进度，也可以稍后回来；刷新不会丢失任务。', tone: 'active' };
+  if (stepSummary.failed + stepSummary.blocked > 0) return { headline: '任务需要处理', next: '优先查看失败步骤的原因；只有可安全重试的步骤才会显示重试按钮。', tone: 'attention' };
+  return { headline: '执行已完成', next: '进入结果页查看 Evidence、分析、知识卡、Brief 或生成成品。', tone: 'done' };
 }
 
 /**
- * ???????????? `/tasks/<taskId>`?? `#/ai-execution/<taskId>` ???????
+ * 任务执行详情页：规范路由 `/tasks/<taskId>`（旧 `#/ai-execution/<taskId>` 兼容重定向）。
  *
- * ?????????????harness read?????? taskId ????
- * snapshot ??????????????/???????????????
- * snapshot view model???????????? snapshot????????
- * ??? tool calls ?????????????????????????
- * ??????????????????????/???
+ * 只读取真实服务端任务快照（harness read），从同一个 taskId 的同一个
+ * snapshot 派生顶部汇总、任务卡片、步骤/工具调用、错误与技术详情（单一
+ * snapshot view model）。轮询更新原子替换整个 snapshot，绝不局部拼接。
+ * 步骤与 tool calls 只展示服务端存在的数据；缺失即明确空态，绝不从计划
+ * 步骤伪造成已调用工具。没有数据时展示诚实错误/空态。
  */
 export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessClient: providedHarnessClient }) {
   const harnessClient = useMemo(() => providedHarnessClient || createHarnessClient(), [providedHarnessClient]);
@@ -94,7 +102,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
     try {
       const response = await harnessClient.read(taskId);
       const next = normalizeTaskSnapshot(response?.task);
-      if (!next) throw new Error('???????????????');
+      if (!next) throw new Error('服务端没有返回有效的任务记录。');
       setTask(next);
       setError('');
     } catch (caught) {
@@ -107,8 +115,8 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // ?????????queued/running ??? 1.5s ???????
-  // ???????? snapshot????????
+  // 活动任务有界轮询：queued/running 期间每 1.5s 读取真实状态，
+  // 每次原子替换整个 snapshot，终态自动停止。
   useEffect(() => {
     if (!task || !['queued', 'running'].includes(task.state)) return undefined;
     const timer = globalThis.setInterval(async () => {
@@ -134,7 +142,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
     };
   }, [harnessClient, task]);
 
-  // ???????????????????????/?????????????
+  // 授权范围限定到当前任务与当前计划指纹：切换任务/状态变化时清除已勾选批准。
   useEffect(() => {
     setAllowPaid(false);
     setAllowWrites(false);
@@ -142,7 +150,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
   }, [task?.id, task?.state, task?.plan?.fingerprint]);
 
   const view = useMemo(() => taskSnapshotView(task), [task]);
-  const steps = view?.steps || [];
+  const steps = useMemo(() => view?.steps || [], [view]);
   const stepSummary = useMemo(() => summarizeSteps(steps), [steps]);
   const toolCalls = view?.toolCalls || { present: false, calls: [] };
   const approvals = view?.approvals || {};
@@ -153,6 +161,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
   const phase = task?.state === 'planned' ? 'planned'
     : ['queued', 'running'].includes(task?.state) ? 'active'
       : ['partial', 'failed', 'blocked'].includes(task?.state) ? 'attention' : 'terminal';
+  const guidance = useMemo(() => executionGuidance({ phase, stepSummary, task }), [phase, stepSummary, task]);
 
   async function confirmPlan() {
     if (!task?.plan || submitting || !approvalsReady) return;
@@ -169,7 +178,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
         },
       });
       const next = normalizeTaskSnapshot(response?.task);
-      if (!next) throw new Error('?????????????');
+      if (!next) throw new Error('确认入口没有返回任务记录。');
       setTask(next);
       setAllowPaid(false);
       setAllowWrites(false);
@@ -189,7 +198,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
       const response = await harnessClient.cancel(task.id);
       const next = normalizeTaskSnapshot(response?.task);
       if (next) setTask(next);
-      else setError('????????????????????');
+      else setError('取消结果未被服务端确认，任务快照未改变。');
     } catch (caught) {
       setError(boundedMessage(caught));
     } finally {
@@ -206,7 +215,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
         taskId: task.id,
         planFingerprint: task.plan.fingerprint,
         stepId,
-        // ??? edge ???????????????????
+        // 与真实 edge 契约一致：三个批准键必须全部为布尔值。
         approval: {
           paid_external_calls: approvals.paid_external_calls === true,
           online_writes: approvals.online_writes === true,
@@ -214,7 +223,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
         },
       });
       const next = normalizeTaskSnapshot(response?.task);
-      if (!next) throw new Error('?????????????');
+      if (!next) throw new Error('重试入口没有返回任务记录。');
       setTask(next);
       setAllowPaid(false);
       setAllowWrites(false);
@@ -230,19 +239,19 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
     <main className="ai-task-page" data-testid="ai-task-execution">
       <div className="ai-task-head">
         <div>
-          <p className="eyebrow">??????</p>
-          <h2>{view?.intent ? '??????' : '??????'}</h2>
-          <p>????????????????????????????????????????</p>
+          <p className="eyebrow">任务执行详情</p>
+          <h2>{view?.intent ? '执行中的任务' : '任务执行详情'}</h2>
+          <p>从真实服务端读取任务、计划与逐步执行状态；直接打开或刷新本页都会恢复到同一任务。</p>
         </div>
         <div className="button-row">
-          <button className="ghost-button" type="button" onClick={() => onNavigate?.('ai')}>???????</button>
-          {validTaskId && <button className="ghost-button" type="button" data-testid="ai-task-open-results" onClick={() => onNavigate?.('ai-results', taskId)}>?????</button>}
+          <button className="ghost-button" type="button" onClick={() => onNavigate?.('ai')}>返回新任务首页</button>
+          {validTaskId && <button className="ghost-button" type="button" data-testid="ai-task-open-results" onClick={() => onNavigate?.('ai-results', taskId)}>结果与审核</button>}
         </div>
       </div>
 
       {!validTaskId && !loading && (
         <div className="notice error" data-testid="ai-task-invalid-id" role="alert">
-          ??????????????????????????????????
+          任务编号格式无效，无法读取执行详情。请从新任务首页选择一条真实任务。
         </div>
       )}
 
@@ -261,64 +270,77 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
               <span className={`status-badge ${task.state}`}>{view.stateLabel}</span>
             </div>
             {view.intent && <p className="ai-task-intent">{view.intent}</p>}
-            {view.workflowTitle && <div className="ai-task-meta"><span>?? {view.workflowTitle}</span></div>}
+            {view.workflowTitle && <div className="ai-task-meta"><span>流程 {view.workflowTitle}</span></div>}
             {['planned', 'queued', 'running'].includes(task.state) && (
               <div className="ai-task-actions">
-                <button className="secondary-button" type="button" disabled={submitting} data-testid="ai-task-cancel" onClick={cancelTask}>????</button>
+                <button className="secondary-button" type="button" disabled={submitting} data-testid="ai-task-cancel" onClick={cancelTask}>取消任务</button>
               </div>
             )}
           </section>
 
+          <section className={`ai-task-user-summary ${guidance.tone}`} data-testid="h6-execution-user-summary">
+            <div>
+              <p className="eyebrow">现在该看什么</p>
+              <h3>{guidance.headline}</h3>
+              <p>{guidance.next}</p>
+            </div>
+            <div className="ai-task-user-actions">
+              {phase === 'planned' && task.plan && <a href="#ai-task-confirm-zone">去确认计划</a>}
+              {phase === 'attention' && stepSummary.attentionStep && <a href="#ai-task-plan">查看失败步骤</a>}
+              {phase === 'terminal' && <button className="ghost-button compact" type="button" onClick={() => onNavigate?.('ai-results', task.id)}>查看产物</button>}
+            </div>
+          </section>
+
           {phase === 'planned' && task.plan && (
             <div className="notice" data-testid="ai-task-pending-confirm">
-              ???????????????????????????
+              权威计划已生成，等待人工确认。确认授权范围见下方计划。
             </div>
           )}
 
           {phase === 'planned' && task.plan && (
-            <section className="ai-task-panel" data-testid="ai-task-confirm-zone">
+            <section className="ai-task-panel" id="ai-task-confirm-zone" data-testid="ai-task-confirm-zone">
               <div className="ai-task-panel-head">
                 <div>
-                  <p className="eyebrow">????</p>
-                  <h3>?????????</h3>
+                  <p className="eyebrow">人工确认</p>
+                  <h3>确认计划后才会执行</h3>
                 </div>
               </div>
               {Object.keys(approvals).length > 0 && (
                 <div className="ai-approvals ai-confirm-approvals">
-                  {approvals.paid_external_calls && <label><input type="checkbox" data-testid="ai-task-paid-approval" checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />????????????????</label>}
-                  {approvals.online_writes && <label><input type="checkbox" data-testid="ai-task-write-approval" checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />??????????? staging</label>}
-                  {approvals.handoff_creation && <label><input type="checkbox" data-testid="ai-task-handoff-approval" checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />??????????</label>}
+                  {approvals.paid_external_calls && <label><input type="checkbox" data-testid="ai-task-paid-approval" checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />允许本计划中的付费采集或模型分析</label>}
+                  {approvals.online_writes && <label><input type="checkbox" data-testid="ai-task-write-approval" checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />允许把本计划产物保存到 staging</label>}
+                  {approvals.handoff_creation && <label><input type="checkbox" data-testid="ai-task-handoff-approval" checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />允许本计划创建交接包</label>}
                 </div>
               )}
               <button className="primary-button" type="button" data-testid="ai-task-confirm" disabled={!approvalsReady || submitting} onClick={confirmPlan}>
-                {submitting ? '?????' : '???????'}
+                {submitting ? '正在确认…' : '确认并开始执行'}
               </button>
             </section>
           )}
 
           {task.plan && (
-            <section className="ai-task-panel" data-testid="ai-task-plan">
+            <section className="ai-task-panel" id="ai-task-plan" data-testid="ai-task-plan">
               <div className="ai-task-panel-head">
                 <div>
-                  <p className="eyebrow">?????? ? ????</p>
-                  <h3>{task.plan.workflow_title || '????'}</h3>
+                  <p className="eyebrow">权威执行计划 · 不可编辑</p>
+                  <h3>{task.plan.workflow_title || '执行计划'}</h3>
                 </div>
               </div>
               {Object.keys(approvals).length > 0 && (
                 <div className="ai-task-approvals" data-testid="ai-task-approvals">
                   {APPROVAL_REQUIREMENTS.filter((key) => approvals[key]).map((key) => (
-                    <span className="approval-chip" key={key}>?????{APPROVAL_LABELS[key]}</span>
+                    <span className="approval-chip" key={key}>需要授权：{APPROVAL_LABELS[key]}</span>
                   ))}
                 </div>
               )}
               <div className="ai-task-step-summary" data-testid="ai-task-step-summary">
-                <div className="detail-card"><span>???</span><div>{stepSummary.succeeded}/{stepSummary.total} ???</div></div>
-                <div className="detail-card"><span>????</span><div>{stepSummary.failed + stepSummary.blocked} ???/??</div></div>
-                <div className="detail-card"><span>?????</span><div>{stepSummary.cost} ????? ? {stepSummary.write} ???</div></div>
-                <div className="detail-card"><span>????</span><div>{stepSummary.attentionStep?.label || '??????'}</div></div>
+                <div className="detail-card"><span>总进度</span><div>{stepSummary.succeeded}/{stepSummary.total} 已完成</div></div>
+                <div className="detail-card"><span>需要处理</span><div>{stepSummary.failed + stepSummary.blocked} 个失败/阻断</div></div>
+                <div className="detail-card"><span>付费与写入</span><div>{stepSummary.cost} 个可能付费 · {stepSummary.write} 个写入</div></div>
+                <div className="detail-card"><span>当前焦点</span><div>{stepSummary.attentionStep?.label || '暂无异常步骤'}</div></div>
               </div>
               <details className="ai-task-step-details" data-testid="ai-task-step-details">
-                <summary>?????????{stepSummary.total} ??</summary>
+                <summary>展开执行步骤详情（{stepSummary.total} 步）</summary>
                 <ol className="ai-task-steps">
                 {steps.map((step) => (
                   <li key={step.step} data-testid={`ai-task-step-${step.step}`} data-state={step.state}>
@@ -327,20 +349,20 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                       <strong>{step.label}</strong>
                       <small>{stepSummaryText(step)}</small>
                       <details className="ai-step-inner-detail" open={step.state === 'failed' || step.state === 'blocked'}>
-                        <summary>???????</summary>
-                        <small>{step.operation} ? ???{step.depends_on.length ? step.depends_on.join('?') : '?'}</small>
+                        <summary>查看本步骤细节</summary>
+                        <small>{step.operation} · 前置：{step.depends_on.length ? step.depends_on.join('、') : '无'}</small>
                       <div className="ai-step-badges">
-                        {step.reuse && <span>?????</span>}
-                        {step.cost && <span className="cost">????</span>}
-                        {step.write && <span className="write">?? staging</span>}
-                        {step.attempts > 0 && <span className="attempts" data-testid={`ai-task-step-attempts-${step.step}`}>??? {step.attempts} ?</span>}
-                        {step.started_at && <time title={formatTime(step.started_at)}>?? {formatTime(step.started_at)}</time>}
-                        {step.finished_at && <time title={formatTime(step.finished_at)}>?? {formatTime(step.finished_at)}</time>}
+                        {step.reuse && <span>可精确复用</span>}
+                        {step.cost && <span className="cost">可能付费</span>}
+                        {step.write && <span className="write">写入 staging</span>}
+                        {step.attempts > 0 && <span className="attempts" data-testid={`ai-task-step-attempts-${step.step}`}>已尝试 {step.attempts} 次</span>}
+                        {step.started_at && <time title={formatTime(step.started_at)}>开始 {formatTime(step.started_at)}</time>}
+                        {step.finished_at && <time title={formatTime(step.finished_at)}>结束 {formatTime(step.finished_at)}</time>}
                       </div>
-                      {step.error && <p className="ai-step-error" data-testid={`ai-task-step-error-${step.step}`}>{step.error.code} ? {step.error.message}</p>}
+                      {step.error && <p className="ai-step-error" data-testid={`ai-task-step-error-${step.step}`}>{step.error.code} · {step.error.message}</p>}
                       {step.error && (step.error.field || step.error.reason || step.error.response_shape) && (
                         <details className="ai-step-diagnostics" data-testid={`ai-task-step-diagnostics-${step.step}`}>
-                          <summary>????</summary>
+                          <summary>技术诊断</summary>
                           {step.error.field && <p><strong>field:</strong> {step.error.field}</p>}
                           {step.error.reason && <p><strong>reason:</strong> {step.error.reason}</p>}
                           {step.error.response_shape && <pre>{JSON.stringify(step.error.response_shape, null, 2)}</pre>}
@@ -350,13 +372,13 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                         <div className="ai-task-retry-zone" data-testid={`ai-task-retry-zone-${step.step}`}>
                           {Object.keys(approvals).length > 0 && (
                             <div className="ai-approvals">
-                              {approvals.paid_external_calls && <label><input type="checkbox" data-testid={`ai-task-paid-approval-${step.step}`} checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />????????????????</label>}
-                              {approvals.online_writes && <label><input type="checkbox" data-testid={`ai-task-write-approval-${step.step}`} checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />??????????? staging</label>}
-                              {approvals.handoff_creation && <label><input type="checkbox" data-testid={`ai-task-handoff-approval-${step.step}`} checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />??????????</label>}
+                              {approvals.paid_external_calls && <label><input type="checkbox" data-testid={`ai-task-paid-approval-${step.step}`} checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />允许本计划中的付费采集或模型分析</label>}
+                              {approvals.online_writes && <label><input type="checkbox" data-testid={`ai-task-write-approval-${step.step}`} checked={allowWrites} onChange={(event) => setAllowWrites(event.target.checked)} />允许把本计划产物保存到 staging</label>}
+                              {approvals.handoff_creation && <label><input type="checkbox" data-testid={`ai-task-handoff-approval-${step.step}`} checked={allowHandoff} onChange={(event) => setAllowHandoff(event.target.checked)} />允许本计划创建交接包</label>}
                             </div>
                           )}
                           <button className="secondary-button" type="button" disabled={!approvalsReady || submitting} data-testid={`ai-task-retry-${step.step}`} onClick={() => retryFailedStep(step.step)}>
-                            {submitting ? '?????' : '????????'}
+                            {submitting ? '正在重试…' : '仅重试此失败步骤'}
                           </button>
                         </div>
                       )}
@@ -372,34 +394,34 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
           {task.plan && (
             <details className="ai-task-panel ai-collapsed-panel" data-testid="ai-task-tool-calls">
               <summary>
-                <span><span className="eyebrow">??????</span><strong>????</strong></span>
-                <small>{toolCalls.present ? `${toolCalls.calls.length} ???` : '????'}</small>
+                <span><span className="eyebrow">真实执行记录</span><strong>工具调用</strong></span>
+                <small>{toolCalls.present ? `${toolCalls.calls.length} 条记录` : '暂无记录'}</small>
               </summary>
               <div className="ai-task-panel-head">
                 <div>
-                  <p className="eyebrow">??????</p>
-                  <h3>????</h3>
+                  <p className="eyebrow">真实执行记录</p>
+                  <h3>工具调用</h3>
                 </div>
               </div>
               {!toolCalls.present ? (
                 <div className="ai-task-empty" data-testid="ai-task-no-tool-calls">
-                  ??????????????????????????????
+                  服务端没有该任务的工具调用记录；计划步骤不等于已调用的工具。
                 </div>
               ) : (
                 <ul className="ai-tool-calls" data-testid="ai-task-tool-call-list">
                   {toolCalls.calls.map((call, index) => (
                     <li key={`${call.step || 'task'}-${call.tool || 'tool'}-${index}`} data-testid={`ai-task-tool-call-${index}`}>
                       <div className="ai-tool-call-copy">
-                        <strong>{call.tool || call.operation || '????'}</strong>
+                        <strong>{call.tool || call.operation || '工具调用'}</strong>
                         {call.operation && <small>{call.operation}</small>}
-                        {call.step && <small>?? {call.step}</small>}
+                        {call.step && <small>步骤 {call.step}</small>}
                       </div>
                       <div className="ai-step-badges">
                         <span className={`ai-tool-status ${call.status}`}>{call.status}</span>
-                        {call.started_at && <time title={formatTime(call.started_at)}>?? {formatTime(call.started_at)}</time>}
-                        {call.finished_at && <time title={formatTime(call.finished_at)}>?? {formatTime(call.finished_at)}</time>}
+                        {call.started_at && <time title={formatTime(call.started_at)}>开始 {formatTime(call.started_at)}</time>}
+                        {call.finished_at && <time title={formatTime(call.finished_at)}>结束 {formatTime(call.finished_at)}</time>}
                       </div>
-                      {call.error && <p className="ai-step-error">{call.error.code} ? {call.error.message}</p>}
+                      {call.error && <p className="ai-step-error">{call.error.code} · {call.error.message}</p>}
                     </li>
                   ))}
                 </ul>
@@ -415,32 +437,32 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
           {!task.plan && !view?.errorText && (
             <div className="ai-task-empty" data-testid="ai-task-no-plan">
-              ????????????????????????
+              该任务还没有权威计划，暂时没有可展示的执行信息。
             </div>
           )}
 
           <div className="ai-task-nav">
-            <button className="ghost-button" type="button" onClick={() => onNavigate?.('ai-results', task.id)}>??????? ?</button>
+            <button className="ghost-button" type="button" onClick={() => onNavigate?.('ai-results', task.id)}>查看结果与审核 →</button>
           </div>
 
           {technical && (
             <details className="ai-technical-details" data-testid="ai-task-technical-details">
-              <summary>?????????</summary>
+              <summary>高级诊断（开发用）</summary>
               <dl className="ai-task-technical">
-                <div><dt>????</dt><dd>{technical.state || '?'}</dd></div>
-                <div><dt>????</dt><dd><code>{technical.task_id}</code></dd></div>
-                <div><dt>????</dt><dd>{formatTime(technical.updated_at)}</dd></div>
+                <div><dt>内部状态</dt><dd>{technical.state || '—'}</dd></div>
+                <div><dt>任务编号</dt><dd><code>{technical.task_id}</code></dd></div>
+                <div><dt>更新时间</dt><dd>{formatTime(technical.updated_at)}</dd></div>
               </dl>
               <details className="ai-technical-subdetails">
-                <summary>????????</summary>
+                <summary>展开完整内部字段</summary>
                 <dl className="ai-task-technical">
-                  <div><dt>project_id</dt><dd><code>{technical.project_id || '???'}</code></dd></div>
+                  <div><dt>project_id</dt><dd><code>{technical.project_id || '未绑定'}</code></dd></div>
                   {technical.request_id && <div><dt>request_id</dt><dd><code>{technical.request_id}</code></dd></div>}
-                  {technical.plan_fingerprint && <div><dt>????</dt><dd><code>{technical.plan_fingerprint}</code></dd></div>}
-                  {technical.request_fingerprint && <div><dt>????</dt><dd><code>{technical.request_fingerprint}</code></dd></div>}
-                  <div><dt>????</dt><dd>{formatTime(technical.created_at)}</dd></div>
+                  {technical.plan_fingerprint && <div><dt>计划指纹</dt><dd><code>{technical.plan_fingerprint}</code></dd></div>}
+                  {technical.request_fingerprint && <div><dt>请求指纹</dt><dd><code>{technical.request_fingerprint}</code></dd></div>}
+                  <div><dt>创建时间</dt><dd>{formatTime(technical.created_at)}</dd></div>
                   {technical.retry_target && <div><dt>retry_target</dt><dd><code>{technical.retry_target}</code></dd></div>}
-                  <div><dt>????</dt><dd><code>{JSON.stringify(technical.confirmation_approvals)}</code></dd></div>
+                  <div><dt>审批字段</dt><dd><code>{JSON.stringify(technical.confirmation_approvals)}</code></dd></div>
                 </dl>
               </details>
             </details>
@@ -450,7 +472,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
       {validTaskId && !loading && !task && !error && (
         <div className="ai-task-empty" data-testid="ai-task-not-found">
-          ??????????????
+          没有找到该任务的服务端记录。
         </div>
       )}
     </main>

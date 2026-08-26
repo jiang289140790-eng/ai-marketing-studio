@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { appendTaskArtifactRefs } from './artifact-journal.mjs';
 import { writeRequiredFailure } from './required-failure-journal.mjs';
@@ -30,6 +31,134 @@ async function loadClient() {
   });
 }
 
+function stableIdempotencyKey(context, operation, payload, explicit) {
+  const value = String(explicit || '').trim();
+  if (value) return value;
+  const basis = JSON.stringify({
+    task_id: context.task_id || 'no-task',
+    user_id: context.user_id || 'no-user',
+    project_id: context.project_id || null,
+    operation,
+    payload,
+  });
+  return `ams-${operation.replace(/[^a-z0-9]+/gi, '-')}-${createHash('sha256').update(basis).digest('hex').slice(0, 24)}`;
+}
+
+function payloadFromArgs(args, fieldNames = []) {
+  const payload = { ...(args.payload && typeof args.payload === 'object' ? args.payload : {}) };
+  for (const field of fieldNames) {
+    if (args[field] !== undefined) payload[field] = args[field];
+  }
+  return payload;
+}
+
+const DIRECT_TOOLS = [
+  {
+    name: 'ams_project_list',
+    operation: 'workspace.project.list',
+    description: 'List AI Marketing Studio projects available to the current user.',
+    fields: [],
+  },
+  {
+    name: 'ams_project_read',
+    operation: 'workspace.project.read',
+    description: 'Read the current or specified AMS project, including Evidence, Analysis, Knowledge, Brief and artifacts.',
+    fields: ['project_id'],
+    optional: ['project_id'],
+  },
+  {
+    name: 'ams_lineage_audit',
+    operation: 'workspace.lineage.audit',
+    description: 'Audit lineage across Evidence, Analysis, Knowledge Card, Brief, Handoff and Artifact records.',
+    fields: ['project_id'],
+  },
+  {
+    name: 'ams_research_collect_url',
+    operation: 'research.collect_url',
+    description: 'Collect one public URL, such as an X/Twitter post, as a research source.',
+    fields: ['url', 'project_id'],
+    optional: ['project_id'],
+  },
+  {
+    name: 'ams_research_search_x',
+    operation: 'research.search_x',
+    description: 'Search public X/Twitter content for a keyword or topic.',
+    fields: ['keyword', 'count', 'sort', 'project_id'],
+    optional: ['count', 'sort', 'project_id'],
+  },
+  {
+    name: 'ams_research_search_reddit',
+    operation: 'research.search_reddit',
+    description: 'Search public Reddit posts for a keyword, subreddit, sort and time window.',
+    fields: ['keyword', 'count', 'sort', 'subreddit', 'time_filter', 'project_id'],
+    optional: ['count', 'sort', 'subreddit', 'time_filter', 'project_id'],
+  },
+  {
+    name: 'ams_research_analyze_persisted',
+    operation: 'research.analyze_persisted',
+    description: 'Run Qwen analysis for exactly one persisted Evidence record.',
+    fields: ['project_id', 'evidence_id'],
+  },
+  {
+    name: 'ams_research_inspect_attachments',
+    operation: 'research.inspect_attachments',
+    description: 'Inspect uploaded image or video attachments before creating Evidence.',
+    fields: ['project_id', 'attachments'],
+    optional: ['project_id'],
+  },
+  {
+    name: 'ams_evidence_create',
+    operation: 'workspace.evidence.create',
+    description: 'Persist one validated Evidence record into the current AMS project.',
+    fields: ['project_id', 'evidence'],
+  },
+  {
+    name: 'ams_analysis_create',
+    operation: 'workspace.analysis.create',
+    description: 'Persist one model or deterministic analysis result for one exact Evidence record.',
+    fields: ['project_id', 'analysis'],
+  },
+  {
+    name: 'ams_knowledge_card_create',
+    operation: 'workspace.card.create',
+    description: 'Create a Knowledge Card from validated analysis and source provenance.',
+    fields: ['project_id', 'card'],
+  },
+  {
+    name: 'ams_brief_assemble',
+    operation: 'workspace.brief.assemble',
+    description: 'Assemble a pending-review Campaign Brief from exact Knowledge Card identities.',
+    fields: ['project_id', 'expected_fingerprint', 'brief'],
+  },
+  {
+    name: 'ams_generation_quote',
+    operation: 'generation.quote',
+    description: 'Create an immutable quote for Bailian image or video generation before paid submission.',
+    fields: ['project_id', 'brief_id', 'kind', 'prompt', 'provider', 'model', 'payload'],
+    optional: ['brief_id', 'provider', 'model', 'payload'],
+  },
+  {
+    name: 'ams_generation_submit',
+    operation: 'generation.submit',
+    description: 'Submit exactly one approved generation quote for execution.',
+    fields: ['project_id', 'quote_id', 'payload'],
+    optional: ['payload'],
+  },
+  {
+    name: 'ams_generation_status',
+    operation: 'generation.status',
+    description: 'Read the status of a generation job without creating a new paid call.',
+    fields: ['project_id', 'job_id'],
+  },
+  {
+    name: 'ams_generation_artifact',
+    operation: 'generation.artifact',
+    description: 'Read generated image or video Artifact metadata and storage URL.',
+    fields: ['project_id', 'artifact_id', 'job_id'],
+    optional: ['artifact_id', 'job_id'],
+  },
+];
+
 function apply(ctx) {
   let requiredFailure = null;
   const manifest = String(process.env.AMS_CAPABILITY_MANIFEST || '[]').slice(0, 24_000);
@@ -39,7 +168,8 @@ function apply(ctx) {
     order: 40,
     text: (conversationMode ? [
       'You are DeepSeek Harness operating AI Marketing Studio through plugin tools.',
-      'Answer ordinary questions directly and naturally. For actionable marketing work, use ams_call directly; do not request or create a separate deterministic execution plan.',
+      'Answer ordinary questions directly and naturally. For actionable marketing work, prefer the specific ams_* tools registered by this plugin. Use ams_call only as a compatibility fallback for an operation that has no specific tool yet.',
+      'Do not request or create a separate deterministic AMS execution plan.',
       'If the user goal is unclear, ask one concise clarification question instead of mapping it to a default workflow.',
       'Use the capability catalog as available tools, but you may choose the sequence yourself based on the user goal.',
       `Current reviewed capability catalog: ${manifest}`,
@@ -56,6 +186,77 @@ function apply(ctx) {
       'When a tool fails, report its exact bounded code and stop dependent actions.',
     ]).join('\n'),
   });
+
+  async function callAms(args, execution, operationOverride = '') {
+    if (requiredFailure) {
+      throw Object.assign(new Error('A required predecessor tool failed; dependent actions are blocked.'), {
+        code: 'AMS_DEPENDENCY_BLOCKED',
+      });
+    }
+    const operation = operationOverride || args.operation;
+    const payload = args.payload && typeof args.payload === 'object' ? args.payload : {};
+    const client = await loadClient();
+    const context = runtimeContext();
+    const request = {
+      schema_version: 'ams_harness_tool_v1',
+      operation,
+      payload,
+      idempotency_key: stableIdempotencyKey(context, operation, payload, args.idempotency_key),
+    };
+    if (args.expected_revision !== undefined) request.expected_revision = args.expected_revision;
+    try {
+      const result = await client(request, context, execution?.signal);
+      if (!result || result.ok === false) {
+        requiredFailure = {
+          code: String(result?.code || 'AMS_REQUIRED_TOOL_FAILED'),
+          operation,
+        };
+        writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
+        throw Object.assign(new Error('A required AI Marketing Studio tool failed.'), { code: requiredFailure.code });
+      }
+      appendTaskArtifactRefs(process.env.DSH_HOME || process.env.HOME || '', context.task_id, result);
+      return result;
+    } catch (error) {
+      if (!requiredFailure) {
+        requiredFailure = { code: String(error?.code || 'AMS_REQUIRED_TOOL_FAILED'), operation };
+        writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
+      }
+      throw error;
+    }
+  }
+
+  for (const tool of DIRECT_TOOLS) {
+    const parameters = {
+      idempotency_key: { type: 'string' },
+      expected_revision: { type: 'integer' },
+    };
+    for (const field of tool.fields) {
+      parameters[field] = {
+        type: field === 'payload' || field === 'attachments' || field === 'evidence' || field === 'analysis' || field === 'card' || field === 'brief'
+          ? 'object'
+          : field === 'count'
+            ? 'integer'
+            : 'string',
+        required: !(tool.optional || []).includes(field),
+        additionalProperties: true,
+      };
+    }
+    ctx.tools.register(defineTool({
+      name: tool.name,
+      description: tool.description,
+      parameters,
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+      },
+      async execute(args, execution) {
+        const payload = payloadFromArgs(args, tool.fields);
+        return callAms({ ...args, payload }, execution, tool.operation);
+      },
+      presentCall: () => ({ card: 'generic', title: tool.operation, kind: 'action', rawInput: tool.name }),
+    }));
+  }
+
   ctx.tools.register(defineTool({
     name: 'ams_call',
     description: 'Call one allowlisted AI Marketing Studio business operation: project, research, Evidence, Analysis, Knowledge, Brief, handoff, or generation. Unknown or destructive operations fail closed.',
@@ -83,32 +284,7 @@ function apply(ctx) {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args, execution) {
-      if (requiredFailure) {
-        throw Object.assign(new Error('A required predecessor tool failed; dependent actions are blocked.'), {
-          code: 'AMS_DEPENDENCY_BLOCKED',
-        });
-      }
-      const client = await loadClient();
-      const context = runtimeContext();
-      try {
-        const result = await client(args, context, execution?.signal);
-        if (!result || result.ok === false) {
-          requiredFailure = {
-            code: String(result?.code || 'AMS_REQUIRED_TOOL_FAILED'),
-            operation: args.operation,
-          };
-          writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
-          throw Object.assign(new Error('A required AI Marketing Studio tool failed.'), { code: requiredFailure.code });
-        }
-        appendTaskArtifactRefs(process.env.DSH_HOME || process.env.HOME || '', context.task_id, result);
-        return result;
-      } catch (error) {
-        if (!requiredFailure) {
-          requiredFailure = { code: String(error?.code || 'AMS_REQUIRED_TOOL_FAILED'), operation: args.operation };
-          writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
-        }
-        throw error;
-      }
+      return callAms(args, execution);
     },
     presentCall: (args) => ({ card: 'generic', title: args.operation, kind: 'action', rawInput: args.operation }),
   }));

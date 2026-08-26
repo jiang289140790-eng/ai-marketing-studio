@@ -83,8 +83,16 @@ test('persistent profile version advances for the agent-first conversation and o
   const webPackage = JSON.parse(await text('profile-web/package.json'));
   const webPatch = await text('profile-web/cordis.patch.yml');
   assert.match(plugin, /name: 'ams_call'/);
+  assert.match(plugin, /name: 'ams_research_search_x'/);
+  assert.match(plugin, /name: 'ams_research_search_reddit'/);
+  assert.match(plugin, /name: 'ams_research_analyze_persisted'/);
+  assert.match(plugin, /name: 'ams_brief_assemble'/);
+  assert.match(plugin, /name: 'ams_generation_quote'/);
+  assert.match(plugin, /name: 'ams_generation_submit'/);
   assert.doesNotMatch(plugin, /name: 'ams_request_plan'/);
-  assert.match(plugin, /use ams_call directly; do not request or create a separate deterministic execution plan/);
+  assert.match(plugin, /prefer the specific ams_\* tools registered by this plugin/);
+  assert.match(plugin, /Use ams_call only as a compatibility fallback/);
+  assert.match(plugin, /Do not request or create a separate deterministic AMS execution plan/);
   assert.match(plugin, /'generation\.quote', 'generation\.submit', 'generation\.status', 'generation\.artifact'/);
   assert.match(plugin, /'research\.generate_similar', 'research\.inspect_attachments'/);
   assert.match(init, /const profileWebSource = join\(appRoot, 'profile-web'\);/);

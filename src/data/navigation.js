@@ -20,14 +20,7 @@ export const compatibilitySections = [
     label: '业务资产',
     items: [
       { id: 'characters', label: '角色库', icon: '✦' },
-      { id: 'accounts', label: '账号矩阵', icon: '●' },
       { id: 'assets', label: '素材库', icon: '■' },
-    ],
-  },
-  {
-    label: '插件连接',
-    items: [
-      { id: 'connections', label: '平台连接', icon: '🔗' },
     ],
   },
 ];
@@ -50,6 +43,8 @@ export const routablePageIds = Object.freeze([
   'analytics',
   'dailyreport',
   'campaigns',
+  'accounts',
+  'connections',
 ]);
 
 export const platforms = ['X', 'Instagram', 'TikTok', 'YouTube', 'Telegram', 'Discord'];

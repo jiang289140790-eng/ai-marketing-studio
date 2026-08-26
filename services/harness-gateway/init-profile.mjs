@@ -8,17 +8,19 @@ import { fileURLToPath } from 'node:url';
 const home = process.env.HARNESS_HOME || '/data/harness';
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 const profileSource = join(appRoot, 'profile');
+const profileWebSource = join(appRoot, 'profile-web');
 const pluginSource = join(appRoot, 'plugins', 'ams-tools');
 const conversationPluginSource = join(appRoot, 'plugins', 'ams-conversation-runner');
 const vendorSource = join(appRoot, 'vendor');
 const homeLockdownSource = join(appRoot, 'home-lockdown.patch.yml');
 const target = join(home, 'profiles', 'ams');
+const webTarget = join(home, 'profiles', 'web');
 const marker = join(target, '.ams-profile-version');
 // Advance this marker whenever a persisted profile input changes.  The
 // runtime volume survives container replacement, so reusing an old marker
 // would leave the previous plugin copy active even though the image contains
 // a newer AMS conversation tool catalog.
-const version = 'ams-profile-v14';
+const version = 'ams-profile-v15';
 // The only plugins promoted from the isolated plugin lab, pinned by exact
 // version. Each entry maps a vendored directory (name) to its npm scope and
 // the exact published version the promotion is bound to; a mismatch aborts
@@ -35,25 +37,18 @@ async function current() {
   try { return (await readFile(marker, 'utf8')).trim(); } catch { return ''; }
 }
 
-await mkdir(join(home, 'profiles'), { recursive: true });
-// DSH applies the home patch after every profile patch. Refresh this exact
-// final layer on every boot so a persisted override cannot restore general
-// shell, filesystem, web, subagent, or arbitrary-code capabilities.
-await writeFile(join(home, 'cordis.patch.yml'), await readFile(homeLockdownSource), { mode: 0o600 });
-if (await current() !== version) {
-  await mkdir(target, { recursive: true });
-  for (const filename of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
-    await cp(join(profileSource, filename), join(target, filename), { force: true });
-  }
-  const scope = join(target, 'node_modules', '@ams');
+async function installCommonProfileDependencies(profileTarget, { includeConversationRunner = false } = {}) {
+  const scope = join(profileTarget, 'node_modules', '@ams');
   const plugin = join(scope, 'harness-tools');
   await mkdir(scope, { recursive: true });
   await rm(plugin, { recursive: true, force: true });
   await cp(pluginSource, plugin, { recursive: true, force: true });
-  const conversationPlugin = join(scope, 'conversation-runner');
-  await rm(conversationPlugin, { recursive: true, force: true });
-  await cp(conversationPluginSource, conversationPlugin, { recursive: true, force: true });
-  const deepseekScope = join(target, 'node_modules', '@deepseek-ai');
+  if (includeConversationRunner) {
+    const conversationPlugin = join(scope, 'conversation-runner');
+    await rm(conversationPlugin, { recursive: true, force: true });
+    await cp(conversationPluginSource, conversationPlugin, { recursive: true, force: true });
+  }
+  const deepseekScope = join(profileTarget, 'node_modules', '@deepseek-ai');
   await mkdir(deepseekScope, { recursive: true });
   for (const peer of peerPackages) {
     const source = join(appRoot, 'node_modules', '@deepseek-ai', peer);
@@ -68,12 +63,30 @@ if (await current() !== version) {
     if (manifest.version !== promoted.version) {
       throw new Error(`Promoted plugin ${promoted.scope}/${promoted.name} must be pinned to ${promoted.version}, found ${manifest.version}.`);
     }
-    const pluginScope = join(target, 'node_modules', ...promoted.scope.split('/'));
+    const pluginScope = join(profileTarget, 'node_modules', ...promoted.scope.split('/'));
     const destination = join(pluginScope, promoted.name);
     await mkdir(pluginScope, { recursive: true });
     await rm(destination, { recursive: true, force: true });
     await cp(source, destination, { recursive: true, force: true });
   }
+}
+
+await mkdir(join(home, 'profiles'), { recursive: true });
+// DSH applies the home patch after every profile patch. Refresh this exact
+// final layer on every boot so a persisted override cannot restore general
+// shell, filesystem, web, subagent, or arbitrary-code capabilities.
+await writeFile(join(home, 'cordis.patch.yml'), await readFile(homeLockdownSource), { mode: 0o600 });
+if (await current() !== version) {
+  await mkdir(target, { recursive: true });
+  for (const filename of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
+    await cp(join(profileSource, filename), join(target, filename), { force: true });
+  }
+  await installCommonProfileDependencies(target, { includeConversationRunner: true });
+  await mkdir(webTarget, { recursive: true });
+  for (const filename of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
+    await cp(join(profileWebSource, filename), join(webTarget, filename), { force: true });
+  }
+  await installCommonProfileDependencies(webTarget);
   await writeFile(marker, `${version}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 await access(join(target, 'node_modules', '@ams', 'harness-tools', 'index.mjs'), constants.R_OK);
@@ -83,4 +96,11 @@ for (const peer of peerPackages) {
 }
 for (const promoted of promotedPlugins) {
   await access(join(target, 'node_modules', ...promoted.scope.split('/'), promoted.name, 'package.json'), constants.R_OK);
+}
+await access(join(webTarget, 'node_modules', '@ams', 'harness-tools', 'index.mjs'), constants.R_OK);
+for (const peer of peerPackages) {
+  await access(join(webTarget, 'node_modules', '@deepseek-ai', peer), constants.R_OK);
+}
+for (const promoted of promotedPlugins) {
+  await access(join(webTarget, 'node_modules', ...promoted.scope.split('/'), promoted.name, 'package.json'), constants.R_OK);
 }

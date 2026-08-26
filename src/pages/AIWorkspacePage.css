@@ -936,3 +936,142 @@
   .conversation-toolbar > div:last-child button:first-child { display: none; }
   .conversation-summary-grid { grid-template-columns: 1fr; }
 }
+
+/* H9: AMS is now a thin business shell. DeepSeek Harness owns the actual
+   conversation, planning, tool selection and execution surface. */
+.ai-native-shell {
+  width: min(1120px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 56px 0 72px;
+  color: #13251c;
+}
+
+.native-hero {
+  border: 1px solid #dce8e1;
+  border-radius: 28px;
+  padding: clamp(28px, 5vw, 58px);
+  background:
+    radial-gradient(circle at top left, rgba(38, 122, 93, .12), transparent 36%),
+    linear-gradient(135deg, #ffffff, #f5fbf7);
+  box-shadow: 0 24px 80px rgba(24, 64, 45, .1);
+}
+
+.native-hero .eyebrow {
+  margin: 0 0 12px;
+  color: #168052;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.native-hero h1 {
+  margin: 0;
+  font-size: clamp(40px, 6vw, 76px);
+  line-height: .96;
+  letter-spacing: -.06em;
+}
+
+.native-hero p {
+  max-width: 760px;
+  margin: 18px 0 0;
+  color: #53645b;
+  font-size: 17px;
+  line-height: 1.75;
+}
+
+.native-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.native-actions .primary,
+.native-actions .secondary-button {
+  min-height: 44px;
+  border-radius: 999px;
+  padding: 0 20px;
+  font-weight: 800;
+}
+
+.native-project-card,
+.native-boundary,
+.native-business-grid button {
+  border: 1px solid #dfe8e3;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 12px 36px rgba(24, 64, 45, .06);
+}
+
+.native-project-card {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 18px 20px;
+}
+
+.native-project-card span,
+.native-project-card small,
+.native-business-grid span,
+.native-boundary li {
+  color: #66776e;
+}
+
+.native-project-card strong {
+  color: #173a28;
+  word-break: break-all;
+}
+
+.native-business-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.native-business-grid button {
+  display: grid;
+  gap: 8px;
+  min-height: 118px;
+  padding: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.native-business-grid button:hover {
+  border-color: #8bbba2;
+  background: #f7fcf9;
+}
+
+.native-business-grid strong {
+  color: #173a28;
+  font-size: 18px;
+}
+
+.native-boundary {
+  margin-top: 18px;
+  padding: 20px 22px;
+}
+
+.native-boundary h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.native-boundary ul {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+
+@media (max-width: 840px) {
+  .ai-native-shell {
+    width: min(100% - 28px, 1120px);
+    padding-block: 28px 48px;
+  }
+
+  .native-business-grid {
+    grid-template-columns: 1fr;
+  }
+}

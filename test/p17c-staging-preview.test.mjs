@@ -123,8 +123,8 @@ test('路由：旧 dashboard 收敛到规范新任务路由，research 与 knowl
   }
 });
 
-test('导航：dashboard、research、knowledge 均在导航条目中', () => {
-  for (const id of ['dashboard', 'research', 'knowledge']) {
+test('导航：AI 工作台、research、knowledge 均在导航条目中', () => {
+  for (const id of ['ai', 'research', 'knowledge']) {
     assert.ok(navigationItems.some((item) => item.id === id), `导航条目缺失: ${id}`);
   }
 });

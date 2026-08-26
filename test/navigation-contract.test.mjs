@@ -11,11 +11,9 @@ test('最终导航与辅助页面职责清单一致（任务详情页不再作�
       items: section.items.map((item) => item.label),
     })),
     [
-      { label: '智能工作', items: ['AI 工作台'] },
-      { label: '总览', items: ['AI 运营指挥中心'] },
-      { label: 'AI 运营', items: ['运营活动', '内容计划', '研究工作台', '内容工作台', '内容情报', '发布中心'] },
-      { label: '资产中心', items: ['账号矩阵', '角色库', '素材库', '生成工作台', '提示词库'] },
-      { label: '智能分析', items: ['数据分析', 'AI 复盘', '运营日报', '知识库'] },
+      { label: '内容生产', items: ['活动与计划', '内容工作台', '素材库', '发布中心'] },
+      { label: '运营资源', items: ['账号矩阵', '角色库', '提示词库'] },
+      { label: '洞察与复盘', items: ['内容情报', '数据分析', 'AI 复盘', '运营日报'] },
       { label: '系统', items: ['平台连接', '工作流与模型', '系统状态'] },
     ],
   );
@@ -38,8 +36,9 @@ test('导航契约：全部可见菜单 ID 唯一、可见标签不重复（不�
   }
 });
 
-test('harnessPlugins 唯一注册源：ID 唯一、标签唯一、路由目标可解析', () => {
-  assert.equal(harnessPlugins.length, 7, '核心插件固定 7 个');
+test('harnessPlugins 唯一注册源：只保留编排入口与权威专业页面', () => {
+  assert.equal(harnessPlugins.length, 4, '核心流程固定 4 个入口');
+  assert.deepEqual(harnessPlugins.map((plugin) => plugin.label), ['AI 工作台', '研究与 Brief', '知识库', '生成工作台']);
   const ids = harnessPlugins.map((plugin) => plugin.id);
   const labels = harnessPlugins.map((plugin) => plugin.label);
   assert.equal(new Set(ids).size, ids.length, '插件 ID 必须唯一');
@@ -48,12 +47,11 @@ test('harnessPlugins 唯一注册源：ID 唯一、标签唯一、路由目标�
   for (const plugin of harnessPlugins) {
     assert.ok(plugin.testId && plugin.testId.startsWith('harness-plugin-'), `插件 ${plugin.id} 必须有唯一 testId`);
     const target = plugin.route || plugin.id;
-    assert.ok(navIds.has(target) || target === 'research-evidence' || target === 'research-brief', `插件目标 ${target} 必须可解析`);
+    assert.ok(navIds.has(target), `插件目标 ${target} 必须可解析`);
   }
   // 侧栏可见标签契约：核心插件标签与“更多工具”二级条目不得重叠。
   const secondaryLabels = navigationSections
     .flatMap((section) => section.items)
-    .filter((item) => !['ai', 'research', 'knowledge', 'generation', 'assets'].includes(item.id))
     .map((item) => item.label);
   for (const plugin of harnessPlugins) {
     assert.ok(!secondaryLabels.includes(plugin.label), `核心插件标签“${plugin.label}”不得在“更多工具”中重复`);
@@ -92,15 +90,15 @@ test('三页任务架构路由契约：规范路由使用 /tasks 路径且保持
   }
 });
 
-test('侧栏优先展示 Harness 核心插件并将完整产品图收纳为更多工具', async () => {
+test('侧栏优先展示 Harness 核心流程并将辅助页面收纳为管理与查看', async () => {
   const sidebar = await readFile(new URL('../src/components/Sidebar.jsx', import.meta.url), 'utf8');
   const navigation = await readFile(new URL('../src/data/navigation.js', import.meta.url), 'utf8');
   assert.match(sidebar, /const corePlugins = harnessPlugins/);
   // 可见插件标签只注册在唯一配置源；侧栏从共享配置派生，不复制第二份。
-  for (const plugin of ['AI 工作台', '研究工作台', 'Evidence', 'Knowledge', 'Brief 审核', '生成中心', '成品库']) {
+  for (const plugin of ['AI 工作台', '研究与 Brief', '知识库', '生成工作台']) {
     assert.match(navigation, new RegExp(plugin));
   }
-  assert.doesNotMatch(sidebar, /label: '研究工作台'|label: 'Evidence'|label: 'Knowledge'/, '侧栏不得再内联注册插件标签');
+  assert.doesNotMatch(navigation, /harness-plugin-research-evidence|harness-plugin-research-brief|harness-plugin-assets/, 'Evidence、Brief 与成品不得伪装成独立核心产品');
   assert.match(sidebar, /const secondarySections = navigationSections/);
   assert.match(sidebar, /secondarySections\.map/);
   assert.match(sidebar, /section\.items\.some\(\(item\) => item\.id === activeNavigationId\)/);
@@ -108,6 +106,14 @@ test('侧栏优先展示 Harness 核心插件并将完整产品图收纳为更�
   assert.match(sidebar, /hidden=\{!expanded && !collapsed\}/);
   assert.match(sidebar, /sidebar-collapse-toggle/);
   assert.match(sidebar, /aria-label=\{collapsed \? '展开侧栏' : '收起侧栏'\}/);
-  assert.match(sidebar, /全部功能/);
-  assert.match(sidebar, /更多工具/);
+  assert.match(sidebar, /辅助业务页面/);
+  assert.match(sidebar, /管理与查看/);
+});
+
+test('Pages 发布保留自定义任务路由回退，不得再用 index.html 覆盖', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy-github-pages.yml', import.meta.url), 'utf8');
+  const fallback = await readFile(new URL('../public/404.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(workflow, /cp dist\/index\.html dist\/404\.html/);
+  assert.match(workflow, /grep -q "redirectTarget" dist\/404\.html/);
+  assert.match(fallback, /function redirectTarget/);
 });

@@ -6,10 +6,10 @@
   "description": "G1 private Bailian (DashScope) generation worker: claims leased jobs, submits bounded provider requests, polls the same provider task id, downloads and stores private artifacts. Never re-submits an ambiguous paid submission.",
   "scripts": {
     "start": "node worker.mjs",
-    "test": "node --test --test-reporter=tap test/"
+    "test": "node --test --test-reporter=tap test/container-contract.test.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.7"

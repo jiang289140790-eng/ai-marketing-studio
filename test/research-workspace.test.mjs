@@ -291,11 +291,11 @@ test('视图模型无盘符路径、无网络目标、无 Supabase/密钥/服务
   assert.ok(!json.includes('http'), '视图模型不得包含网络目标');
 });
 
-test('导航：#/research 侧栏条目与页面 ID 一致，既有条目不受影响', () => {
+test('导航：#/research 核心流程条目与页面 ID 一致，既有条目不受影响', () => {
   const researchItem = navigationItems.find((item) => item.id === 'research');
   assert.ok(researchItem, '导航必须包含 research 条目');
-  assert.equal(researchItem.label, '研究工作台');
-  assert.ok(navigationSections.some((section) => section.items.some((item) => item.id === 'research')));
+  assert.equal(researchItem.label, '研究与 Brief');
+  assert.ok(!navigationSections.some((section) => section.items.some((item) => item.id === 'research')), '研究入口不得在二级导航重复');
   for (const id of ['intelligence', 'workspace']) {
     assert.ok(navigationItems.some((item) => item.id === id), `既有导航条目缺失: ${id}`);
   }

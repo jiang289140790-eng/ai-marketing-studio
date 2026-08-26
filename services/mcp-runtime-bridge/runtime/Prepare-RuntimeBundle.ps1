@@ -1,13 +1,73 @@
 param(
-    [string]$MarketingStudioMcpDir = 'E:\projects\video-generator\mcp-servers\marketing-studio',
-    [string]$OutputDir = (Join-Path $PSScriptRoot '.runtime-build')
+    [string]$MarketingStudioMcpDir = '',
+    [string]$ProjectConfigPath = (Join-Path $PSScriptRoot 'runtime-source.config.json'),
+    [string]$OutputDir = (Join-Path $PSScriptRoot '.runtime-build'),
+    [switch]$ResolveSourceOnly
 )
 
 $ErrorActionPreference = 'Stop'
 
 $runtimeDir = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $bridgeDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$mcpDir = (Resolve-Path -LiteralPath $MarketingStudioMcpDir).Path
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
+$explicitSourceProvided = $PSBoundParameters.ContainsKey('MarketingStudioMcpDir')
+
+function Resolve-McpSource {
+    $candidate = $null
+    $source = $null
+
+    if ($explicitSourceProvided -and $MarketingStudioMcpDir.Trim()) {
+        $candidate = $MarketingStudioMcpDir
+        $source = 'explicit_parameter'
+    }
+    elseif (Test-Path -LiteralPath $ProjectConfigPath -PathType Leaf) {
+        try {
+            $configPath = (Resolve-Path -LiteralPath $ProjectConfigPath).Path
+            $config = [IO.File]::ReadAllText($configPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        }
+        catch {
+            throw "Runtime source config is not valid JSON: $ProjectConfigPath"
+        }
+        if (-not $config.marketing_studio_mcp_dir -or -not ([string]$config.marketing_studio_mcp_dir).Trim()) {
+            throw "Runtime source config does not define marketing_studio_mcp_dir: $configPath"
+        }
+        $configured = [string]$config.marketing_studio_mcp_dir
+        $candidate = if ([IO.Path]::IsPathRooted($configured)) {
+            $configured
+        }
+        else {
+            Join-Path (Split-Path -Parent $configPath) $configured
+        }
+        $source = 'project_config'
+    }
+    else {
+        $candidate = Join-Path (Split-Path -Parent $repoRoot) 'video-generator\mcp-servers\marketing-studio'
+        $source = 'canonical_sibling_fallback'
+    }
+
+    $resolved = Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue
+    if (-not $resolved -or -not (Test-Path -LiteralPath $resolved.Path -PathType Container)) {
+        throw "Marketing Studio MCP source does not exist for resolution source '$source': $candidate"
+    }
+    foreach ($required in @('package.json', 'server.js', 'lib')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $resolved.Path $required))) {
+            throw "Marketing Studio MCP source is incomplete; missing '$required' in $($resolved.Path)."
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        resolution_source = $source
+        path = $resolved.Path
+    }
+}
+
+$mcpSource = Resolve-McpSource
+$mcpDir = $mcpSource.path
+if ($ResolveSourceOnly) {
+    $mcpSource
+    return
+}
+
 $outputPath = [System.IO.Path]::GetFullPath($OutputDir)
 $separator = [System.IO.Path]::DirectorySeparatorChar
 $allowedRoot = $runtimeDir.TrimEnd($separator) + $separator
@@ -67,4 +127,5 @@ if ($forbidden) {
 }
 
 Write-Output "Runtime bundle ready: $outputPath"
+Write-Output "MCP source resolution: $($mcpSource.resolution_source) ($mcpDir)"
 Write-Output ('Build with: docker build -t ai-marketing-studio-runtime "{0}"' -f $outputPath)

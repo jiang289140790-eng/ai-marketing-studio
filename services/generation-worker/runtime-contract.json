@@ -1,0 +1,9 @@
+{
+  "schema_version": "ams_generation_worker_runtime_v1",
+  "node_engine": ">=22",
+  "container_base": "node:22-bookworm-slim",
+  "install": "npm ci --omit=dev --ignore-scripts --no-audit --no-fund",
+  "entrypoint": "worker.mjs",
+  "provider_adapter": "bailian-adapter.mjs",
+  "lockfile": "package-lock.json"
+}

@@ -575,10 +575,10 @@ test('无模型路径：暂不支持模型执行', () => {
 });
 
 // ============================================================================
-// 14. 路由：五个主导航项均可解析
+// 14. 路由：核心流程与内容工作台均可解析
 // ============================================================================
-test('路由：五个主导航项存在于导航列表中', () => {
-  const requiredIds = ['dashboard', 'research', 'knowledge', 'workspace', 'intelligence'];
+test('路由：核心流程与内容工作台存在于导航列表中', () => {
+  const requiredIds = ['ai', 'research', 'knowledge', 'generation', 'workspace'];
   for (const id of requiredIds) {
     assert.ok(
       navigationItems.some((item) => item.id === id),
@@ -599,12 +599,12 @@ test('Sidebar exposes core Harness plugins plus the complete secondary operation
   const sidebarSource = readSource('src/components/Sidebar.jsx');
   assert.ok(sidebarSource.includes('const corePlugins = harnessPlugins'));
   assert.ok(sidebarSource.includes('secondarySections.map((section) =>'));
-  assert.ok(sidebarSource.includes('更多工具'));
+  assert.ok(sidebarSource.includes('管理与查看'));
   assert.ok(sidebarSource.includes('aria-expanded={expanded}'));
   assert.ok(sidebarSource.includes('hidden={!expanded && !collapsed}'));
   assert.ok(sidebarSource.includes('sidebar-collapse-toggle'));
   assert.ok(!sidebarSource.includes('PRIMARY_NAV_IDS'));
-  assert.equal(navigationItems.length, 20);
+  assert.equal(navigationItems.length, 18);
   for (const id of ['publish', 'accounts', 'analytics', 'dailyreport', 'workflows', 'health']) {
     assert.ok(navigationItems.some((item) => item.id === id), `operations navigation is missing ${id}`);
   }

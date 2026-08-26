@@ -44,7 +44,7 @@ test('H3 real browser: conversation workspace is the simple default and business
     assert.equal(await cdp.evaluate(`document.body.innerText.includes('今天想完成什么？')`), true);
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="conversation-transcript"]') !== null`), true);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('[data-testid="conversation-message"]').length`), 0, 'empty session does not invent messages');
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 22, 'every navigation destination is registered once');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item').length`), 18, 'every navigation destination is registered once');
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.nav-item.active').length`), 1, 'exactly one navigation item is active');
 
     assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="harness-intent"]').placeholder.includes('Shift+Enter')`), true, 'composer exposes the multiline keyboard contract');
@@ -53,9 +53,9 @@ test('H3 real browser: conversation workspace is the simple default and business
     await waitFor(() => cdp.evaluate(`location.hash === '#/generation'`), { label: 'generation plugin route' });
     await cdp.send('Page.navigate', { url: `${baseUrl}tasks/new` });
     await waitForSelector(cdp, '[data-testid="harness-ai-workspace"]', { label: 'conversation workspace restored' });
-    await click(cdp, { selector: '[data-testid="harness-plugin-research-evidence"]', label: 'Evidence business plugin' });
-    await waitFor(() => cdp.evaluate(`location.hash === '#/research?focus=collect'`), { label: 'Evidence plugin route' });
-    await waitForSelector(cdp, '.p19-workspace', { label: 'Evidence workspace', timeout: 25_000 });
+    await click(cdp, { selector: '[data-testid="harness-plugin-research"]', label: 'research and Brief core route' });
+    await waitFor(() => cdp.evaluate(`location.hash === '#/research'`), { label: 'research route' });
+    await waitForSelector(cdp, '.p19-workspace', { label: 'research workspace', timeout: 25_000 });
 
     assert.equal(tracker.state.exceptions, 0, `browser exception: ${tracker.state.lastException || 'none'}`);
   } catch (error) {

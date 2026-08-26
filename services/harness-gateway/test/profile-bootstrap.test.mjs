@@ -44,9 +44,12 @@ test('conversation model selection does not leak a disposer as an agent setup tr
 test('Docker build makes the local plugin available before npm ci', async () => {
   const dockerfile = await text('Dockerfile');
   const copyPlugin = dockerfile.indexOf('COPY services/harness-gateway/plugins ./plugins');
+  const copyWebProfile = dockerfile.indexOf('COPY services/harness-gateway/profile-web ./profile-web');
   const install = dockerfile.indexOf('RUN npm ci');
   assert.ok(copyPlugin >= 0);
+  assert.ok(copyWebProfile >= 0);
   assert.ok(install > copyPlugin);
+  assert.ok(install > copyWebProfile);
   assert.equal(dockerfile.indexOf('COPY services/harness-gateway/plugins ./plugins', copyPlugin + 1), -1);
   assert.match(dockerfile, /COPY .*services\/harness-gateway\/planner\.mjs .*services\/harness-gateway\/deterministic-executor\.mjs .*services\/harness-gateway\/workflow-catalog\.mjs/);
   assert.match(dockerfile, /COPY .*services\/harness-gateway\/conversation-runner\.mjs .*services\/harness-gateway\/server\.mjs/);
@@ -74,23 +77,41 @@ test('both profile layers fail closed before importing subprocess/node-pty', asy
   }
 });
 
-test('persistent profile version advances for the agent-first conversation tool catalog', async () => {
+test('persistent profile version advances for the agent-first conversation and official web profiles', async () => {
   const init = await text('init-profile.mjs');
   const plugin = await text('plugins/ams-tools/index.mjs');
+  const webPackage = JSON.parse(await text('profile-web/package.json'));
+  const webPatch = await text('profile-web/cordis.patch.yml');
   assert.match(plugin, /name: 'ams_call'/);
   assert.doesNotMatch(plugin, /name: 'ams_request_plan'/);
   assert.match(plugin, /use ams_call directly; do not request or create a separate deterministic execution plan/);
   assert.match(plugin, /'generation\.quote', 'generation\.submit', 'generation\.status', 'generation\.artifact'/);
   assert.match(plugin, /'research\.generate_similar', 'research\.inspect_attachments'/);
-  assert.match(init, /const version = 'ams-profile-v14';/);
+  assert.match(init, /const profileWebSource = join\(appRoot, 'profile-web'\);/);
+  assert.match(init, /const webTarget = join\(home, 'profiles', 'web'\);/);
+  assert.match(init, /const version = 'ams-profile-v15';/);
+  assert.match(init, /installCommonProfileDependencies\(webTarget\)/);
+  assert.equal(webPackage.name, 'dsh-profile-web');
+  assert.equal(webPackage.dependencies['@ams/harness-tools'], 'file:/app/plugins/ams-tools');
+  assert.deepEqual(webPackage.dsh?.profile?.bundles, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']);
+  assert.match(webPatch, /- id: ams-harness-tools/);
+  assert.doesNotMatch(webPatch, /ams-conversation-runner/);
 });
 
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {
   const compose = await text('compose.yaml');
   assert.match(compose, /- harness_gateway_data:\/data/);
   assert.match(compose, /- harness_runtime_rc8:\/data\/harness/);
+  assert.match(compose, /harness-web:/);
+  assert.match(compose, /network_mode: host/);
+  assert.match(compose, /node --expose-internals \/app\/node_modules\/@deepseek-ai\/dsh\/lib\/bin\.js web --host 127\.0\.0\.1 --port 8792 --no-open/);
+  assert.doesNotMatch(compose, /dsh\/lib\/bin\.js web --host 0\.0\.0\.0/);
+  assert.doesNotMatch(compose, /127\.0\.0\.1:8792:8792/);
+  assert.match(compose, /127\.0\.0\.1:8791:8791/);
+  assert.match(compose, /- harness_web_runtime:\/data\/harness/);
   assert.match(compose, /HARNESS_EVENT_FILE: \/data\/gateway\/events\.jsonl/);
   assert.match(compose, /\n\s+harness_runtime_rc8:\s*(?:\r?\n|$)/);
+  assert.match(compose, /\n\s+harness_web_runtime:\s*(?:\r?\n|$)/);
 });
 
 test('only the pinned dsh-genui 0.8.3 and dsh-visualize 0.1.2 are promoted into the profile', async () => {

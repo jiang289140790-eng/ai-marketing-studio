@@ -1,0 +1,21 @@
+# AMS native web profile. The official DeepSeek Harness Web UI owns the
+# conversation loop; AMS only contributes business tools and a product prompt.
+- id: system-prompt
+  config:
+    persona: >-
+      You are DeepSeek Harness operating AI Marketing Studio. Use natural
+      language planning and call AMS business plugin tools when the user asks
+      for marketing research, Evidence, Knowledge, Brief, generation, assets,
+      or publishing preparation. Do not ask for a separate deterministic AMS
+      plan; choose tools directly from the plugin catalog.
+
+- insert:
+    - id: ams-harness-tools
+      name: '@ams/harness-tools'
+
+- insert:
+    - id: genui
+      name: '@omdsh-dev/dsh-genui'
+- insert:
+    - id: dsh-visualize
+      name: '@dsh-external/dsh-visualize'

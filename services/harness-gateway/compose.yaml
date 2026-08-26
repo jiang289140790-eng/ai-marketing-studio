@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ams-harness-gateway:0.7.0-conversation-v1
+    image: ams-harness-gateway:0.9.14-native-web-h9
     container_name: ams-harness-gateway
     restart: unless-stopped
     read_only: true
@@ -41,6 +41,37 @@ services:
       - harness_private
       - tool_egress
 
+  harness-web:
+    image: ams-harness-gateway:0.9.14-native-web-h9
+    container_name: ams-harness-web
+    restart: unless-stopped
+    read_only: true
+    init: true
+    mem_limit: 1536m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    network_mode: host
+    command: ["sh", "-lc", "node init-profile.mjs && exec node --expose-internals /app/node_modules/@deepseek-ai/dsh/lib/bin.js web --host 127.0.0.1 --port 8792 --no-open --trusted-host harness-web.47-251-244-196.sslip.io"]
+    environment:
+      HARNESS_WORKSPACE: /workspace
+      HARNESS_HOME: /data/harness
+      DSH_HOME: /data/harness
+      DEEPSEEK_API_KEY: internal-model-proxy
+      DEEPSEEK_BASE_URL: http://127.0.0.1:8791
+      AMS_MODEL_PROXY_URL: http://127.0.0.1:8791/v1/chat/completions
+      AMS_TOOL_BRIDGE_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge
+      AMS_TOOL_BRIDGE_SECRET_FILE: /run/secrets/ams_tool_bridge_secret
+      AMS_CONVERSATION_MODE: agent
+      AMS_CAPABILITY_MANIFEST: "[]"
+    secrets:
+      - ams_tool_bridge_secret
+    volumes:
+      - harness_web_runtime:/data/harness
+      - harness_workspace:/workspace:ro
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+
   model-proxy:
     image: ams-harness-gateway:0.5.0-g1
     container_name: ams-harness-model-proxy
@@ -52,6 +83,8 @@ services:
     security_opt:
       - no-new-privileges:true
     command: ["node", "model-proxy.mjs"]
+    ports:
+      - "127.0.0.1:8791:8791"
     environment:
       HOST: 0.0.0.0
       MODEL_PROXY_PORT: 8791
@@ -67,6 +100,7 @@ services:
 volumes:
   harness_gateway_data:
   harness_runtime_rc8:
+  harness_web_runtime:
   harness_workspace:
 
 networks:

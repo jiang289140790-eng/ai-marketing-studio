@@ -10,6 +10,8 @@
   "dependencies": {
     "@ams/harness-tools": "file:plugins/ams-tools",
     "@deepseek-ai/dsh": "0.1.0-rc.8",
+    "@dsh-external/dsh-visualize": "file:vendor/dsh-visualize",
+    "@omdsh-dev/dsh-genui": "file:vendor/dsh-genui",
     "@supabase/supabase-js": "2.110.7"
   }
 }

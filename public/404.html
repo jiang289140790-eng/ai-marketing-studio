@@ -10,7 +10,17 @@
         var base = segments.length > 0 ? '/' + segments[0] + '/' : '/';
         var route = segments.slice(1).join('/');
         var query = search || '';
-        if (route === 'tasks' || route.indexOf('tasks/') === 0) {
+        if (
+          route === 'ai'
+          || route === 'tasks'
+          || route.indexOf('tasks/') === 0
+          || route === 'research'
+          || route === 'knowledge'
+          || route === 'generation'
+          || route === 'assets'
+          || route === 'characters'
+          || route === 'publish'
+        ) {
           return base + '#/' + route + query;
         }
         if (!route) {

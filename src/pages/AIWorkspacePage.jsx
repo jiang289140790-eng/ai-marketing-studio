@@ -42,12 +42,8 @@ export function AIWorkspacePage({ onNavigate }) {
       <section className="official-harness-shell" aria-label="DeepSeek Harness 工作区">
         <div className="official-harness-header">
           <div>
-            <p>AMS × DeepSeek Harness</p>
-            <h1>AI 工作台</h1>
-            <span>
-              这里不再维护第二套固定规划器。你直接在官方 Harness 里说目标，
-              AMS 只提供项目、插件工具和业务结果页。
-            </span>
+            <p>DeepSeek Harness</p>
+            <h1>官方 Harness 工作区</h1>
           </div>
           <div className="official-harness-status">
             <span>当前项目</span>
@@ -74,10 +70,6 @@ export function AIWorkspacePage({ onNavigate }) {
       </section>
 
       <section className="official-business-links" aria-label="AMS 业务结果页">
-        <div className="official-business-heading">
-          <p>业务结果页</p>
-          <h2>Harness 完成任务后，在这里看沉淀结果</h2>
-        </div>
         <div className="official-business-grid">
           {links.map((item) => (
             <button type="button" key={item.id} onClick={item.onClick}>

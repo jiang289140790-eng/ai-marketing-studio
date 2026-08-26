@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ams-harness-gateway:0.9.14-native-web-h9
+    image: ams-harness-gateway:0.9.15-native-tools-h9
     container_name: ams-harness-gateway
     restart: unless-stopped
     read_only: true
@@ -42,7 +42,7 @@ services:
       - tool_egress
 
   harness-web:
-    image: ams-harness-gateway:0.9.14-native-web-h9
+    image: ams-harness-gateway:0.9.15-native-tools-h9
     container_name: ams-harness-web
     restart: unless-stopped
     read_only: true

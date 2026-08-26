@@ -370,7 +370,11 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
           )}
 
           {task.plan && (
-            <section className="ai-task-panel" data-testid="ai-task-tool-calls">
+            <details className="ai-task-panel ai-collapsed-panel" data-testid="ai-task-tool-calls">
+              <summary>
+                <span><span className="eyebrow">真实执行记录</span><strong>工具调用</strong></span>
+                <small>{toolCalls.present ? `${toolCalls.calls.length} 条记录` : '暂无记录'}</small>
+              </summary>
               <div className="ai-task-panel-head">
                 <div>
                   <p className="eyebrow">真实执行记录</p>
@@ -400,7 +404,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                   ))}
                 </ul>
               )}
-            </section>
+            </details>
           )}
 
           {view?.errorText && (

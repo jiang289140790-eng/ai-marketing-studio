@@ -97,6 +97,63 @@
   background: var(--panel);
 }
 
+.ai-collapsed-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ai-collapsed-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  padding: 16px 18px;
+  list-style: none;
+}
+
+.ai-collapsed-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-collapsed-panel > summary::after {
+  content: "展开";
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(125, 151, 190, .12);
+  color: #93a4bd;
+  font-size: 12px;
+}
+
+.ai-collapsed-panel[open] > summary {
+  border-bottom: 1px solid var(--ai-line);
+}
+
+.ai-collapsed-panel[open] > summary::after {
+  content: "收起";
+}
+
+.ai-collapsed-panel > summary > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-collapsed-panel > summary strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.ai-collapsed-panel > summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-collapsed-panel > :not(summary) {
+  margin: 16px 18px;
+}
+
 .ai-task-panel-head {
   display: flex;
   align-items: flex-start;
@@ -519,6 +576,22 @@
   overflow-wrap: anywhere;
   color: #b9c8dd;
   font: inherit;
+}
+
+.ai-compact-json {
+  padding: 0;
+}
+
+.ai-compact-json > summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: #d5ddec;
+  font-weight: 700;
+}
+
+.ai-compact-json > pre {
+  margin: 0;
+  padding: 0 14px 14px;
 }
 
 .ai-result-overview {

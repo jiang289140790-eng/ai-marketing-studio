@@ -438,15 +438,19 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
               </div>
               {attachmentPipeline?.source?.content_text && <div className="ai-result-copy" data-testid="ai-task-attachment-content">{attachmentPipeline.source.content_text}</div>}
               {attachmentPipeline?.analysis?.result && (
-                <div className="ai-result-copy" data-testid="ai-task-attachment-analysis">
-                  <strong>{attachmentPipeline.analysis.model || '多模态模型'} · 第 {attachmentPipeline.analysis.analysis_version || 1} 版</strong>
+                <details className="ai-result-copy ai-compact-json" data-testid="ai-task-attachment-analysis">
+                  <summary>{attachmentPipeline.analysis.model || '多模态模型'} · 第 {attachmentPipeline.analysis.analysis_version || 1} 版完整结构</summary>
                   <pre>{JSON.stringify(attachmentPipeline.analysis.result, null, 2)}</pre>
-                </div>
+                </details>
               )}
             </section>
           )}
 
-          <section className="ai-task-panel" data-testid="ai-task-sections">
+          <details className="ai-task-panel ai-collapsed-panel" data-testid="ai-task-sections">
+            <summary>
+              <span><span className="eyebrow">完整产物</span><strong>Evidence / Analysis / Knowledge / Brief / Artifact</strong></span>
+              <small>默认收起</small>
+            </summary>
             <div className="ai-task-panel-head">
               <div>
                 <p className="eyebrow">结果分类</p>
@@ -477,9 +481,13 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
                 );
               })}
             </div>
-          </section>
+          </details>
 
-          <section className="ai-task-panel" data-testid="ai-task-chain">
+          <details className="ai-task-panel ai-collapsed-panel" data-testid="ai-task-chain">
+            <summary>
+              <span><span className="eyebrow">来源链</span><strong>产物与来源身份</strong></span>
+              <small>{chain ? '可展开核查' : '暂无来源链'}</small>
+            </summary>
             <div className="ai-task-panel-head">
               <div>
                 <p className="eyebrow">来源链</p>
@@ -519,7 +527,7 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
                 {briefRepairError && <div className="notice error" role="alert">{briefRepairError}</div>}
               </div>
             )}
-          </section>
+          </details>
 
           {task?.result?.artifact_refs?.length > 0 && (
             <details className="ai-technical-details" data-testid="ai-task-artifact-refs">

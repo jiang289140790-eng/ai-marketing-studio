@@ -14,12 +14,12 @@ function getHarnessWebUrl() {
 
 function businessLinks(onNavigate) {
   return [
-    { id: 'research', label: '研究与 Brief' },
-    { id: 'knowledge', label: '知识库' },
-    { id: 'generation', label: '生成结果' },
-    { id: 'assets', label: '素材库' },
-    { id: 'characters', label: '角色库' },
-    { id: 'publish', label: '发布中心' },
+    { id: 'research', label: '研究与 Brief', description: 'Evidence、分析、Knowledge、Brief' },
+    { id: 'knowledge', label: '知识库', description: '沉淀可复用的营销知识' },
+    { id: 'generation', label: '生成结果', description: '图片、视频、生成任务产物' },
+    { id: 'assets', label: '素材库', description: '图片、视频与外部素材' },
+    { id: 'characters', label: '角色库', description: '长期角色与视觉资产' },
+    { id: 'publish', label: '发布中心', description: '人工确认后的发布准备' },
   ].map((item) => ({
     ...item,
     onClick: () => onNavigate?.(item.id),
@@ -39,32 +39,23 @@ export function AIWorkspacePage({ onNavigate }) {
 
   return (
     <main className="ai-workspace ai-official-harness-page" data-testid="ai-official-harness-page">
-      <section className="official-harness-strip" aria-label="DeepSeek Harness 入口">
-        <div>
-          <p>AMS × DeepSeek Harness</p>
-          <h1>直接使用官方 Harness</h1>
-          <span>
-            自然语言、规划、工具选择和执行交给 Harness；AMS 只负责项目绑定、业务结果、资产和人工确认。
-          </span>
-        </div>
-        <div className="official-harness-actions">
-          <button type="button" className="primary" onClick={openHarness}>
-            新窗口打开 Harness
-          </button>
-          <button type="button" className="secondary-button" onClick={() => onNavigate?.('research')}>
-            查看业务结果
-          </button>
-        </div>
-      </section>
-
-      <section className="official-harness-frame-card" aria-label="官方 DeepSeek Harness Web">
-        <div className="official-harness-frame-toolbar">
-          <span>
-            当前项目：
+      <section className="official-harness-shell" aria-label="DeepSeek Harness 工作区">
+        <div className="official-harness-header">
+          <div>
+            <p>AMS × DeepSeek Harness</p>
+            <h1>AI 工作台</h1>
+            <span>
+              这里不再维护第二套固定规划器。你直接在官方 Harness 里说目标，
+              AMS 只提供项目、插件工具和业务结果页。
+            </span>
+          </div>
+          <div className="official-harness-status">
+            <span>当前项目</span>
             <strong>{activeProjectId || '未绑定'}</strong>
-          </span>
-          <small>如果嵌入视图异常，请点“新窗口打开 Harness”。</small>
+            <button type="button" onClick={openHarness}>新窗口打开</button>
+          </div>
         </div>
+
         {!frameUnavailable ? (
           <iframe
             title="DeepSeek Harness Web"
@@ -76,21 +67,26 @@ export function AIWorkspacePage({ onNavigate }) {
         ) : (
           <div className="official-harness-fallback" role="status">
             <h2>官方 Harness 需要新窗口打开</h2>
-            <p>浏览器阻止了嵌入视图，但服务仍可用。</p>
-            <button type="button" className="primary" onClick={openHarness}>
-              打开官方 Harness
-            </button>
+            <p>当前浏览器阻止了嵌入视图，但 Harness 服务仍可用。</p>
+            <button type="button" onClick={openHarness}>打开官方 Harness</button>
           </div>
         )}
       </section>
 
-      <nav className="official-business-links" aria-label="AMS 业务结果入口">
-        {links.map((item) => (
-          <button type="button" key={item.id} onClick={item.onClick}>
-            {item.label}
-          </button>
-        ))}
-      </nav>
+      <section className="official-business-links" aria-label="AMS 业务结果页">
+        <div className="official-business-heading">
+          <p>业务结果页</p>
+          <h2>Harness 完成任务后，在这里看沉淀结果</h2>
+        </div>
+        <div className="official-business-grid">
+          {links.map((item) => (
+            <button type="button" key={item.id} onClick={item.onClick}>
+              <strong>{item.label}</strong>
+              <span>{item.description}</span>
+            </button>
+          ))}
+        </div>
+      </section>
     </main>
   );
 }

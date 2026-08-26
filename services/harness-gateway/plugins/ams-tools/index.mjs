@@ -31,46 +31,21 @@ async function loadClient() {
 }
 
 function apply(ctx) {
-  if (process.env.AMS_CONVERSATION_MODE === 'qa') {
-    const manifest = String(process.env.AMS_CAPABILITY_MANIFEST || '[]').slice(0, 24_000);
-    ctx.systemPrompt.section({
-      name: 'ams:conversation',
-      order: 40,
-      text: [
-        'You are the conversation and reasoning authority for AI Marketing Studio.',
-        'Answer ordinary questions directly and naturally. Use the complete prior session context for follow-ups.',
-        'Never map an unclear request to a default project read. Ask a concise clarification question instead.',
-        'Only when the user is asking the studio to perform an actionable capability, call ams_request_plan once.',
-        'The tool only requests a schema-validated deterministic plan; it never executes tools or incurs provider cost.',
-        'After requesting a plan, explain that the plan will be shown for review and that writes, paid calls, generation, and publishing still require their declared approvals.',
-        `Current reviewed capability catalog: ${manifest}`,
-      ].join('\n'),
-    });
-    ctx.tools.register(defineTool({
-      name: 'ams_request_plan',
-      description: 'Request a deterministic, schema-validated AMS execution plan for an actionable user goal. Never use for ordinary Q&A or ambiguous requests.',
-      parameters: {
-        intent: { type: 'string', required: true },
-      },
-      output: {
-        schema: { type: 'object', additionalProperties: false, properties: { accepted: { type: 'boolean' } } },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
-      },
-      async execute(args) {
-        const intent = String(args?.intent || '').trim();
-        if (!intent || intent.length > 12_000) throw Object.assign(new Error('Plan intent is invalid.'), { code: 'PLAN_INTENT_INVALID' });
-        return { accepted: true };
-      },
-      presentCall: () => ({ card: 'generic', title: 'Create safe execution plan', kind: 'action', rawInput: 'ams_request_plan' }),
-    }));
-    return;
-  }
   let requiredFailure = null;
+  const manifest = String(process.env.AMS_CAPABILITY_MANIFEST || '[]').slice(0, 24_000);
+  const conversationMode = ['agent', 'qa'].includes(process.env.AMS_CONVERSATION_MODE || '');
   ctx.systemPrompt.section({
-    name: 'ams:operator',
+    name: conversationMode ? 'ams:agent' : 'ams:operator',
     order: 40,
-    text: [
+    text: (conversationMode ? [
+      'You are DeepSeek Harness operating AI Marketing Studio through plugin tools.',
+      'Answer ordinary questions directly and naturally. For actionable marketing work, use ams_call directly; do not request or create a separate deterministic execution plan.',
+      'If the user goal is unclear, ask one concise clarification question instead of mapping it to a default workflow.',
+      'Use the capability catalog as available tools, but you may choose the sequence yourself based on the user goal.',
+      `Current reviewed capability catalog: ${manifest}`,
+    ] : [
       'You operate AI Marketing Studio only through the ams_call tool.',
+    ]).concat([
       'Never invent an operation, user, project, revision, cost, source, or artifact identity.',
       'Read current state before proposing a write. Use exact returned identities and revision guards.',
       'For research.collect_url use payload {url} with only an optional exact bound project_id echo.',
@@ -79,11 +54,11 @@ function apply(ctx) {
       'Paid calls, online writes, and handoff creation fail unless the trusted task approval grants them.',
       'Never request deletion, archival, arbitrary SQL, schema/Auth changes, production access, or social publishing.',
       'When a tool fails, report its exact bounded code and stop dependent actions.',
-    ].join('\n'),
+    ]).join('\n'),
   });
   ctx.tools.register(defineTool({
     name: 'ams_call',
-    description: 'Call one allowlisted AI Marketing Studio P19/P22 operation. Unknown or destructive operations fail closed.',
+    description: 'Call one allowlisted AI Marketing Studio business operation: project, research, Evidence, Analysis, Knowledge, Brief, handoff, or generation. Unknown or destructive operations fail closed.',
     parameters: {
       schema_version: { type: 'string', required: true, enum: ['ams_harness_tool_v1'] },
       operation: {
@@ -95,7 +70,8 @@ function apply(ctx) {
           'workspace.analysis.create', 'workspace.card.create', 'workspace.brief.assemble',
           'workspace.handoff.create', 'research.status', 'research.collect_url',
           'research.search_x', 'research.search_reddit', 'research.analyze_persisted',
-          'research.generate_similar',
+          'research.generate_similar', 'research.inspect_attachments',
+          'generation.quote', 'generation.submit', 'generation.status', 'generation.artifact',
         ],
       },
       payload: { type: 'object', required: true, additionalProperties: true },

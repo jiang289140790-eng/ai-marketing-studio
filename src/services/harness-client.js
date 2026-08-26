@@ -111,9 +111,9 @@ export function createHarnessClient({
     return payload;
   }
 
-  // Every browser submission goes through plan then confirm; the legacy
-  // direct /v1/tasks submit action is deliberately not exposed here so no
-  // browser code path can bypass the authoritative plan.
+  // New browser submissions use the native Harness agent path first. The
+  // legacy plan/confirm methods remain available only for historical task
+  // recovery and explicit fallback screens.
   return Object.freeze({
     createThread({ workspaceId, projectId = null, requestId, title = null }) {
       return invoke({ action: 'thread_create', workspace_id: workspaceId, project_id: projectId, request_id: requestId, title });

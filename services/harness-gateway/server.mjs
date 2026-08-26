@@ -199,6 +199,10 @@ const server = createServer(async (request, response) => {
       'x-content-type-options': 'nosniff',
     });
     const result = await conversations.run(body, userId, {
+      runtimeContext: {
+        delegatedAuthorization,
+        approval: { paid_external_calls: true, online_writes: true, handoff_creation: false },
+      },
       onFrame: (frame) => response.write(`${JSON.stringify(frame)}\n`),
     });
     response.end(`${JSON.stringify({ type: 'gateway_completed', ...result })}\n`);
@@ -217,7 +221,12 @@ const server = createServer(async (request, response) => {
       return send(response, 400, { ok: false, code: 'GENERATION_ID_INVALID' });
     }
     let result;
-    try { result = conversationDeliveries.enqueue(body, userId); }
+    try {
+      result = conversationDeliveries.enqueue(body, userId, {
+        delegatedAuthorization,
+        approval: { paid_external_calls: true, online_writes: true, handoff_creation: false },
+      });
+    }
     catch { return send(response, 503, { ok: false, code: 'DELIVERY_PERSISTENCE_FAILED' }); }
     return send(response, result.replayed ? 200 : 202, result);
   }

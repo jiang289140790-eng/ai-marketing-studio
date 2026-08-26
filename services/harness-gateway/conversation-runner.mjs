@@ -62,7 +62,7 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
 
   function key(userId, threadId) { return `${userId}:${threadId}`; }
 
-  async function run(request, userId, { onFrame } = {}) {
+  async function run(request, userId, { onFrame, runtimeContext = {} } = {}) {
     validateRequest(request);
     const activeKey = key(userId, request.thread_id);
     const requestKey = `${activeKey}:${request.request_id}`;
@@ -89,7 +89,11 @@ export function createConversationRunner({ executable, profileArgs, workspace = 
       DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
       DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL || '',
       AMS_USER_ID: userId,
-      AMS_CONVERSATION_MODE: 'qa',
+      AMS_TASK_ID: request.generation_id || request.request_id,
+      AMS_PROJECT_ID: request.project_id || '',
+      AMS_DELEGATED_AUTHORIZATION: runtimeContext.delegatedAuthorization || '',
+      AMS_TASK_APPROVAL: JSON.stringify(runtimeContext.approval || {}),
+      AMS_CONVERSATION_MODE: 'agent',
       AMS_CAPABILITY_MANIFEST: JSON.stringify(capabilityManifest || []),
       LANG: 'C.UTF-8',
       NODE_ENV: 'production',

@@ -16,6 +16,7 @@ function appendDurable(file, record) {
 export function createConversationDeliveryQueue({ journalFile, runner, onEvent, planTask } = {}) {
   const records = new Map();
   const active = new Set();
+  const runtimeContexts = new Map();
   if (journalFile && existsSync(journalFile)) {
     for (const line of readFileSync(journalFile, 'utf8').split(/\r?\n/)) {
       if (!line) continue;
@@ -56,15 +57,21 @@ export function createConversationDeliveryQueue({ journalFile, runner, onEvent, 
   const process = async (record) => {
     record = records.get(record.delivery_id) || record;
     if (active.has(record.delivery_id) || record.state !== 'accepted') return;
+    const runtimeContext = runtimeContexts.get(record.delivery_id);
+    if (!runtimeContext) {
+      const result = { ok: false, code: 'DELEGATED_AUTHORIZATION_EXPIRED' };
+      persist({ ...record, state: 'failed', result, updated_at: new Date().toISOString() });
+      emit(record, 'generation_failed', { code: result.code });
+      return;
+    }
     active.add(record.delivery_id);
     record = { ...record, state: 'running', updated_at: new Date().toISOString() }; persist(record);
     emit(record, 'generation_started');
     let assistantText = '';
     let assistantNativeSeq = null;
-    let planRequest = null;
     const toolNames = new Map();
     let stopped = false;
-    let result = await runner.run(record.request, record.user_id, { onFrame: (frame) => {
+    let result = await runner.run(record.request, record.user_id, { runtimeContext, onFrame: (frame) => {
       if (frame.type === 'conversation_completed' && frame.reason?.kind === 'aborted') stopped = true;
       if (frame.type !== 'session_event') return;
       const event = frame.event;
@@ -78,19 +85,11 @@ export function createConversationDeliveryQueue({ journalFile, runner, onEvent, 
       } else if (event?.type === 'tool/call') {
         const data = event.data || {};
         const name = data.name || data.tool || data.toolName || data.call?.name;
-        const rawArgs = data.input || data.arguments || data.args || data.call?.arguments || data.call?.input;
-        let args = rawArgs;
-        if (typeof rawArgs === 'string') {
-          try { args = JSON.parse(rawArgs); } catch { args = null; }
-        }
-        if (name === 'ams_request_plan' && typeof args?.intent === 'string' && args.intent.trim()) {
-          planRequest = { intent: args.intent.trim().slice(0, 12_000), nativeSeq: event.seq };
-        }
         const callId = String(data.callId || data.call?.callId || '');
         if (callId && name) toolNames.set(callId, name);
         emit(record, 'tool_call_started', {
           name: name || 'unknown_tool', operation: name || 'unknown_tool', status: 'started',
-          summary: name === 'ams_request_plan' ? 'Requested a deterministic execution plan.' : 'Tool call accepted by Harness.',
+          summary: 'Tool call accepted by Harness.',
           call: sanitizeConversationData(event.data, 0, 4_000), nativeSeq: event.seq,
         });
       }
@@ -110,22 +109,21 @@ export function createConversationDeliveryQueue({ journalFile, runner, onEvent, 
       }
     } }).catch(() => ({ ok: false, code: 'HARNESS_CONVERSATION_FAILED' }));
     if (assistantText) emit(record, 'assistant_text_completed', { content: assistantText, nativeSeq: assistantNativeSeq });
-    if (result.ok && planRequest && typeof planTask === 'function') {
-      record = { ...record, state: 'planning', plan_request: planRequest, result, updated_at: new Date().toISOString() };
-      persist(record);
-      await finishPlanning(record);
-      return;
-    }
     const terminal = stopped || result.code === 'GENERATION_STOPPED' ? 'generation_stopped' : result.ok ? 'generation_completed' : 'generation_failed';
     persist({ ...record, state: terminal === 'generation_completed' ? 'completed' : terminal === 'generation_stopped' ? 'stopped' : 'failed', result, updated_at: new Date().toISOString() });
     emit(record, terminal, result.ok ? {} : { code: result.code || 'GENERATION_FAILED' });
+    runtimeContexts.delete(record.delivery_id);
     active.delete(record.delivery_id);
   };
-  const enqueue = (request, userId) => {
+  const enqueue = (request, userId, runtimeContext = {}) => {
     const deliveryId = stableId({ ...request, user_id: userId });
     const existing = records.get(deliveryId);
-    if (existing) return { ok: true, accepted: true, replayed: true, deliveryId, state: existing.state };
+    if (existing) {
+      if (['accepted', 'running'].includes(existing.state) && runtimeContext) runtimeContexts.set(deliveryId, structuredClone(runtimeContext));
+      return { ok: true, accepted: true, replayed: true, deliveryId, state: existing.state };
+    }
     const record = { delivery_id: deliveryId, user_id: userId, state: 'accepted', request: structuredClone(request), created_at: new Date().toISOString() };
+    runtimeContexts.set(deliveryId, structuredClone(runtimeContext));
     persist(record); queueMicrotask(() => void process(record));
     return { ok: true, accepted: true, replayed: false, deliveryId, state: 'accepted' };
   };
@@ -146,6 +144,7 @@ export function createConversationDeliveryQueue({ journalFile, runner, onEvent, 
     if (!record) return { ok: false, code: 'NO_ACTIVE_GENERATION' };
     if (record.state === 'accepted') {
       persist({ ...record, state: 'stopped', result: { ok: false, code: 'GENERATION_STOPPED' }, updated_at: new Date().toISOString() });
+      runtimeContexts.delete(record.delivery_id);
       emit(record, 'generation_stopped', { code: 'GENERATION_STOPPED' });
       return { ok: true, deliveryId: record.delivery_id };
     }

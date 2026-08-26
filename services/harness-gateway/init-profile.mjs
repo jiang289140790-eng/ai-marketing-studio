@@ -18,7 +18,7 @@ const marker = join(target, '.ams-profile-version');
 // runtime volume survives container replacement, so reusing an old marker
 // would leave the previous plugin copy active even though the image contains
 // a newer AMS conversation tool catalog.
-const version = 'ams-profile-v13';
+const version = 'ams-profile-v14';
 // The only plugins promoted from the isolated plugin lab, pinned by exact
 // version. Each entry maps a vendored directory (name) to its npm scope and
 // the exact published version the promotion is bound to; a mismatch aborts

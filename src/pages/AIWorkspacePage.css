@@ -786,6 +786,7 @@
 }
 /* Authoritative conversation workspace */
 .conversation-page { max-width: 1180px; margin: 0 auto; padding-bottom: 32px; }
+.conversation-page .ai-task-flow { display: none !important; }
 .conversation-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 12px 0 20px; }
 .conversation-heading span { color: #25715b; font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .conversation-heading h1 { margin: 7px 0 4px; font-size: clamp(28px, 3vw, 42px); letter-spacing: -.035em; }
@@ -800,9 +801,9 @@
 .conversation-workspace { display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dce5e1; border-radius: 18px; background: #fff; box-shadow: 0 16px 50px rgba(40, 75, 64, .08); }
 .conversation-workspace.has-conversation { height: clamp(560px, calc(100dvh - 260px), 680px); min-height: 520px; }
 .conversation-workspace.is-empty {
-  width: min(100%, 920px);
+  width: min(100%, 820px);
   min-height: 0;
-  margin: clamp(34px, 9vh, 92px) auto 0;
+  margin: clamp(18px, 5vh, 46px) auto 0;
   overflow: visible;
   border: 0;
   border-radius: 0;
@@ -888,14 +889,14 @@
 .conversation-attachments button { border: 0; background: transparent; cursor: pointer; }
 .conversation-composer { flex: none; padding: 12px 18px 16px; border-top: 1px solid #e5ebe8; background: #fff; }
 .conversation-workspace.is-empty .conversation-composer {
-  padding: 16px;
+  padding: 14px;
   border: 1px solid #dce5e1;
-  border-radius: 20px;
+  border-radius: 16px;
   background: #fff;
-  box-shadow: 0 18px 55px rgba(40, 75, 64, .1);
+  box-shadow: 0 8px 28px rgba(40, 75, 64, .07);
 }
 .conversation-composer textarea { box-sizing: border-box; width: 100%; min-height: 64px; max-height: 150px; resize: none; padding: 12px 14px; border: 1px solid #cedbd5; border-radius: 12px; outline: none; font: inherit; line-height: 1.5; }
-.conversation-workspace.is-empty .conversation-composer textarea { min-height: 118px; font-size: 16px; }
+.conversation-workspace.is-empty .conversation-composer textarea { min-height: 96px; font-size: 16px; }
 .conversation-composer textarea:focus { border-color: #399474; box-shadow: 0 0 0 3px #39947418; }
 .conversation-composer > div { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
 .conversation-composer > div > span { flex: 1; color: #84908b; font-size: 12px; }

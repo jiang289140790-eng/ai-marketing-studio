@@ -43,6 +43,47 @@ test('delivery is durably accepted before async model execution and request repl
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('delivery passes transient authorization to Harness without persisting it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-runtime-'));
+  try {
+    const journalFile = join(dir, 'deliveries.jsonl');
+    const runtimeContext = {
+      delegatedAuthorization: 'Bearer delegated-token-must-not-persist',
+      approval: { paid_external_calls: true, online_writes: true },
+    };
+    let observedRuntimeContext = null;
+    const queue = createConversationDeliveryQueue({ journalFile, runner: {
+      run: async (_request, _user, { runtimeContext: observed }) => {
+        observedRuntimeContext = observed;
+        return { ok: true };
+      },
+    } });
+    queue.enqueue({ ...request, request_id: 'request-runtime', generation_id: 'edge_request-runtime' }, userId, runtimeContext);
+    await settle(); await settle();
+    assert.deepEqual(observedRuntimeContext, runtimeContext);
+    assert.doesNotMatch(readFileSync(journalFile, 'utf8'), /delegated-token-must-not-persist|paid_external_calls|online_writes/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('accepted delivery without live delegated authorization fails closed after restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-auth-expired-'));
+  try {
+    const journalFile = join(dir, 'deliveries.jsonl');
+    const deliveryId = 'gdl_auth_expired_123456789012345678';
+    writeFileSync(journalFile, `${JSON.stringify({ delivery_id: deliveryId, user_id: userId, state: 'accepted', request })}\n`);
+    let calls = 0;
+    const events = [];
+    createConversationDeliveryQueue({ journalFile, onEvent: (event) => events.push(event), runner: {
+      run: async () => { calls += 1; return { ok: true }; },
+    } });
+    await settle(); await settle();
+    assert.equal(calls, 0);
+    assert.equal(events.at(-1).event_type, 'generation_failed');
+    assert.equal(events.at(-1).payload.code, 'DELEGATED_AUTHORIZATION_EXPIRED');
+    assert.match(readFileSync(journalFile, 'utf8'), /"code":"DELEGATED_AUTHORIZATION_EXPIRED"/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('restart fails an ambiguous running delivery closed and never calls the model twice', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-recovery-'));
   try {
@@ -98,8 +139,8 @@ test('native aborted completion maps to stopped and tool payloads are recursivel
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('native Agent plan request creates one deterministic plan and projects it to the thread', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-agent-plan-'));
+test('native Agent tool calls stay in the Harness session and never create a deterministic plan', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ams-delivery-agent-tool-'));
   try {
     const events = [];
     const plans = [];
@@ -110,24 +151,22 @@ test('native Agent plan request creates one deterministic plan and projects it t
       planTask: async (record, proposal) => { plans.push({ record, proposal }); return { ok: true, task }; },
       runner: {
         run: async (_request, _user, { onFrame }) => {
-          onFrame({ type: 'session_event', event: { type: 'tool/call', seq: 7, data: { callId: 'call-7', name: 'ams_request_plan', arguments: '{"intent":"search five recent posts"}' } } });
-          onFrame({ type: 'session_event', event: { type: 'tool/result', seq: 8, data: { message: { source: { kind: 'tool', callId: 'call-7' }, content: [{ type: 'tool-result', toolCallId: 'call-7', content: [{ type: 'text', text: '{"accepted":true}' }] }] } } } });
+          onFrame({ type: 'session_event', event: { type: 'tool/call', seq: 7, data: { callId: 'call-7', name: 'ams_call', arguments: '{"schema_version":"ams_harness_tool_v1","operation":"workspace.project.read","payload":{"project_id":"prj-123"},"idempotency_key":"idem-1"}' } } });
+          onFrame({ type: 'session_event', event: { type: 'tool/result', seq: 8, data: { message: { source: { kind: 'tool', callId: 'call-7' }, content: [{ type: 'tool-result', toolCallId: 'call-7', content: [{ type: 'text', text: '{"ok":true}' }] }] } } } });
           return { ok: true };
         },
       },
     });
     queue.enqueue({ ...request, request_id: 'request-agent-plan', generation_id: 'edge_request-agent-plan' }, userId);
     await settle(); await settle();
-    assert.equal(plans.length, 1);
-    assert.equal(plans[0].proposal.intent, 'search five recent posts');
+    assert.equal(plans.length, 0);
     const toolCall = events.find((event) => event.event_type === 'tool_call_started');
     const toolResult = events.find((event) => event.event_type === 'tool_call_completed');
     assert.deepEqual({ name: toolCall.payload.name, operation: toolCall.payload.operation, status: toolCall.payload.status },
-      { name: 'ams_request_plan', operation: 'ams_request_plan', status: 'started' });
+      { name: 'ams_call', operation: 'ams_call', status: 'started' });
     assert.deepEqual({ name: toolResult.payload.name, operation: toolResult.payload.operation, status: toolResult.payload.status },
-      { name: 'ams_request_plan', operation: 'ams_request_plan', status: 'completed' });
-    const projected = events.find((event) => event.event_type === 'agent_plan_created');
-    assert.equal(projected.payload.task.id, task.id);
+      { name: 'ams_call', operation: 'ams_call', status: 'completed' });
+    assert.equal(events.some((event) => event.event_type === 'agent_plan_created'), false);
     assert.equal(events.at(-1).event_type, 'generation_completed');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

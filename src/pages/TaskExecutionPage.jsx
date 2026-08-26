@@ -22,6 +22,45 @@ function formatTime(value) {
 
 const POLL_INTERVAL_MS = 1500;
 
+function summarizeSteps(steps) {
+  const summary = {
+    total: steps.length,
+    succeeded: 0,
+    running: 0,
+    failed: 0,
+    blocked: 0,
+    planned: 0,
+    skipped: 0,
+    cost: 0,
+    write: 0,
+    retryable: 0,
+    attentionStep: null,
+  };
+  for (const step of steps) {
+    if (step.state === 'succeeded' || step.state === 'reused') summary.succeeded += 1;
+    else if (step.state === 'running') summary.running += 1;
+    else if (step.state === 'failed') summary.failed += 1;
+    else if (step.state === 'blocked') summary.blocked += 1;
+    else if (step.state === 'skipped') summary.skipped += 1;
+    else summary.planned += 1;
+    if (step.cost) summary.cost += 1;
+    if (step.write) summary.write += 1;
+    if (step.retryable) summary.retryable += 1;
+    if (!summary.attentionStep && (step.state === 'running' || step.state === 'failed' || step.state === 'blocked')) {
+      summary.attentionStep = step;
+    }
+  }
+  return summary;
+}
+
+function stepSummaryText(step) {
+  const parts = [step.operation];
+  if (step.cost) parts.push('可能付费');
+  if (step.write) parts.push('写入 staging');
+  if (step.attempts > 0) parts.push(`尝试 ${step.attempts} 次`);
+  return parts.filter(Boolean).join(' · ');
+}
+
 /**
  * 任务执行详情页：规范路由 `/tasks/<taskId>`（旧 `#/ai-execution/<taskId>` 兼容重定向）。
  *
@@ -104,6 +143,7 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
 
   const view = useMemo(() => taskSnapshotView(task), [task]);
   const steps = view?.steps || [];
+  const stepSummary = useMemo(() => summarizeSteps(steps), [steps]);
   const toolCalls = view?.toolCalls || { present: false, calls: [] };
   const approvals = view?.approvals || {};
   const technical = view?.technical || null;
@@ -271,13 +311,24 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                   ))}
                 </div>
               )}
-              <ol className="ai-task-steps">
+              <div className="ai-task-step-summary" data-testid="ai-task-step-summary">
+                <div className="detail-card"><span>总进度</span><div>{stepSummary.succeeded}/{stepSummary.total} 已完成</div></div>
+                <div className="detail-card"><span>需要处理</span><div>{stepSummary.failed + stepSummary.blocked} 个失败/阻断</div></div>
+                <div className="detail-card"><span>付费与写入</span><div>{stepSummary.cost} 个可能付费 · {stepSummary.write} 个写入</div></div>
+                <div className="detail-card"><span>当前焦点</span><div>{stepSummary.attentionStep?.label || '暂无异常步骤'}</div></div>
+              </div>
+              <details className="ai-task-step-details" data-testid="ai-task-step-details">
+                <summary>展开执行步骤详情（{stepSummary.total} 步）</summary>
+                <ol className="ai-task-steps">
                 {steps.map((step) => (
                   <li key={step.step} data-testid={`ai-task-step-${step.step}`} data-state={step.state}>
                     <span className={`ai-step-state ${step.state}`}>{step.stateLabel}</span>
                     <div className="ai-step-copy">
                       <strong>{step.label}</strong>
-                      <small>{step.operation} · 前置：{step.depends_on.length ? step.depends_on.join('、') : '无'}</small>
+                      <small>{stepSummaryText(step)}</small>
+                      <details className="ai-step-inner-detail" open={step.state === 'failed' || step.state === 'blocked'}>
+                        <summary>查看本步骤细节</summary>
+                        <small>{step.operation} · 前置：{step.depends_on.length ? step.depends_on.join('、') : '无'}</small>
                       <div className="ai-step-badges">
                         {step.reuse && <span>可精确复用</span>}
                         {step.cost && <span className="cost">可能付费</span>}
@@ -309,10 +360,12 @@ export function TaskExecutionPage({ detailId: taskId = '', onNavigate, harnessCl
                           </button>
                         </div>
                       )}
+                      </details>
                     </div>
                   </li>
                 ))}
-              </ol>
+                </ol>
+              </details>
             </section>
           )}
 

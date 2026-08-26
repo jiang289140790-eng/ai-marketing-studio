@@ -94,6 +94,72 @@ const RESULT_SECTION_ORDER = [
   ['artifact', 'Artifact'],
 ];
 
+const ANALYSIS_HIGHLIGHT_KEYS = [
+  'summary',
+  'conclusion',
+  'text_expression',
+  'hook',
+  'copy_pattern',
+  'visual_content',
+  'composition',
+  'scene',
+  'emotion',
+  'virality_drivers',
+  'reusable_methods',
+  'rewrite_suggestions',
+];
+
+function boundedDisplayText(value, limit = 220) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim().slice(0, limit);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => boundedDisplayText(item, Math.max(40, Math.floor(limit / 3)))).filter(Boolean).join('；').slice(0, limit);
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value).slice(0, 4).map(([key, item]) => `${key}: ${boundedDisplayText(item, 80)}`).filter(Boolean).join('；').slice(0, limit);
+  }
+  return '';
+}
+
+function collectAnalysisHighlights(value, maxItems = 6, seen = new Set(), depth = 0) {
+  if (!value || depth > 5 || seen.has(value)) return [];
+  if (typeof value !== 'object') return [];
+  seen.add(value);
+  const highlights = [];
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 8)) highlights.push(...collectAnalysisHighlights(item, maxItems, seen, depth + 1));
+    return highlights.slice(0, maxItems);
+  }
+  for (const key of ANALYSIS_HIGHLIGHT_KEYS) {
+    if (Object.hasOwn(value, key)) {
+      const text = boundedDisplayText(value[key]);
+      if (text) highlights.push({ label: key, text });
+    }
+    if (highlights.length >= maxItems) return highlights;
+  }
+  for (const item of Object.values(value).slice(0, 12)) {
+    highlights.push(...collectAnalysisHighlights(item, maxItems - highlights.length, seen, depth + 1));
+    if (highlights.length >= maxItems) break;
+  }
+  return highlights.slice(0, maxItems);
+}
+
+function resultOverview({ attachmentPipeline, chain, sections, task }) {
+  const analysisResult = attachmentPipeline?.analysis?.result || null;
+  const highlights = collectAnalysisHighlights(analysisResult);
+  const mediaCount = attachmentBindings(attachmentPipeline).length;
+  return {
+    mediaCount,
+    highlights,
+    evidenceCount: chain?.evidence?.length || sections?.evidence?.items?.length || 0,
+    analysisCount: chain?.analysis?.length || sections?.analysis?.items?.length || 0,
+    knowledgeCount: chain?.knowledge?.length || sections?.knowledge?.items?.length || 0,
+    briefCount: chain?.brief?.length || sections?.brief?.items?.length || 0,
+    briefStatus: task?.result?.result_data?.attachment_pipeline?.brief?.status || task?.result?.result_data?.brief?.status || '',
+  };
+}
+
 /**
  * 任务结果与审核页：规范路由 `/tasks/<taskId>/results`（旧 `#/ai-results/<taskId>` 兼容重定向）。
  *
@@ -179,6 +245,7 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
   const generationJobId = useMemo(() => findGenerationJobId(task?.result?.result_data), [task]);
   const attachmentPipeline = task?.result?.result_data?.attachment_pipeline || null;
   const privateAttachments = useMemo(() => attachmentBindings(attachmentPipeline), [attachmentPipeline]);
+  const overview = useMemo(() => resultOverview({ attachmentPipeline, chain, sections, task }), [attachmentPipeline, chain, sections, task]);
   const notTerminalText = task ? `任务还在 ${stateLabel(task.state)}，尚未产生最终结果。` : '';
 
   useEffect(() => {
@@ -297,6 +364,35 @@ export function TaskResultsPage({ detailId: taskId = '', onNavigate, harnessClie
               {view.errorText}
             </div>
           )}
+
+          <section className="ai-task-panel ai-result-overview" data-testid="ai-task-result-overview">
+            <div className="ai-task-panel-head">
+              <div>
+                <p className="eyebrow">成果摘要</p>
+                <h3>先看结论，再看技术细节</h3>
+              </div>
+            </div>
+            <div className="ai-result-overview-grid">
+              <div className="detail-card"><span>来源媒体</span><div>{overview.mediaCount || privateAttachments.length || 0} 个附件</div></div>
+              <div className="detail-card"><span>证据/分析</span><div>{overview.evidenceCount} 条证据 · {overview.analysisCount} 份分析</div></div>
+              <div className="detail-card"><span>知识卡</span><div>{overview.knowledgeCount > 0 ? `${overview.knowledgeCount} 张已生成` : '尚未生成'}</div></div>
+              <div className="detail-card"><span>Brief 草案</span><div>{overview.briefCount > 0 ? `${overview.briefCount} 份${overview.briefStatus ? ` · ${overview.briefStatus}` : ''}` : '尚未生成'}</div></div>
+            </div>
+            {overview.highlights.length > 0 ? (
+              <div className="ai-analysis-highlights" data-testid="ai-task-analysis-highlights">
+                {overview.highlights.map((item, index) => (
+                  <article key={`${item.label}-${index}`}>
+                    <span>{item.label}</span>
+                    <p>{item.text}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="ai-task-empty" data-testid="ai-task-no-analysis-highlights">
+                当前快照没有可直接展示的结构化分析摘要；下方仍保留完整执行报告、来源媒体和产物链。
+              </div>
+            )}
+          </section>
 
           <section className="ai-task-panel" data-testid="ai-task-result">
             <div className="ai-task-panel-head">

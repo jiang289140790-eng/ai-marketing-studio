@@ -140,6 +140,74 @@
   gap: 10px;
 }
 
+.ai-task-step-summary,
+.ai-result-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ai-task-step-summary .detail-card,
+.ai-result-overview-grid .detail-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 151, 190, .18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .04);
+}
+
+.ai-task-step-summary .detail-card span,
+.ai-result-overview-grid .detail-card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ai-task-step-summary .detail-card div,
+.ai-result-overview-grid .detail-card div {
+  color: var(--text);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.ai-task-step-details {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(5, 14, 30, .35);
+}
+
+.ai-task-step-details > summary {
+  cursor: pointer;
+  padding: 13px 14px;
+  color: #d5ddec;
+  font-weight: 700;
+}
+
+.ai-task-step-details[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-task-step-details .ai-task-steps {
+  padding: 12px;
+}
+
+.ai-step-inner-detail {
+  margin-top: 2px;
+}
+
+.ai-step-inner-detail > summary {
+  cursor: pointer;
+  width: max-content;
+  color: #82e8db;
+  font-size: 12px;
+}
+
+.ai-step-inner-detail[open] {
+  display: grid;
+  gap: 6px;
+}
+
 .ai-task-steps li {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -451,6 +519,44 @@
   overflow-wrap: anywhere;
   color: #b9c8dd;
   font: inherit;
+}
+
+.ai-result-overview {
+  border-color: rgba(113, 228, 212, .22);
+  background:
+    radial-gradient(circle at top right, rgba(113, 228, 212, .09), transparent 34%),
+    rgba(8, 18, 35, .72);
+}
+
+.ai-analysis-highlights {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.ai-analysis-highlights article {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(113, 228, 212, .18);
+  border-radius: 12px;
+  background: rgba(5, 14, 30, .45);
+}
+
+.ai-analysis-highlights span {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: #71e4d4;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.ai-analysis-highlights p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .ai-brief-reassemble {

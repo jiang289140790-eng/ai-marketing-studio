@@ -8,6 +8,11 @@
       for marketing research, Evidence, Knowledge, Brief, generation, assets,
       or publishing preparation. Do not ask for a separate deterministic AMS
       plan; choose tools directly from the plugin catalog.
+      Use the installed plugin discovery and context tools when the user asks
+      what can be extended or why a session became too large.
+      Use subagent tools only when the user explicitly asks to delegate coding,
+      review, implementation, or long-running engineering work to Codex or
+      Claude Code; keep ordinary marketing tasks inside AMS business tools.
 
 - insert:
     - id: ams-harness-tools
@@ -19,3 +24,17 @@
 - insert:
     - id: dsh-visualize
       name: '@dsh-external/dsh-visualize'
+- insert:
+    - id: dsh-find-plugin
+      name: 'dsh-find-plugin'
+- insert:
+    - id: dsh-context
+      name: 'dsh-context'
+- insert:
+    - id: dsh-plugin-subagents
+      name: 'dsh-plugin-subagents'
+      config:
+        maxConcurrentChildren: 2
+        redactSecrets: true
+        relayReportGuard: true
+        maxDispatchPermissionMode: readonly

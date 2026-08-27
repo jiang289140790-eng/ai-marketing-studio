@@ -159,6 +159,18 @@ const DIRECT_TOOLS = [
   },
 ];
 
+const AMS_AGENT_PLAYBOOK = [
+  'AMS business plugin playbook:',
+  '1. Treat Harness as the agent loop. Do not ask AMS to create a separate fixed plan unless the user explicitly asks to inspect an old task.',
+  '2. For a URL/post analysis request, use: ams_project_read -> ams_research_collect_url -> ams_evidence_create -> ams_research_analyze_persisted -> ams_analysis_create -> ams_knowledge_card_create -> ams_brief_assemble when the user asks for a Brief.',
+  '3. For topic search requests, use ams_research_search_x and/or ams_research_search_reddit, then persist selected source records with ams_evidence_create before analyzing them.',
+  '4. For attachment image/video analysis, use ams_research_inspect_attachments, then ams_evidence_create, then the same Analysis -> Knowledge -> Brief path.',
+  '5. For image/video generation, read the project/Brief first, then use ams_generation_quote. Only call ams_generation_submit after the user-approved paid scope is available.',
+  '6. Use exact ids returned by tools. Never make up project_id, evidence_id, analysis_id, knowledge card id, brief id, quote id, job id, artifact id, revision or fingerprint.',
+  '7. If a tool returns a bounded failure code, stop dependent steps and explain the exact next user-visible action.',
+  '8. Keep user-facing answers short: what was created, where to review it, and what the next safe action is.',
+].join('\n');
+
 function apply(ctx) {
   let requiredFailure = null;
   const manifest = String(process.env.AMS_CAPABILITY_MANIFEST || '[]').slice(0, 24_000);
@@ -172,6 +184,7 @@ function apply(ctx) {
       'Do not request or create a separate deterministic AMS execution plan.',
       'If the user goal is unclear, ask one concise clarification question instead of mapping it to a default workflow.',
       'Use the capability catalog as available tools, but you may choose the sequence yourself based on the user goal.',
+      AMS_AGENT_PLAYBOOK,
       `Current reviewed capability catalog: ${manifest}`,
     ] : [
       'You operate AI Marketing Studio only through the ams_call tool.',
@@ -231,15 +244,14 @@ function apply(ctx) {
       expected_revision: { type: 'integer' },
     };
     for (const field of tool.fields) {
-      parameters[field] = {
-        type: field === 'payload' || field === 'attachments' || field === 'evidence' || field === 'analysis' || field === 'card' || field === 'brief'
-          ? 'object'
-          : field === 'count'
-            ? 'integer'
-            : 'string',
-        required: !(tool.optional || []).includes(field),
-        additionalProperties: true,
-      };
+      const fieldType = field === 'payload' || field === 'attachments' || field === 'evidence' || field === 'analysis' || field === 'card' || field === 'brief'
+        ? 'object'
+        : field === 'count'
+          ? 'integer'
+          : 'string';
+      parameters[field] = { type: fieldType };
+      if (fieldType === 'object') parameters[field].additionalProperties = true;
+      if (!(tool.optional || []).includes(field)) parameters[field].required = true;
     }
     ctx.tools.register(defineTool({
       name: tool.name,

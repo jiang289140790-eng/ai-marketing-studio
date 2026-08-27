@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import {
   RESEARCH_DEMO_TOPIC,
   RESEARCH_DEMO_VERSION,
 } from '../src/data/research-workspace-demo.js';
-import { navigationItems, navigationSections } from '../src/data/navigation.js';
+import { navigationItems, compatibilitySections, routablePageIds } from '../src/data/navigation.js';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
 const OWNED_PATHS = new Set([
@@ -291,17 +291,20 @@ test('视图模型无盘符路径、无网络目标、无 Supabase/密钥/服务
   assert.ok(!json.includes('http'), '视图模型不得包含网络目标');
 });
 
-test('导航：#/research 核心流程条目与页面 ID 一致，既有条目不受影响', () => {
+test('导航：#/research 兼容区条目与页面 ID 一致，既有条目不受影响', () => {
   const researchItem = navigationItems.find((item) => item.id === 'research');
   assert.ok(researchItem, '导航必须包含 research 条目');
   assert.equal(researchItem.label, '研究与 Brief');
-  assert.ok(!navigationSections.some((section) => section.items.some((item) => item.id === 'research')), '研究入口不得在二级导航重复');
-  for (const id of ['intelligence', 'workspace', 'characters']) {
-    assert.ok(navigationItems.some((item) => item.id === id), `既有导航条目缺失: ${id}`);
+  assert.equal(compatibilitySections.filter((section) => section.items.some((item) => item.id === 'research')).length, 1, '研究入口只在兼容区唯一注册');
+  assert.ok(navigationItems.some((item) => item.id === 'characters'), '可见业务资产条目缺失: characters');
+  for (const id of ['intelligence', 'workspace']) {
+    assert.ok(!navigationItems.some((item) => item.id === id), `旧入口必须从可见导航隐藏: ${id}`);
+    assert.ok(routablePageIds.includes(id), `旧深链接必须保留: ${id}`);
   }
-  assert.equal(navigationSections[0].label, '资源与配置');
-  assert.equal(navigationSections[0].items[0].id, 'characters');
-  assert.equal(navigationSections[1].label, '高级工作台');
+  assert.equal(compatibilitySections[0].label, '业务结果');
+  assert.equal(compatibilitySections[1].label, '业务资产');
+  assert.equal(compatibilitySections[1].items[0].id, 'characters');
+  assert.equal(compatibilitySections.length, 2);
 });
 
 test('hash 路由：#/research 直接解析为 research 页，构建与刷新可用', async () => {
@@ -313,10 +316,10 @@ test('hash 路由：#/research 直接解析为 research 页，构建与刷新可
     assert.equal(buildAppHash('research'), '#/research');
     assert.equal(buildAppHash('research', 'evidence-02'), '#/research/evidence-02');
     // 既有路由不受影响
-    assert.equal(parseAppRoute('#/intelligence').page, 'intelligence');
-    assert.equal(parseAppRoute('#/workspace').page, 'workspace');
-    assert.equal(buildAppHash('intelligence'), '#/intelligence');
-    assert.equal(buildAppHash('workspace'), '#/workspace');
+    assert.equal(parseAppRoute('#/intelligence').page, 'tasks');
+    assert.equal(parseAppRoute('#/workspace').page, 'tasks');
+    assert.equal(buildAppHash('intelligence'), '#/ai');
+    assert.equal(buildAppHash('workspace'), '#/ai');
   } finally {
     delete globalThis.window;
   }

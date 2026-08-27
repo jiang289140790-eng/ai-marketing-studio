@@ -34,7 +34,7 @@ import {
   findEvidenceForKnowledgeCard,
 } from '../src/services/integrated-workspace-service.js';
 import { ALL_STAGING_VIEW_NAMES, buildStagingReadErrorView } from '../src/services/staging-preview-service.js';
-import { navigationItems } from '../src/data/navigation.js';
+import { navigationItems, routablePageIds } from '../src/data/navigation.js';
 
 const REPO_ROOT = join(import.meta.dirname, '..');
 
@@ -578,13 +578,14 @@ test('无模型路径：暂不支持模型执行', () => {
 // 14. 路由：核心流程与内容工作台均可解析
 // ============================================================================
 test('路由：核心流程与内容工作台存在于导航列表中', () => {
-  const requiredIds = ['ai', 'research', 'knowledge', 'generation', 'workspace'];
+  const requiredIds = ['ai', 'research', 'knowledge', 'generation'];
   for (const id of requiredIds) {
     assert.ok(
       navigationItems.some((item) => item.id === id),
       `主导航缺少: ${id}`,
     );
   }
+  assert.ok(routablePageIds.includes('workspace'), '隐藏的 workspace 深链接仍须可路由');
 });
 
 test('路由：App.jsx 保留既有页面并以 AI 工作台为默认入口', () => {
@@ -595,18 +596,27 @@ test('路由：App.jsx 保留既有页面并以 AI 工作台为默认入口', ()
   assert.ok(appSource.includes('AIWorkspacePage'), 'App.jsx 应导入 AIWorkspacePage');
 });
 
-test('Sidebar exposes core Harness plugins plus the complete secondary operations map', () => {
+test('Sidebar exposes the Harness journey plus the complete compatibility operations map', () => {
   const sidebarSource = readSource('src/components/Sidebar.jsx');
-  assert.ok(sidebarSource.includes('const corePlugins = harnessPlugins'));
+  assert.ok(sidebarSource.includes('const secondarySections = compatibilitySections'));
+  assert.ok(sidebarSource.includes('journeyNew.testId'));
+  assert.ok(sidebarSource.includes('journeySession.testId'));
   assert.ok(sidebarSource.includes('secondarySections.map((section) =>'));
-  assert.ok(sidebarSource.includes('管理与查看'));
+  assert.ok(sidebarSource.includes('业务页面'));
   assert.ok(sidebarSource.includes('aria-expanded={expanded}'));
   assert.ok(sidebarSource.includes('hidden={!expanded && !collapsed}'));
   assert.ok(sidebarSource.includes('sidebar-collapse-toggle'));
   assert.ok(!sidebarSource.includes('PRIMARY_NAV_IDS'));
-  assert.equal(navigationItems.length, 18);
-  for (const id of ['publish', 'accounts', 'analytics', 'dailyreport', 'workflows', 'health']) {
+  assert.equal(navigationItems.length, 7);
+  for (const id of ['characters', 'assets']) {
+    assert.ok(navigationItems.some((item) => item.id === id), `secondary navigation is missing ${id}`);
+  }
+  for (const id of ['publish']) {
     assert.ok(navigationItems.some((item) => item.id === id), `operations navigation is missing ${id}`);
+  }
+  for (const id of ['prompts', 'analytics', 'dailyreport', 'workflows', 'health', 'accounts', 'connections']) {
+    assert.ok(!navigationItems.some((item) => item.id === id), `legacy destination must stay hidden: ${id}`);
+    assert.ok(routablePageIds.includes(id), `legacy destination must remain routable: ${id}`);
   }
 });
 

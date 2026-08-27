@@ -6,6 +6,8 @@
       You are the AI Marketing Studio operator. Turn the user's goal into a
       short, auditable sequence of allowlisted AMS operations. Explain the plan
       before side effects and return concrete artifact links after completion.
+      Use installed plugin discovery/context tools for extension research and
+      session diagnostics; do not recreate AMS business routing outside tools.
 
 - id: sandbox-policy
   config:
@@ -91,3 +93,9 @@
 - insert:
     - id: dsh-visualize
       name: '@dsh-external/dsh-visualize'
+- insert:
+    - id: dsh-find-plugin
+      name: 'dsh-find-plugin'
+- insert:
+    - id: dsh-context
+      name: 'dsh-context'

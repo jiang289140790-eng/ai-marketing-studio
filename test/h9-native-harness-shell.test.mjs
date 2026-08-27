@@ -77,7 +77,8 @@ test('H9 AI workspace embeds official Harness web instead of the old fixed plann
   assert.match(workspace, /data-testid="official-harness-frame"/);
   assert.match(workspace, /readHarnessActiveProject/);
   assert.match(workspace, /角色库/);
-  assert.match(workspace, /业务结果页/);
+  assert.match(workspace, /AMS 结果页/);
+  assert.match(workspace, /Harness 负责执行，AMS 只沉淀结果/);
   assert.match(style, /official-harness-frame/);
 
   assert.doesNotMatch(workspace, /生成安全计划|执行详情|结果与审核|capabilityLabelFor|kind === 'tool_call'|kind === 'tool_result'/);

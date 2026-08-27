@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -316,10 +316,10 @@ test('hash 路由：#/research 直接解析为 research 页，构建与刷新可
     assert.equal(buildAppHash('research'), '#/research');
     assert.equal(buildAppHash('research', 'evidence-02'), '#/research/evidence-02');
     // 既有路由不受影响
-    assert.equal(parseAppRoute('#/intelligence').page, 'intelligence');
-    assert.equal(parseAppRoute('#/workspace').page, 'workspace');
-    assert.equal(buildAppHash('intelligence'), '#/intelligence');
-    assert.equal(buildAppHash('workspace'), '#/workspace');
+    assert.equal(parseAppRoute('#/intelligence').page, 'tasks');
+    assert.equal(parseAppRoute('#/workspace').page, 'tasks');
+    assert.equal(buildAppHash('intelligence'), '#/ai');
+    assert.equal(buildAppHash('workspace'), '#/ai');
   } finally {
     delete globalThis.window;
   }

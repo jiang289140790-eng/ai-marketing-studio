@@ -12,6 +12,9 @@
     "@deepseek-ai/dsh": "0.1.0-rc.8",
     "@dsh-external/dsh-visualize": "file:vendor/dsh-visualize",
     "@omdsh-dev/dsh-genui": "file:vendor/dsh-genui",
-    "@supabase/supabase-js": "2.110.7"
+    "@supabase/supabase-js": "2.110.7",
+    "dsh-context": "0.33.1",
+    "dsh-find-plugin": "0.3.7",
+    "dsh-plugin-subagents": "0.1.2"
   }
 }

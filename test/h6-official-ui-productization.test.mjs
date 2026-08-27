@@ -42,9 +42,13 @@ test('H6 AI workspace and generation page keep official UI responsibilities sepa
   const aiPage = await read('src/pages/AIWorkspacePage.jsx');
   const generationPage = await read('src/pages/GenerationTasksPage.jsx');
 
-  assert.match(aiPage, /conversation-workspace/);
-  assert.match(aiPage, /data-testid="ai-task-flow"/);
-  assert.match(aiPage, /技术诊断（默认隐藏）/);
+  assert.match(aiPage, /data-testid="official-harness-frame"/);
+  assert.match(aiPage, /DeepSeek Harness Web/);
+  assert.match(aiPage, /AMS 结果页/);
+  assert.match(aiPage, /Harness 负责执行，AMS 只沉淀结果/);
+  assert.doesNotMatch(aiPage, /conversation-workspace/);
+  assert.doesNotMatch(aiPage, /data-testid="ai-task-flow"/);
+  assert.doesNotMatch(aiPage, /技术诊断（默认隐藏）/);
   assert.doesNotMatch(aiPage, /Harness 已批准能力与对应页面/);
   assert.doesNotMatch(aiPage, /conversation-quick-prompts/);
   assert.match(generationPage, /G2 · 简洁生成工作台/);

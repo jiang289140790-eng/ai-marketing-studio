@@ -6,9 +6,9 @@ import { compatibilitySections, harnessJourney } from '../src/data/navigation.js
 
 test('H7/H9：侧栏保留角色库，并只展示 Harness 需要的业务页', () => {
   assert.deepEqual(harnessJourney.map((entry) => entry.label), ['新任务', '当前会话']);
-  assert.deepEqual(compatibilitySections.map((section) => section.label), ['业务结果', '业务资产', '插件连接']);
+  assert.deepEqual(compatibilitySections.map((section) => section.label), ['业务结果', '业务资产']);
   const assets = compatibilitySections.find((section) => section.label === '业务资产');
-  assert.deepEqual(assets.items.map((item) => item.id), ['characters', 'accounts', 'assets']);
+  assert.deepEqual(assets.items.map((item) => item.id), ['characters', 'assets']);
   assert.ok(assets.items.some((item) => item.id === 'characters' && item.label === '角色库'), '角色库必须保留为长期业务资产页');
   const results = compatibilitySections.find((section) => section.label === '业务结果');
   assert.deepEqual(results.items.map((item) => item.id), ['research', 'knowledge', 'generation', 'publish']);

@@ -19,6 +19,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/package-lock.json',
   'services/harness-gateway/init-profile.mjs',
   'services/harness-gateway/profile/cordis.patch.yml',
+  'services/harness-gateway/profile-web/cordis.patch.yml',
   'services/harness-gateway/gateway-core.mjs',
   'services/harness-gateway/harness-runner.mjs',
   'services/harness-gateway/server.mjs',
@@ -41,6 +42,8 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'test/h2-harness-edge-contract.test.mjs',
   'test/h3-harness-ui.browser.test.mjs',
   'test/h3-harness-ui.test.mjs',
+  'test/h6-official-ui-productization.test.mjs',
+  'test/h9-native-harness-shell.test.mjs',
   'test/harness-genui-visualize.test.mjs',
   'test/harness-genui-visualize.browser.test.mjs',
   'test/harness-deterministic-orchestrator.browser.test.mjs',
@@ -54,6 +57,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'supabase/functions/p22-research-assist/index.ts',
   'test/h5-attachment-artifact-loop.test.mjs',
   'test/p22-assisted-research.test.mjs',
+  'test/p32-reddit-topic-search.test.mjs',
   'services/harness-gateway/test/workflow-catalog.test.mjs',
   // G1 generation execution layer (accepted image-contract repair + video
   // status/artifact preview repair): exact modified paths only.
@@ -125,6 +129,8 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'supabase/functions/p22-research-assist/index.ts',
   'test/h3-harness-ui.browser.test.mjs',
   'test/h3-harness-ui.test.mjs',
+  'test/h6-official-ui-productization.test.mjs',
+  'test/h9-native-harness-shell.test.mjs',
   'test/p19-sql-integration.test.mjs',
   'test/p19-api-schema.test.mjs',
   'docs/ENGINEERING_BASELINE.md',
@@ -181,6 +187,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/package-lock.json',
   'services/harness-gateway/init-profile.mjs',
   'services/harness-gateway/profile/cordis.patch.yml',
+  'services/harness-gateway/profile-web/cordis.patch.yml',
   // H5 verified private attachment -> analysis -> knowledge -> Brief loop.
   // Exact files only; no directory-level expansion.
   'src/services/p19-contracts.js',
@@ -190,6 +197,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'supabase/functions/p22-research-assist/index.ts',
   'test/h5-attachment-artifact-loop.test.mjs',
   'test/p22-assisted-research.test.mjs',
+  'test/p32-reddit-topic-search.test.mjs',
   // ams-harness-rc8-isolated-upgrade: exact rc.8 paths only (no directory
   // wildcard expansion).
   'services/harness-gateway/compose.yaml',
@@ -247,6 +255,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'test/h2-harness-edge-contract.test.mjs',
   'test/h3-harness-ui.browser.test.mjs',
   'test/h3-harness-ui.test.mjs',
+  'test/h9-native-harness-shell.test.mjs',
   'test/harness-genui-visualize.test.mjs',
   'test/harness-genui-visualize.browser.test.mjs',
   'test/harness-deterministic-orchestrator.browser.test.mjs',

@@ -179,9 +179,10 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(agentStateMigration, /not \(p_event_type='generation_completed' and v_current_task_id is not null\)/);
   assert.match(agentStateMigration, /then 'tool_call' else 'tool_result'/);
   assert.match(agentStateMigration, /harness_append_message_v1/);
-  assert.match(workspaceSource, /ACTIVE_AGENT_THREAD_KEY/);
+  assert.match(workspaceSource, /data-testid="official-harness-frame"/);
+  assert.match(workspaceSource, /VITE_DSH_WEB_URL/);
+  assert.match(workspaceSource, /AMS 结果页/);
+  assert.doesNotMatch(workspaceSource, /ACTIVE_AGENT_THREAD_KEY/);
   assert.doesNotMatch(workspaceSource, /removeItem\(ACTIVE_THREAD_KEY\)/);
-  assert.match(workspaceSource, /removeItem\(activeThreadKey\)/);
-  assert.match(workspaceSource, /payload\.state/);
-  assert.match(workspaceSource, /await loadHistory\(thread\.id\); await refreshThread\(thread\.id\); setLiveText\(''\); setConnection\('connected'\)/);
+  assert.doesNotMatch(workspaceSource, /await loadHistory\(thread\.id\)/);
 });

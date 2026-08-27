@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -16,9 +16,9 @@ const HIDDEN_LEGACY_IDS = [
 ];
 
 test('H9 shell keeps one primary Harness entry and only business result/asset pages', () => {
-  assert.deepEqual(harnessJourney.map((entry) => ({ id: entry.id, label: entry.label })), [
-    { id: 'ai', label: '新任务' },
-    { id: 'ai', label: '当前会话' },
+  assert.deepEqual(harnessJourney.map((entry) => ({ id: entry.id, key: entry.key })), [
+    { id: 'ai', key: 'new' },
+    { id: 'ai', key: 'session' },
   ]);
 
   const compatIds = compatibilitySections.flatMap((section) => section.items.map((item) => item.id));
@@ -68,20 +68,24 @@ test('H9 task routes remain stable for execution and result pages', async () => 
   }
 });
 
-test('H9 AI workspace embeds official Harness web instead of the old fixed planner UI', async () => {
+test('H9 AI workspace uses AMS-authenticated Harness conversation instead of a bare iframe', async () => {
   const workspace = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   const style = await readFile(new URL('../src/pages/AIWorkspacePage.css', import.meta.url), 'utf8');
 
-  assert.match(workspace, /DEFAULT_HARNESS_WEB_URL/);
-  assert.match(workspace, /harness-web\.47-251-244-196\.sslip\.io/);
-  assert.match(workspace, /data-testid="official-harness-frame"/);
+  assert.match(workspace, /createHarnessClient/);
+  assert.match(workspace, /sendAgentMessage/);
+  assert.match(workspace, /thread_send_agent|dispatch = client\.sendAgentMessage/);
   assert.match(workspace, /readHarnessActiveProject/);
-  assert.match(workspace, /角色库/);
-  assert.match(workspace, /AMS 结果页/);
-  assert.match(workspace, /Harness 负责执行，AMS 只沉淀结果/);
-  assert.match(style, /official-harness-frame/);
+  assert.match(workspace, /id: 'characters'/);
+  assert.match(workspace, /official-business-dock/);
+  assert.match(workspace, /BUSINESS_LINKS/);
+  assert.match(workspace, /data-testid="conversation-transcript"/);
+  assert.match(workspace, /data-testid="harness-intent"/);
+  assert.match(workspace, /data-testid="harness-submit"/);
+  assert.match(style, /conversation-workspace/);
 
-  assert.doesNotMatch(workspace, /生成安全计划|执行详情|结果与审核|capabilityLabelFor|kind === 'tool_call'|kind === 'tool_result'/);
+  assert.doesNotMatch(workspace, /capabilityLabelFor|kind === 'tool_call'|kind === 'tool_result'/);
+  assert.doesNotMatch(workspace, /official-harness-frame|DEFAULT_HARNESS_WEB_URL|VITE_DSH_WEB_URL|harness-web\.47-251-244-196\.sslip\.io/);
   assert.doesNotMatch(workspace, /fingerprint|raw JSON|ai-technical-details/i);
 });
 

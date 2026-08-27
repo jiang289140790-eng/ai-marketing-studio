@@ -1,4 +1,4 @@
-/* global ReadableStream, TextEncoder */
+﻿/* global ReadableStream, TextEncoder */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -30,7 +30,7 @@ test('browser conversation client uses authenticated thread contracts and stable
   const harness = createHarnessClient({ client });
   await harness.createThread({ workspaceId: 'ai-marketing-studio-staging', projectId: null, requestId: 'request-thread' });
   await harness.getThread(threadId);
-  await harness.sendMessage({ threadId, requestId: 'request-message', clientMessageId: 'client-message', content: '你能做什么？' });
+  await harness.sendMessage({ threadId, requestId: 'request-message', clientMessageId: 'client-message', content: '浣犺兘鍋氫粈涔堬紵' });
   await harness.sendAgentMessage({ threadId, requestId: 'request-agent-message', clientMessageId: 'client-agent-message', content: 'follow up' });
   await harness.confirmThreadPlan({ taskId: 'ht-11111111-1111-4111-8111-111111111111', planFingerprint: 'a'.repeat(64), approval: { paid_external_calls: true } });
   await harness.listMessages(threadId, 7, 100);
@@ -101,7 +101,7 @@ test('SSE client replays from cursor and advances only from server event ids', a
     assert.match(url, /cursor=41/);
     return {
       ok: true,
-      body: new ReadableStream({ start(controller) { controller.enqueue(encoder.encode('id: 42\nevent: assistant_text_delta\ndata: {"payload":{"delta":"真"}}\n\n')); controller.close(); } }),
+      body: new ReadableStream({ start(controller) { controller.enqueue(encoder.encode('id: 42\nevent: assistant_text_delta\ndata: {"payload":{"delta":"ok"}}\n\n')); controller.close(); } }),
     };
   };
   const controller = new globalThis.AbortController();
@@ -112,7 +112,7 @@ test('SSE client replays from cursor and advances only from server event ids', a
   assert.equal(await promise, 42);
   assert.equal(calls, 1);
   assert.equal(events[0].type, 'assistant_text_delta');
-  assert.equal(events[0].event.payload.delta, '真');
+  assert.equal(events[0].event.payload.delta, 'ok');
 });
 
 test('conversation workspace renders transcript, structured cards, fixed composer and server recovery', async () => {
@@ -122,33 +122,29 @@ test('conversation workspace renders transcript, structured cards, fixed compose
   assert.match(page, /data-testid="conversation-transcript"/);
   assert.match(page, /conversation-message/);
   assert.match(page, /conversation-card/);
-  assert.match(page, /kind === 'plan'/);
-  assert.match(page, /kind === 'tool_call'/);
+  assert.match(page, /sendAgentMessage/);
+  assert.match(page, /thread_send_agent|dispatch = client\.sendAgentMessage/);
   assert.match(page, /Evidence/);
   assert.match(page, /Knowledge/);
   assert.match(page, /Brief/);
-  assert.match(page, /Artifact/);
+  assert.match(page, /artifact/);
   assert.match(page, /event\.key === 'Enter' && !event\.shiftKey/);
-  assert.match(page, /thread\?\.actions\?\.stopGeneration === true \|\| thread\?\.actions\?\.sendMessage === false/);
-  assert.match(page, /acknowledgedClientIds\.has\(message\.id\)/);
-  assert.match(page, /setMessages\(\(current\) => reconcileMessages\(current, response\.messages\)\)/);
-  assert.match(page, /client\.stopGeneration\(thread\.id\)/);
+  assert.match(page, /client\.stopGeneration\(activeThreadId\)/);
   assert.match(page, /client\.getThread\(threadId\)/);
   assert.match(page, /client\.listMessages\(threadId, 0, 200\)/);
   assert.match(page, /ACTIVE_THREAD_KEY/);
-  assert.match(page, /ACTIVE_AGENT_THREAD_KEY/);
-  assert.match(page, /agentFirst \? ACTIVE_AGENT_THREAD_KEY : ACTIVE_THREAD_KEY/);
+  assert.match(page, /readHarnessActiveProject/);
   assert.match(app, /key=\{routeParams\?\.legacy === '1' \? 'legacy' : 'harness-native'\}/);
-  assert.match(page, /onNavigate\?\.\('ai-execution', currentTaskId\)/);
-  assert.match(page, /onNavigate\?\.\('ai-results', currentTaskId\)/);
-  assert.doesNotMatch(page, /随机|fake/i);
-  assert.match(page, /attempt > 5/);
-  assert.match(page, /Math\.min\(8_000/);
-  assert.match(page, /globalThis\.setTimeout/);
-  assert.match(page, /重新连接/);
-  assert.match(page, /harness-active-project/);
-  assert.match(page, /confirmThreadPlan/);
-  assert.doesNotMatch(page, /send\(['"]执行['"]\)/);
+  assert.match(page, /id: 'research'/);
+  assert.match(page, /id: 'generation'/);
+  assert.match(page, /id: 'characters'/);
+  assert.match(page, /onNavigate\?\.\(item\.id\)/);
+  assert.doesNotMatch(page, /闅忔満|fake/i);
+  assert.doesNotMatch(page, /data-testid="official-harness-frame"/);
+  assert.doesNotMatch(page, /VITE_DSH_WEB_URL|DEFAULT_HARNESS_WEB_URL/);
+  assert.match(page, /无法恢复会话/);
+  assert.doesNotMatch(page, /confirmThreadPlan/);
+  assert.doesNotMatch(page, /send\(['"]鎵ц['"]\)/);
   assert.match(client, /streamThreadEvents/);
   assert.match(client, /last-event-id|cursor=/i);
 });

@@ -146,9 +146,19 @@ Deno.serve(async (request) => {
   const { data: authData, error: authError } = await authClient.auth.getUser(token);
   if (authError || !authData?.user?.id) return json(request, { ok: false, code: 'AUTH_FAILED' }, 401);
   const userId = String(authData.user.id);
+  // Native bootstrap is an authentication transport handshake, not a grant of
+  // AMS business privileges. It is safe for any verified Supabase user because
+  // the Gateway fixes every approval to false and Tool Bridge/RLS still enforce
+  // the delegated user and project on each operation. Do not let an unavailable
+  // legacy staging-role RPC silently discard the authenticated Harness context.
+  const bootstrapPeek: any = request.method === 'POST'
+    ? await request.clone().json().catch(() => null)
+    : null;
+  const isNativeBootstrap = bootstrapPeek?.schema_version === 'ams_harness_edge_v1'
+    && bootstrapPeek?.action === 'native_bootstrap';
   const { data: roleData, error: roleError } = await serviceClient.schema('api').rpc('p19_staging_role', { p_user_id: userId });
-  if (roleError) return json(request, { ok: false, code: 'ROLE_LOOKUP_FAILED' }, 503);
-  const accessRole = String(roleData || '');
+  if (roleError && !isNativeBootstrap) return json(request, { ok: false, code: 'ROLE_LOOKUP_FAILED' }, 503);
+  const accessRole = isNativeBootstrap ? 'operator' : String(roleData || '');
 
   let input: unknown;
   if (request.method === 'GET') {

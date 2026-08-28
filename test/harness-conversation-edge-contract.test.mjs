@@ -160,6 +160,9 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /internal\/task-events/);
   assert.match(source, /PROJECTION_BINDING_INVALID/);
   assert.match(source, /harness_get_thread_v1/);
+  assert.match(source, /isNativeBootstrap \? 'operator' : String\(roleData \|\| ''\)/);
+  assert.match(source, /roleError && !isNativeBootstrap/);
+  assert.match(source, /Gateway fixes every approval to false/);
   assert.match(source, /boundThread\?\.thread\?\.currentTaskId !== binding\.task_id/);
   assert.match(source, /boundThread\?\.thread\?\.projectId !== binding\.project_id/);
   assert.match(gatewaySource, /event\.event_type === 'agent_plan_created'/);

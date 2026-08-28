@@ -115,36 +115,17 @@ test('SSE client replays from cursor and advances only from server event ids', a
   assert.equal(events[0].event.payload.delta, 'ok');
 });
 
-test('conversation workspace renders transcript, structured cards, fixed composer and server recovery', async () => {
+test('AI entry hands the entire surface to official Harness Web', async () => {
   const page = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   const client = await readFile(new globalThis.URL('../src/services/harness-client.js', import.meta.url), 'utf8');
   const app = await readFile(new globalThis.URL('../src/App.jsx', import.meta.url), 'utf8');
-  assert.match(page, /data-testid="conversation-transcript"/);
-  assert.match(page, /conversation-message/);
-  assert.match(page, /conversation-card/);
-  assert.match(page, /sendAgentMessage/);
-  assert.match(page, /thread_send_agent|dispatch = client\.sendAgentMessage/);
-  assert.match(page, /Evidence/);
-  assert.match(page, /Knowledge/);
-  assert.match(page, /Brief/);
-  assert.match(page, /artifact/);
-  assert.match(page, /event\.key === 'Enter' && !event\.shiftKey/);
-  assert.match(page, /client\.stopGeneration\(activeThreadId\)/);
-  assert.match(page, /client\.getThread\(threadId\)/);
-  assert.match(page, /client\.listMessages\(threadId, 0, 200\)/);
-  assert.match(page, /ACTIVE_THREAD_KEY/);
-  assert.match(page, /readHarnessActiveProject/);
+  assert.match(page, /DEFAULT_HARNESS_WEB_URL/);
+  assert.match(page, /VITE_DSH_WEB_URL/);
+  assert.match(page, /globalThis\.location\?\.replace\?\.\(harnessWebUrl\)/);
+  assert.match(page, /return null/);
   assert.match(app, /key=\{routeParams\?\.legacy === '1' \? 'legacy' : 'harness-native'\}/);
-  assert.match(page, /id: 'research'/);
-  assert.match(page, /id: 'generation'/);
-  assert.match(page, /id: 'characters'/);
-  assert.match(page, /onNavigate\?\.\(item\.id\)/);
-  assert.doesNotMatch(page, /闅忔満|fake/i);
+  assert.doesNotMatch(page, /conversation-transcript|conversation-card|harness-intent|BUSINESS_LINKS/);
   assert.doesNotMatch(page, /data-testid="official-harness-frame"/);
-  assert.doesNotMatch(page, /VITE_DSH_WEB_URL|DEFAULT_HARNESS_WEB_URL/);
-  assert.match(page, /无法恢复会话/);
-  assert.doesNotMatch(page, /confirmThreadPlan/);
-  assert.doesNotMatch(page, /send\(['"]鎵ц['"]\)/);
   assert.match(client, /streamThreadEvents/);
   assert.match(client, /last-event-id|cursor=/i);
 });
@@ -154,7 +135,7 @@ test('browser code has no legacy direct submit and no local completed fabricatio
   const page = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.doesNotMatch(client, /\bsubmit\s*\(/);
   assert.doesNotMatch(page, /harnessClient\.submit|state:\s*['"]completed['"]/);
-  assert.match(page, /message\.status/);
+  assert.doesNotMatch(page, /createHarnessClient|sendAgentMessage|message\.status/);
 });
 
 test('official UI capability map exactly mirrors every approved workflow id', () => {

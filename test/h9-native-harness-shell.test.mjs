@@ -68,25 +68,19 @@ test('H9 task routes remain stable for execution and result pages', async () => 
   }
 });
 
-test('H9 AI workspace uses AMS-authenticated Harness conversation instead of a bare iframe', async () => {
+test('H9 AI workspace yields the full page to official Harness Web', async () => {
   const workspace = await readFile(new URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
-  const style = await readFile(new URL('../src/pages/AIWorkspacePage.css', import.meta.url), 'utf8');
 
-  assert.match(workspace, /createHarnessClient/);
-  assert.match(workspace, /sendAgentMessage/);
-  assert.match(workspace, /thread_send_agent|dispatch = client\.sendAgentMessage/);
-  assert.match(workspace, /readHarnessActiveProject/);
-  assert.doesNotMatch(workspace, /id: 'characters'/);
+  assert.match(workspace, /DEFAULT_HARNESS_WEB_URL/);
+  assert.match(workspace, /VITE_DSH_WEB_URL/);
+  assert.match(workspace, /location\?\.replace/);
+  assert.match(workspace, /return null/);
   assert.doesNotMatch(workspace, /official-business-dock/);
   assert.doesNotMatch(workspace, /BUSINESS_LINKS/);
   assert.doesNotMatch(workspace, /读取当前项目状态/);
-  assert.match(workspace, /data-testid="conversation-transcript"/);
-  assert.match(workspace, /data-testid="harness-intent"/);
-  assert.match(workspace, /data-testid="harness-submit"/);
-  assert.match(style, /conversation-workspace/);
-
+  assert.doesNotMatch(workspace, /conversation-transcript|harness-intent|harness-submit|createHarnessClient/);
   assert.doesNotMatch(workspace, /capabilityLabelFor|kind === 'tool_call'|kind === 'tool_result'/);
-  assert.doesNotMatch(workspace, /official-harness-frame|DEFAULT_HARNESS_WEB_URL|VITE_DSH_WEB_URL|harness-web\.47-251-244-196\.sslip\.io/);
+  assert.doesNotMatch(workspace, /official-harness-frame/);
   assert.doesNotMatch(workspace, /fingerprint|raw JSON|ai-technical-details/i);
 });
 

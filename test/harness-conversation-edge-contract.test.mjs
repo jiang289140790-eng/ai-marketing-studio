@@ -166,6 +166,16 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(gatewaySource, /taskProjector\.bindTask\(event\.payload\.task\.id/);
   assert.match(gatewaySource, /thread_id: event\.thread_id/);
   assert.match(gatewaySource, /project_id: event\.payload\.task\.request\?\.project_id/);
+  assert.equal(
+    (gatewaySource.match(/approval: \{ paid_external_calls: false, online_writes: false, handoff_creation: false \}/g) || []).length,
+    2,
+    'agent-first message and delivery routes must default to read-only, non-paid execution',
+  );
+  assert.doesNotMatch(
+    gatewaySource,
+    /approval: \{ paid_external_calls: true, online_writes: true, handoff_creation: false \}/,
+    'natural-language delivery must not grant paid calls or online writes implicitly',
+  );
   assert.doesNotMatch(source, /Task projection is pushed durably[\s\S]*\/v1\/tasks\/\$\{threadState\.currentTaskId\}/);
   assert.doesNotMatch(source, /setTimeout\([^,]+,\s*\d+\).*assistant_text_delta/s);
   assert.match(recoveryMigration, /active_generation_lease_until/);
@@ -179,11 +189,14 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(agentStateMigration, /not \(p_event_type='generation_completed' and v_current_task_id is not null\)/);
   assert.match(agentStateMigration, /then 'tool_call' else 'tool_result'/);
   assert.match(agentStateMigration, /harness_append_message_v1/);
-  assert.match(workspaceSource, /data-testid="conversation-transcript"/);
-  assert.match(workspaceSource, /sendAgentMessage/);
-  assert.match(workspaceSource, /readHarnessActiveProject/);
-  assert.match(workspaceSource, /AMS 结果页/);
+  // The AI entry renders no AMS substitute UI. It gives the entire page to
+  // official Harness Web; identity and project integration belong behind it.
+  assert.match(workspaceSource, /DEFAULT_HARNESS_WEB_URL/);
+  assert.match(workspaceSource, /globalThis\.location\?\.replace/);
+  assert.match(workspaceSource, /return null/);
+  assert.doesNotMatch(workspaceSource, /QUICK_PROMPTS|quick-prompts|official-business-dock|conversation-transcript|harness-intent/);
+  assert.doesNotMatch(workspaceSource, /AMS 结果页|研究与 Brief|知识库|生成结果|角色库|发布中心/);
   assert.doesNotMatch(workspaceSource, /ACTIVE_AGENT_THREAD_KEY/);
   assert.doesNotMatch(workspaceSource, /removeItem\(ACTIVE_THREAD_KEY\)/);
-  assert.doesNotMatch(workspaceSource, /data-testid="official-harness-frame"|VITE_DSH_WEB_URL|DEFAULT_HARNESS_WEB_URL/);
+  assert.doesNotMatch(workspaceSource, /data-testid="official-harness-frame"/);
 });

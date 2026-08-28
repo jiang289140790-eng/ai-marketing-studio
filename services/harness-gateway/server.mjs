@@ -201,7 +201,7 @@ const server = createServer(async (request, response) => {
     const result = await conversations.run(body, userId, {
       runtimeContext: {
         delegatedAuthorization,
-        approval: { paid_external_calls: true, online_writes: true, handoff_creation: false },
+        approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
       },
       onFrame: (frame) => response.write(`${JSON.stringify(frame)}\n`),
     });
@@ -224,7 +224,7 @@ const server = createServer(async (request, response) => {
     try {
       result = conversationDeliveries.enqueue(body, userId, {
         delegatedAuthorization,
-        approval: { paid_external_calls: true, online_writes: true, handoff_creation: false },
+        approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
       });
     }
     catch { return send(response, 503, { ok: false, code: 'DELIVERY_PERSISTENCE_FAILED' }); }

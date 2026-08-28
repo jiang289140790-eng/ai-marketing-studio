@@ -56,7 +56,7 @@ function attachmentInspectionResult(call) {
   const item = {
     id: 'h5-att-aaaaaaaaaaaaaaaaaaaaaaaa',
     platform: 'private_attachment',
-    source_url: 'https://xtkkdvghiohlnpfnnhmx.supabase.co/storage/v1/object/authenticated/harness-thread-attachments/source.png',
+    source_url: 'https://amsstagingexample.supabase.co/storage/v1/object/authenticated/harness-thread-attachments/source.png',
     label: 'source.png',
     content_text: contentText,
     content_sha256: contentSha256,

@@ -25,5 +25,5 @@ test('Harness readiness requires the exact HTTPS AMS tool bridge shape', () => {
   const base = { HARNESS_EXECUTABLE: '/app/dsh', HARNESS_WORKSPACE: '/workspace', AMS_TOOL_BRIDGE_SECRET_FILE: '/run/secrets/bridge' };
   assert.equal(harnessReadiness(base).tool_bridge_configured, false);
   assert.equal(harnessReadiness({ ...base, AMS_TOOL_BRIDGE_URL: 'http://example.test/functions/v1/harness-tool-bridge' }).tool_bridge_configured, false);
-  assert.equal(harnessReadiness({ ...base, AMS_TOOL_BRIDGE_URL: 'https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge' }).tool_bridge_configured, true);
+  assert.equal(harnessReadiness({ ...base, AMS_TOOL_BRIDGE_URL: 'https://amsstagingexample.supabase.co/functions/v1/harness-tool-bridge' }).tool_bridge_configured, true);
 });

@@ -23,8 +23,8 @@ services:
       AMS_GATEWAY_HMAC_SECRET_FILE: /run/secrets/ams_gateway_hmac_secret
       DEEPSEEK_API_KEY: internal-model-proxy
       DEEPSEEK_BASE_URL: http://model-proxy:8791
-      AMS_TOOL_BRIDGE_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge
-      AMS_CONVERSATION_CALLBACK_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co
+      AMS_TOOL_BRIDGE_URL: ${AMS_TOOL_BRIDGE_URL:?required}
+      AMS_CONVERSATION_CALLBACK_URL: ${AMS_CONVERSATION_CALLBACK_URL:?required}
       AMS_TOOL_BRIDGE_SECRET_FILE: /run/secrets/ams_tool_bridge_secret
     secrets:
       - ams_gateway_hmac_secret
@@ -60,7 +60,7 @@ services:
       DEEPSEEK_API_KEY: internal-model-proxy
       DEEPSEEK_BASE_URL: http://127.0.0.1:8791
       AMS_MODEL_PROXY_URL: http://127.0.0.1:8791/v1/chat/completions
-      AMS_TOOL_BRIDGE_URL: https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge
+      AMS_TOOL_BRIDGE_URL: ${AMS_TOOL_BRIDGE_URL:?required}
       AMS_TOOL_BRIDGE_SECRET_FILE: /run/secrets/ams_tool_bridge_secret
       AMS_CONVERSATION_MODE: agent
       AMS_CAPABILITY_MANIFEST: "[]"

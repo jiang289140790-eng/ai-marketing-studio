@@ -43,7 +43,7 @@ test('classifies a model upstream failure with its HTTP status', () => {
 test('classifies AMS tool/plugin, tool bridge, and delegated auth failures', () => {
   const plugin = classifyHarnessExit({ exitCode: 1, stderr: 'ams_call plugin failed: TOOL_CALL_FAILED operation=post_tweet\n' });
   assert.deepEqual(plugin, { code: 'HARNESS_EXIT_FAILED', category: 'ams_tool_plugin', stage: 'tool_call', exit_code: 1, summary: 'AMS tool or plugin execution failed.' });
-  const bridge = classifyHarnessExit({ exitCode: 1, stderr: 'fetch failed ECONNREFUSED https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge\n' });
+  const bridge = classifyHarnessExit({ exitCode: 1, stderr: 'fetch failed ECONNREFUSED https://amsstagingexample.supabase.co/functions/v1/harness-tool-bridge\n' });
   assert.equal(bridge.category, 'ams_tool_bridge');
   assert.equal(bridge.stage, 'bridge_request');
   assert.equal(bridge.summary, 'AMS tool bridge request failed.');
@@ -132,7 +132,7 @@ test('redacts URL query credentials and cookies without touching benign text', (
   assert.equal(cookie.includes('[REDACTED]'), true);
   const benign = 'ERROR: model upstream rejected (HTTP 429)';
   assert.equal(redactSensitive(benign), benign);
-  const bridgeUrl = 'https://xtkkdvghiohlnpfnnhmx.supabase.co/functions/v1/harness-tool-bridge';
+  const bridgeUrl = 'https://amsstagingexample.supabase.co/functions/v1/harness-tool-bridge';
   assert.equal(redactSensitive(bridgeUrl), bridgeUrl);
 });
 

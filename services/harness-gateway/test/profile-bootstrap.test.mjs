@@ -97,7 +97,7 @@ test('persistent profile version advances for the agent-first conversation and o
   assert.match(plugin, /'research\.generate_similar', 'research\.inspect_attachments'/);
   assert.match(init, /const profileWebSource = join\(appRoot, 'profile-web'\);/);
   assert.match(init, /const webTarget = join\(home, 'profiles', 'web'\);/);
-  assert.match(init, /const version = 'ams-profile-v15';/);
+  assert.match(init, /const version = 'ams-profile-v17';/);
   assert.match(init, /installCommonProfileDependencies\(webTarget\)/);
   assert.equal(webPackage.name, 'dsh-profile-web');
   assert.equal(webPackage.dependencies['@ams/harness-tools'], 'file:/app/plugins/ams-tools');
@@ -118,6 +118,10 @@ test('rc.8 runtime uses a fresh Harness home without replacing gateway audit sta
   assert.match(compose, /127\.0\.0\.1:8791:8791/);
   assert.match(compose, /- harness_web_runtime:\/data\/harness/);
   assert.match(compose, /HARNESS_EVENT_FILE: \/data\/gateway\/events\.jsonl/);
+  assert.match(compose, /AMS_TOOL_BRIDGE_URL: \$\{AMS_TOOL_BRIDGE_URL:\?required\}/);
+  assert.match(compose, /AMS_CONVERSATION_CALLBACK_URL: \$\{AMS_CONVERSATION_CALLBACK_URL:\?required\}/);
+  assert.doesNotMatch(compose, /xtkkdvghiohlnpfnnhmx/);
+  assert.doesNotMatch(compose, /qtrlymiqohbjvklwegsw/);
   assert.match(compose, /\n\s+harness_runtime_rc8:\s*(?:\r?\n|$)/);
   assert.match(compose, /\n\s+harness_web_runtime:\s*(?:\r?\n|$)/);
 });

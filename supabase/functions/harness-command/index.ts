@@ -211,7 +211,13 @@ Deno.serve(async (request) => {
         // project access later through their own RLS/business contracts.
         return { ok: true, projectId: null };
       }
-      if (!project) return { ok: false, code: 'PROJECT_ACCESS_DENIED' };
+      if (!project) {
+        // A browser can keep an active-project hint from a deleted/stale
+        // environment. Native bootstrap must not be blocked by that hint:
+        // it only creates the Harness session binding. Project-level access
+        // is still enforced by AMS tools on every later business call.
+        return { ok: true, projectId: null };
+      }
       return { ok: true, projectId: requestedProjectId };
     }
     let projects: any[] = [];

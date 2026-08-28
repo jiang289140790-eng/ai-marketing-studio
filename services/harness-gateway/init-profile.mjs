@@ -23,7 +23,7 @@ const settingsFile = join(home, 'settings.yaml');
 // runtime volume survives container replacement, so reusing an old marker
 // would leave the previous plugin copy active even though the image contains
 // a newer AMS conversation tool catalog.
-const version = 'ams-profile-v18-native-session-auth';
+const version = 'ams-profile-v20-native-standard-session';
 // The only plugins promoted from the isolated plugin lab, pinned by exact
 // version. Each entry maps a vendored directory (name) to its npm scope and
 // the exact published version the promotion is bound to; a mismatch aborts
@@ -188,8 +188,8 @@ await mkdir(join(home, 'profiles'), { recursive: true });
 await ensureSingleAmsWorkspace();
 await ensureDeepSeekVisionModelSettings();
 // DSH applies the home patch after every profile patch. Refresh this exact
-// final layer on every boot so a persisted override cannot restore general
-// shell, filesystem, web, subagent, or arbitrary-code capabilities.
+// final layer on every boot so the official Harness web profile can boot its
+// standard preset while business writes remain gated by the AMS Tool Bridge.
 await writeFile(join(home, 'cordis.patch.yml'), await readFile(homeLockdownSource), { mode: 0o600 });
 if (await current() !== version) {
   await mkdir(target, { recursive: true });

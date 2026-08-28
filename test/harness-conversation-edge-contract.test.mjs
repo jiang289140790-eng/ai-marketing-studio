@@ -163,6 +163,10 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(source, /isNativeBootstrap \? 'operator' : String\(roleData \|\| ''\)/);
   assert.match(source, /roleError && !isNativeBootstrap/);
   assert.match(source, /Gateway fixes every approval to false/);
+  assert.match(source, /resolveBootstrapProjectId/);
+  assert.match(source, /p20_list_projects/);
+  assert.match(source, /status !== 'archived'/);
+  assert.match(source, /project_id: resolvedProject\.projectId/);
   assert.match(source, /boundThread\?\.thread\?\.currentTaskId !== binding\.task_id/);
   assert.match(source, /boundThread\?\.thread\?\.projectId !== binding\.project_id/);
   assert.match(gatewaySource, /event\.event_type === 'agent_plan_created'/);
@@ -171,8 +175,8 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(gatewaySource, /project_id: event\.payload\.task\.request\?\.project_id/);
   assert.equal(
     (gatewaySource.match(/approval: \{ paid_external_calls: false, online_writes: false, handoff_creation: false \}/g) || []).length,
-    3,
-    'agent-first message, delivery and native Harness context routes must default to read-only, non-paid execution',
+    4,
+    'agent-first message, delivery and native Harness context/current routes must default to read-only, non-paid execution',
   );
   assert.doesNotMatch(
     gatewaySource,

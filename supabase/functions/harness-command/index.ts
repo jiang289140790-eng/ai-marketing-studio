@@ -188,17 +188,28 @@ Deno.serve(async (request) => {
     return data;
   };
 
+  const resolveBootstrapProjectId = async (requestedProjectId: string | null) => {
+    if (requestedProjectId) {
+      const project = await rpc('p19_get_project', { p_user_id: userId, p_project_id: requestedProjectId });
+      if (!project) return { ok: false, code: 'PROJECT_ACCESS_DENIED' };
+      return { ok: true, projectId: requestedProjectId };
+    }
+    const projects = await rpc('p20_list_projects', { p_user_id: userId });
+    const projectList = Array.isArray(projects) ? projects : [];
+    const selected = projectList.find((project: any) => project?.status !== 'archived' && /^prj-[0-9a-f]{24}$/.test(String(project?.id || '')))
+      || projectList.find((project: any) => /^prj-[0-9a-f]{24}$/.test(String(project?.id || '')));
+    return { ok: true, projectId: selected?.id || null };
+  };
+
   if (checked.contract === 'native_bootstrap') {
     try {
-      if (checked.body.project_id) {
-        const project = await rpc('p19_get_project', { p_user_id: userId, p_project_id: checked.body.project_id });
-        if (!project) return json(request, { ok: false, code: 'PROJECT_ACCESS_DENIED' }, 403);
-      }
+      const resolvedProject = await resolveBootstrapProjectId(checked.body.project_id);
+      if (!resolvedProject.ok) return json(request, { ok: false, code: resolvedProject.code }, 403);
       const gateway = fixedGatewayBase(gatewayRaw);
       const path = '/v1/native-bootstrap';
       const rawBody = JSON.stringify({
         user_id: userId,
-        project_id: checked.body.project_id,
+        project_id: resolvedProject.projectId,
         request_id: checked.body.request_id,
       });
       const timestamp = String(Date.now());

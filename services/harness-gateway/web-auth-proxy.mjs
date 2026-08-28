@@ -9,6 +9,7 @@ import { signRequest } from './gateway-core.mjs';
 
 const BOOTSTRAP_HEADER = 'x-ams-bootstrap';
 const MAX_JSON_BODY = 2 * 1024 * 1024;
+const SESSION_ID_MAX = 192;
 
 export const BOOTSTRAP_SCRIPT = `<script>(()=>{const k='ams_native_bootstrap_v1';const p=new URLSearchParams(location.hash.slice(1));const incoming=p.get('ams-bootstrap');if(incoming){sessionStorage.setItem(k,incoming);history.replaceState(null,'',location.pathname+location.search)}const original=globalThis.fetch.bind(globalThis);globalThis.fetch=(input,init={})=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url,location.href);if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return original(input,init);const headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));const bootstrap=sessionStorage.getItem(k);if(bootstrap)headers.set('${BOOTSTRAP_HEADER}',bootstrap);return original(input,{...init,headers})}})()</script>`;
 
@@ -17,15 +18,51 @@ export function injectBootstrapScript(html) {
   return source.includes('</head>') ? source.replace('</head>', `${BOOTSTRAP_SCRIPT}</head>`) : `${BOOTSTRAP_SCRIPT}${source}`;
 }
 
+function stableSessionId(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > SESSION_ID_MAX) return '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(trimmed)) return '';
+  return trimmed;
+}
+
+function explicitSessionId(value) {
+  if (!value || typeof value !== 'object') return '';
+  const candidates = [
+    value?.payload?.sessionId,
+    value?.payload?.id,
+    value?.payload?.agentId,
+    value?.params?.sessionId,
+    value?.params?.id,
+    value?.params?.agentId,
+    value?.sessionId,
+    value?.session?.id,
+    value?.agentId,
+    value?.agent?.id,
+    value?.result?.value?.sessionId,
+    value?.result?.value?.id,
+    value?.result?.value?.agentId,
+    value?.result?.sessionId,
+    value?.result?.id,
+    value?.data?.sessionId,
+    value?.data?.id,
+  ];
+  for (const candidate of candidates) {
+    const sessionId = stableSessionId(candidate);
+    if (sessionId) return sessionId;
+  }
+  return '';
+}
+
 export function requestSessionId(pathname, rawBody, responseBody = '') {
   try {
     const request = JSON.parse(rawBody || '{}');
-    const direct = request?.payload?.sessionId;
-    if (typeof direct === 'string' && direct) return direct;
+    const direct = explicitSessionId(request);
+    if (direct) return direct;
     if (pathname === '/api/session.create' && responseBody) {
       const response = JSON.parse(responseBody);
-      const created = response?.result?.value?.sessionId;
-      if (typeof created === 'string' && created) return created;
+      const created = explicitSessionId(response);
+      if (created) return created;
     }
   } catch { /* malformed requests remain the upstream API's responsibility */ }
   return '';

@@ -7,6 +7,10 @@ import { writeRequiredFailure } from './required-failure-journal.mjs';
 
 const name = 'ams-harness-tools';
 const inject = ['tools', 'systemPrompt'];
+const DEFAULT_NATIVE_SESSION_GATEWAY_URL = 'http://127.0.0.1:8790';
+const DEFAULT_GATEWAY_HMAC_SECRET_FILE = '/run/secrets/ams_gateway_hmac_secret';
+const DEFAULT_TOOL_BRIDGE_URL = 'https://qtrlymiqohbjvklwegsw.supabase.co/functions/v1/harness-tool-bridge';
+const DEFAULT_TOOL_BRIDGE_SECRET_FILE = '/run/secrets/ams_tool_bridge_secret';
 
 function environmentRuntime() {
   let approval = {};
@@ -32,26 +36,70 @@ function signGatewayContext(secret, path, userId, timestamp, rawBody) {
     .digest('hex');
 }
 
-async function resolveRuntime(execution) {
-  const environment = environmentRuntime();
-  const delegatedAuthorization = String(process.env.AMS_DELEGATED_AUTHORIZATION || '').trim();
-  if (delegatedAuthorization) return { context: environment, delegatedAuthorization };
+function stableSessionId(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 192) return '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(trimmed)) return '';
+  return trimmed;
+}
 
-  const sessionId = String(execution?.agent?.id || execution?.agent?.sessionId || '').trim();
-  if (!sessionId) {
-    throw Object.assign(new Error('A delegated bearer authorization is required.'), { code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+function nativeSessionIdFromExecution(execution) {
+  const candidates = [
+    execution?.agent?.id,
+    execution?.agent?.sessionId,
+    execution?.agentId,
+    execution?.session?.id,
+    execution?.sessionId,
+    execution?.ctx?.agent?.id,
+    execution?.ctx?.agent?.sessionId,
+    execution?.ctx?.agentId,
+    execution?.ctx?.session?.id,
+    execution?.ctx?.sessionId,
+    execution?.context?.agent?.id,
+    execution?.context?.agent?.sessionId,
+    execution?.context?.agentId,
+    execution?.context?.session?.id,
+    execution?.context?.sessionId,
+  ];
+  for (const candidate of candidates) {
+    const sessionId = stableSessionId(candidate);
+    if (sessionId) return sessionId;
   }
-  const secretPath = process.env.AMS_GATEWAY_HMAC_SECRET_FILE || '';
+  const seen = new Set();
+  const stack = [{ value: execution, depth: 0 }];
+  while (stack.length) {
+    const { value, depth } = stack.pop();
+    if (!value || typeof value !== 'object' || seen.has(value) || depth > 4) continue;
+    seen.add(value);
+    for (const [key, nested] of Object.entries(value)) {
+      if (/authorization|token|secret|password|cookie/i.test(key)) continue;
+      if (/session|agent|thread|conversation/i.test(key)) {
+        const sessionId = stableSessionId(nested);
+        if (sessionId) return sessionId;
+        if (nested && typeof nested === 'object') {
+          for (const childKey of ['sessionId', 'agentId', 'threadId', 'conversationId', 'id']) {
+            const childSessionId = stableSessionId(nested[childKey]);
+            if (childSessionId) return childSessionId;
+          }
+        }
+      }
+      if (nested && typeof nested === 'object') stack.push({ value: nested, depth: depth + 1 });
+    }
+  }
+  return '';
+}
+
+async function requestNativeContext({ path, rawBody }) {
+  const secretPath = process.env.AMS_GATEWAY_HMAC_SECRET_FILE || DEFAULT_GATEWAY_HMAC_SECRET_FILE;
   const gatewaySecret = secretPath ? readFileSync(secretPath, 'utf8').trim() : '';
   if (gatewaySecret.length < 32) {
     throw Object.assign(new Error('Native Harness session authorization is unavailable.'), { code: 'NATIVE_SESSION_AUTH_UNAVAILABLE' });
   }
-  const path = '/v1/native-sessions/context';
-  const rawBody = JSON.stringify({ session_id: sessionId });
   const userId = 'ams-tools';
   const timestamp = String(Date.now());
   const signature = signGatewayContext(gatewaySecret, path, userId, timestamp, rawBody);
-  const gatewayUrl = String(process.env.AMS_NATIVE_SESSION_GATEWAY_URL || 'http://127.0.0.1:8790').replace(/\/$/, '');
+  const gatewayUrl = String(process.env.AMS_NATIVE_SESSION_GATEWAY_URL || DEFAULT_NATIVE_SESSION_GATEWAY_URL).replace(/\/$/, '');
   let response;
   try {
     response = await fetch(`${gatewayUrl}${path}`, {
@@ -75,9 +123,22 @@ async function resolveRuntime(execution) {
       code: String(result?.code || 'DELEGATED_AUTHORIZATION_REQUIRED'),
     });
   }
+  return result;
+}
+
+async function resolveRuntime(execution) {
+  const environment = environmentRuntime();
+  const delegatedAuthorization = String(process.env.AMS_DELEGATED_AUTHORIZATION || '').trim();
+  if (delegatedAuthorization) return { context: environment, delegatedAuthorization };
+
+  const sessionId = nativeSessionIdFromExecution(execution);
+  const path = sessionId ? '/v1/native-sessions/context' : '/v1/native-sessions/current';
+  const rawBody = sessionId ? JSON.stringify({ session_id: sessionId }) : '{}';
+  const result = await requestNativeContext({ path, rawBody });
+  const stableId = sessionId || `current:${result.user_id}:${result.project_id || 'no-project'}`;
   return {
     context: {
-      task_id: nativeTaskId(sessionId),
+      task_id: nativeTaskId(stableId),
       user_id: result.user_id,
       project_id: result.project_id ?? null,
       approval: result.approval || {},
@@ -89,10 +150,10 @@ async function resolveRuntime(execution) {
 async function loadClient(delegatedAuthorization) {
   const modulePath = process.env.AMS_TOOL_CLIENT_MODULE || '/app/tool-client.mjs';
   const module = await import(modulePath);
-  const secretPath = process.env.AMS_TOOL_BRIDGE_SECRET_FILE || '';
+  const secretPath = process.env.AMS_TOOL_BRIDGE_SECRET_FILE || DEFAULT_TOOL_BRIDGE_SECRET_FILE;
   const bridgeSecret = secretPath ? readFileSync(secretPath, 'utf8').trim() : '';
   return module.createToolClient({
-    bridgeUrl: process.env.AMS_TOOL_BRIDGE_URL,
+    bridgeUrl: process.env.AMS_TOOL_BRIDGE_URL || DEFAULT_TOOL_BRIDGE_URL,
     bridgeSecret,
     delegatedAuthorization,
     allowInternalHttp: true,
@@ -374,4 +435,4 @@ function apply(ctx) {
   }));
 }
 
-export { apply, inject, name, nativeTaskId, signGatewayContext };
+export { apply, inject, name, nativeSessionIdFromExecution, nativeTaskId, signGatewayContext };

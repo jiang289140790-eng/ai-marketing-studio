@@ -37,6 +37,7 @@ export function createNativeSessionRegistry({ now = () => Date.now(), bootstrapT
         delegatedAuthorization,
         userId,
         projectId,
+        createdAt: now(),
         expiresAt: now() + bootstrapTtlMs,
       });
       return { ok: true, bootstrapId, expiresIn: Math.floor(bootstrapTtlMs / 1000) };
@@ -55,7 +56,7 @@ export function createNativeSessionRegistry({ now = () => Date.now(), bootstrapT
       bootstraps.delete(bootstrapId);
       const expiresAt = Math.min(context.expiresAt + 24 * 60 * 60_000, bearerExpiryMs(context.delegatedAuthorization, now()));
       if (expiresAt <= now()) return { ok: false, code: 'DELEGATED_AUTHORIZATION_EXPIRED' };
-      sessions.set(sessionId, { ...context, expiresAt });
+      sessions.set(sessionId, { ...context, boundAt: now(), expiresAt });
       return { ok: true, userId: context.userId, projectId: context.projectId, expiresAt };
     },
 
@@ -65,6 +66,16 @@ export function createNativeSessionRegistry({ now = () => Date.now(), bootstrapT
       const context = sessions.get(sessionId);
       if (!context) return { ok: false, code: 'NATIVE_SESSION_CONTEXT_REQUIRED' };
       return { ok: true, ...context };
+    },
+
+    current() {
+      sweep();
+      const active = [...sessions.values()];
+      if (active.length === 0) return { ok: false, code: 'NATIVE_SESSION_CONTEXT_REQUIRED' };
+      const withProject = active.filter((context) => context.projectId);
+      const candidates = withProject.length > 0 ? withProject : active;
+      const latest = candidates.sort((left, right) => (right.boundAt || 0) - (left.boundAt || 0))[0];
+      return { ok: true, ...latest };
     },
 
     counts() {

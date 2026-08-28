@@ -223,6 +223,20 @@ const server = createServer(async (request, response) => {
       approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
     } : context);
   }
+  if (request.method === 'POST' && url.pathname === '/v1/native-sessions/current') {
+    if (userId !== 'ams-tools') return send(response, 403, { ok: false, code: 'SERVICE_BINDING_MISMATCH' });
+    let body;
+    try { body = rawBody ? JSON.parse(rawBody) : {}; } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body && Object.keys(body).length > 0) return send(response, 400, { ok: false, code: 'NATIVE_SESSION_CURRENT_BODY_INVALID' });
+    const context = nativeSessions.current();
+    return send(response, context.ok ? 200 : 401, context.ok ? {
+      ok: true,
+      user_id: context.userId,
+      project_id: context.projectId,
+      delegated_authorization: context.delegatedAuthorization,
+      approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
+    } : context);
+  }
   const messageMatch = url.pathname.match(/^\/v1\/threads\/(thr_[0-9a-f-]{36})\/messages$/);
   if (request.method === 'POST' && messageMatch) {
     if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {

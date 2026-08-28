@@ -5,7 +5,7 @@ import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
 import { resolveHarnessLaunch } from '../harness-runner.mjs';
 import { verifySignedRequest } from '../gateway-core.mjs';
-import { nativeTaskId, signGatewayContext } from '../plugins/ams-tools/index.mjs';
+import { nativeSessionIdFromExecution, nativeTaskId, signGatewayContext } from '../plugins/ams-tools/index.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -62,8 +62,8 @@ test('Docker build makes the local plugin available before npm ci', async () => 
   assert.match(dockerfile, /ln -s \/app\/node_modules \/node_modules/);
 });
 
-test('both profile layers fail closed before importing subprocess/node-pty', async () => {
-  for (const file of ['profile/cordis.patch.yml', 'home-lockdown.patch.yml']) {
+test('legacy AMS profile remains locked while official Harness web home can boot standard tools', async () => {
+  for (const file of ['profile/cordis.patch.yml']) {
     const patch = await text(file);
     assert.match(patch, /- id: subprocess\r?\n\s+disabled: true/);
     assert.match(patch, /- id: bash-sandbox\r?\n\s+disabled: true/);
@@ -76,6 +76,11 @@ test('both profile layers fail closed before importing subprocess/node-pty', asy
     // "patch: entry ... not found" on every boot, and absence is the
     // lockdown — there is no row for any persisted override to re-enable.
     assert.doesNotMatch(patch, /tool-pwsh-persistent/);
+  }
+  const homePatch = await text('home-lockdown.patch.yml');
+  assert.match(homePatch, /- id: sandbox-policy\r?\n\s+config:\r?\n\s+mode: read-only/);
+  for (const requiredByStandard of ['tool-bash', 'tool-fs-search', 'tool-web', 'web', 'subprocess']) {
+    assert.doesNotMatch(homePatch, new RegExp(`- id: ${requiredByStandard}\\r?\\n\\s+disabled: true`));
   }
 });
 
@@ -99,7 +104,7 @@ test('persistent profile version advances for the agent-first conversation and o
   assert.match(plugin, /'research\.generate_similar', 'research\.inspect_attachments'/);
   assert.match(init, /const profileWebSource = join\(appRoot, 'profile-web'\);/);
   assert.match(init, /const webTarget = join\(home, 'profiles', 'web'\);/);
-  assert.match(init, /const version = 'ams-profile-v18-native-session-auth';/);
+  assert.match(init, /const version = 'ams-profile-v20-native-standard-session';/);
   assert.match(init, /installCommonProfileDependencies\(webTarget\)/);
   assert.equal(webPackage.name, 'dsh-profile-web');
   assert.equal(webPackage.dependencies['@ams/harness-tools'], 'file:/app/plugins/ams-tools');
@@ -119,6 +124,29 @@ test('native plugin context uses a valid stable task identity and Gateway HMAC c
   const rawBody = JSON.stringify({ session_id: 'native-session-1' });
   const signature = signGatewayContext(secret, path, userId, timestamp, rawBody);
   assert.equal(verifySignedRequest({ secret, method: 'POST', path, userId, timestamp, signature, authorizationDigest: '', rawBody, now: Number(timestamp) }), true);
+});
+
+test('native plugin keeps safe runtime defaults when official Harness tool sandbox omits env injection', async () => {
+  const plugin = await text('plugins/ams-tools/index.mjs');
+  assert.match(plugin, /DEFAULT_NATIVE_SESSION_GATEWAY_URL = 'http:\/\/127\.0\.0\.1:8790'/);
+  assert.match(plugin, /DEFAULT_GATEWAY_HMAC_SECRET_FILE = '\/run\/secrets\/ams_gateway_hmac_secret'/);
+  assert.match(plugin, /DEFAULT_TOOL_BRIDGE_SECRET_FILE = '\/run\/secrets\/ams_tool_bridge_secret'/);
+  assert.match(plugin, /DEFAULT_TOOL_BRIDGE_URL = 'https:\/\/qtrlymiqohbjvklwegsw\.supabase\.co\/functions\/v1\/harness-tool-bridge'/);
+  assert.doesNotMatch(plugin, /xtkkdvghiohlnpfnnhmx/);
+});
+
+test('native plugin extracts the official Harness session identity from bounded execution shapes', () => {
+  assert.equal(nativeSessionIdFromExecution({ agent: { id: 'session-agent-id' } }), 'session-agent-id');
+  assert.equal(nativeSessionIdFromExecution({ agentId: 'session-agent-root' }), 'session-agent-root');
+  assert.equal(nativeSessionIdFromExecution({ session: { id: 'session-root' } }), 'session-root');
+  assert.equal(nativeSessionIdFromExecution({ ctx: { agent: { sessionId: 'session-ctx-agent' } } }), 'session-ctx-agent');
+  assert.equal(nativeSessionIdFromExecution({ context: { session: { id: 'session-context' } } }), 'session-context');
+  assert.equal(nativeSessionIdFromExecution({ runtime: { metadata: { conversationId: 'conversation-runtime' } } }), 'conversation-runtime');
+  assert.equal(nativeSessionIdFromExecution({ source: { thread: { id: 'thread-source' } } }), 'thread-source');
+  assert.equal(nativeSessionIdFromExecution({ agent: { id: '../bad' } }), '');
+  assert.equal(nativeSessionIdFromExecution({ token: 'session-secret', deep: { token: 'session-secret-2' } }), '');
+  assert.equal(nativeSessionIdFromExecution({ agent: { id: 'x'.repeat(193) } }), '');
+  assert.equal(nativeSessionIdFromExecution({}), '');
 });
 
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {

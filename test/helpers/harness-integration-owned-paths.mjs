@@ -22,6 +22,8 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/profile-web/cordis.patch.yml',
   'services/harness-gateway/gateway-core.mjs',
   'services/harness-gateway/harness-runner.mjs',
+  'services/harness-gateway/native-session-registry.mjs',
+  'services/harness-gateway/web-auth-proxy.mjs',
   'services/harness-gateway/server.mjs',
   'services/harness-gateway/workflow-catalog.mjs',
   'services/harness-gateway/planner.mjs',
@@ -31,6 +33,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/test/profile-bootstrap.test.mjs',
   'services/harness-gateway/test/profile-config.test.mjs',
   'services/harness-gateway/test/state-store.test.mjs',
+  'services/harness-gateway/test/native-session-registry.test.mjs',
   'supabase/functions/harness-command/index.ts',
   'supabase/functions/harness-command/edge-core.mjs',
   'src/pages/AIWorkspacePage.jsx',
@@ -101,6 +104,7 @@ export const HARNESS_INTEGRATION_OWNED_PATHS = new Set([
   'services/harness-gateway/test/tool-contract.test.mjs',
   'services/harness-gateway/test/deterministic-executor.test.mjs',
   'services/harness-gateway/test/planner.test.mjs',
+  'services/harness-gateway/test/web-auth-proxy.test.mjs',
   // H1/H2 semantic planning, capability memory and execution critic:
   // exact files only; no directory-level expansion.
   'docs/H1_DEEPSEEK_SEMANTIC_AGENT_LOOP.md',
@@ -208,6 +212,7 @@ export const HARNESS_INTEGRATION_OWNED_GLOBS = Object.freeze([
   'services/harness-gateway/gateway-core.mjs',
   'services/harness-gateway/test/conversation-runner.test.mjs',
   'services/harness-gateway/harness-runner.mjs',
+  'services/harness-gateway/native-session-registry.mjs',
   'services/harness-gateway/server.mjs',
   'services/harness-gateway/workflow-catalog.mjs',
   'services/harness-gateway/planner.mjs',

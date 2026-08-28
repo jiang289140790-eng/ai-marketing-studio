@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { useAuth } from '../contexts/auth-context.js';
 import {
   HARNESS_ACTIVE_PROJECT_KEY,
   createHarnessClient,
@@ -22,9 +23,12 @@ function getHarnessWebUrl() {
  */
 export function AIWorkspacePage() {
   const harnessWebUrl = getHarnessWebUrl();
+  const { authUrl, error: authError, isAuthenticated, loading: authLoading, loginWithGitHub } = useAuth();
+  const [loginError, setLoginError] = useState('');
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   useEffect(() => {
-    if (!harnessWebUrl) return;
+    if (!harnessWebUrl || authLoading || !isAuthenticated) return;
     let active = true;
     const openHarness = async () => {
       const client = createHarnessClient();
@@ -51,7 +55,55 @@ export function AIWorkspacePage() {
     };
     openHarness();
     return () => { active = false; };
-  }, [harnessWebUrl]);
+  }, [authLoading, harnessWebUrl, isAuthenticated]);
 
-  return null;
+  if (authLoading || isAuthenticated) return null;
+
+  const signIn = async () => {
+    setLoginError('');
+    setIsSigningIn(true);
+    try {
+      await loginWithGitHub();
+    } catch (error) {
+      setIsSigningIn(false);
+      setLoginError(error?.message || 'GitHub 登录启动失败，请稍后重试。');
+    }
+  };
+
+  return (
+    <main className="official-harness-auth-gate" style={{
+      alignItems: 'center',
+      background: '#fff',
+      color: '#0f172a',
+      display: 'flex',
+      minHeight: '100vh',
+      justifyContent: 'center',
+      padding: 24,
+    }}>
+      <section style={{ maxWidth: 720, textAlign: 'center' }}>
+        <p style={{ color: '#0f766e', fontWeight: 800, letterSpacing: '0.08em', marginBottom: 12 }}>AMS × DEEPSEEK HARNESS</p>
+        <h1 style={{ fontSize: 'clamp(40px, 8vw, 72px)', lineHeight: 1, margin: 0 }}>探索未至之境</h1>
+        <p style={{ color: '#475569', fontSize: 18, margin: '20px 0 28px' }}>先登录 AMS，再进入 Harness。这样插件才能读取当前项目和业务结果。</p>
+        <button
+          type="button"
+          onClick={signIn}
+          disabled={isSigningIn}
+          style={{
+            background: '#0f172a',
+            border: 0,
+            borderRadius: 999,
+            color: '#fff',
+            cursor: 'pointer',
+            fontSize: 16,
+            fontWeight: 800,
+            padding: '14px 28px',
+          }}
+        >
+          {isSigningIn ? '正在跳转 GitHub...' : 'GitHub 登录并进入 Harness'}
+        </button>
+        {authUrl ? <p style={{ marginTop: 16 }}><a href={authUrl}>继续 GitHub 授权</a></p> : null}
+        {authError || loginError ? <p style={{ color: '#dc2626', marginTop: 16 }}>{authError || loginError}</p> : null}
+      </section>
+    </main>
+  );
 }

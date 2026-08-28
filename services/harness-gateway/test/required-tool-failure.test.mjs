@@ -14,6 +14,7 @@ test('real ams_call plugin latches the first required failure and never contacts
     task: process.env.AMS_TASK_ID,
     user: process.env.AMS_USER_ID,
     project: process.env.AMS_PROJECT_ID,
+    authorization: process.env.AMS_DELEGATED_AUTHORIZATION,
   };
   globalThis.__amsRequiredToolClientCalls = 0;
   process.env.AMS_TOOL_CLIENT_MODULE = `data:text/javascript,${encodeURIComponent(`
@@ -28,6 +29,7 @@ test('real ams_call plugin latches the first required failure and never contacts
   process.env.AMS_TASK_ID = 'ht-11111111-1111-4111-8111-111111111111';
   process.env.AMS_USER_ID = 'user-test';
   process.env.AMS_PROJECT_ID = 'prj-aaaaaaaaaaaaaaaaaaaaaaaa';
+  process.env.AMS_DELEGATED_AUTHORIZATION = 'Bearer test.delegated.authorization-value';
 
   try {
     let registered;
@@ -64,6 +66,7 @@ test('real ams_call plugin latches the first required failure and never contacts
     if (previous.task === undefined) delete process.env.AMS_TASK_ID; else process.env.AMS_TASK_ID = previous.task;
     if (previous.user === undefined) delete process.env.AMS_USER_ID; else process.env.AMS_USER_ID = previous.user;
     if (previous.project === undefined) delete process.env.AMS_PROJECT_ID; else process.env.AMS_PROJECT_ID = previous.project;
+    if (previous.authorization === undefined) delete process.env.AMS_DELEGATED_AUTHORIZATION; else process.env.AMS_DELEGATED_AUTHORIZATION = previous.authorization;
     delete globalThis.__amsRequiredToolClientCalls;
     await rm(home, { recursive: true, force: true });
   }

@@ -178,6 +178,50 @@ Deno.serve(async (request) => {
     return data;
   };
 
+  if (checked.contract === 'native_bootstrap') {
+    try {
+      if (checked.body.project_id) {
+        const project = await rpc('p19_get_project', { p_user_id: userId, p_project_id: checked.body.project_id });
+        if (!project) return json(request, { ok: false, code: 'PROJECT_ACCESS_DENIED' }, 403);
+      }
+      const gateway = fixedGatewayBase(gatewayRaw);
+      const path = '/v1/native-bootstrap';
+      const rawBody = JSON.stringify({
+        user_id: userId,
+        project_id: checked.body.project_id,
+        request_id: checked.body.request_id,
+      });
+      const timestamp = String(Date.now());
+      const { signature } = await signGatewayRequest(gatewaySecret, {
+        method: 'POST', path, userId, timestamp, rawBody, delegatedAuthorization: authorization,
+      });
+      const response = await fetch(new URL(path, `${gateway.toString()}/`), {
+        method: 'POST',
+        redirect: 'error',
+        headers: {
+          'content-type': 'application/json',
+          'x-ams-user-id': userId,
+          'x-ams-timestamp': timestamp,
+          'x-ams-signature': signature,
+          'x-ams-delegated-authorization': authorization,
+        },
+        body: rawBody,
+        signal: AbortSignal.timeout(20_000),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.bootstrap_id) {
+        return json(request, { ok: false, code: String(result?.code || 'NATIVE_BOOTSTRAP_FAILED') }, response.status >= 400 && response.status < 500 ? response.status : 503);
+      }
+      return json(request, {
+        ok: true,
+        bootstrapId: result.bootstrap_id,
+        expiresIn: result.expires_in,
+      }, 201);
+    } catch {
+      return json(request, { ok: false, code: 'NATIVE_BOOTSTRAP_UNAVAILABLE' }, 503);
+    }
+  }
+
   if (checked.contract === 'thread_create') {
     try {
       if (checked.body.project_id) {

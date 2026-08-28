@@ -121,7 +121,9 @@ test('AI entry hands the entire surface to official Harness Web', async () => {
   const app = await readFile(new globalThis.URL('../src/App.jsx', import.meta.url), 'utf8');
   assert.match(page, /DEFAULT_HARNESS_WEB_URL/);
   assert.match(page, /VITE_DSH_WEB_URL/);
-  assert.match(page, /globalThis\.location\?\.replace\?\.\(harnessWebUrl\)/);
+  assert.match(page, /createNativeBootstrap/);
+  assert.match(page, /#ams-bootstrap=/);
+  assert.match(page, /globalThis\.location\?\.replace/);
   assert.match(page, /return null/);
   assert.match(app, /key=\{routeParams\?\.legacy === '1' \? 'legacy' : 'harness-native'\}/);
   assert.doesNotMatch(page, /conversation-transcript|conversation-card|harness-intent|BUSINESS_LINKS/);
@@ -135,7 +137,7 @@ test('browser code has no legacy direct submit and no local completed fabricatio
   const page = await readFile(new globalThis.URL('../src/pages/AIWorkspacePage.jsx', import.meta.url), 'utf8');
   assert.doesNotMatch(client, /\bsubmit\s*\(/);
   assert.doesNotMatch(page, /harnessClient\.submit|state:\s*['"]completed['"]/);
-  assert.doesNotMatch(page, /createHarnessClient|sendAgentMessage|message\.status/);
+  assert.doesNotMatch(page, /sendAgentMessage|message\.status/);
 });
 
 test('official UI capability map exactly mirrors every approved workflow id', () => {

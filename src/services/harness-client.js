@@ -62,7 +62,7 @@ export function createHarnessClient({
 
   async function invoke(body) {
     if (client) {
-      const sessionResult = ['plan', 'confirm', 'retry_failed_step'].includes(body.action)
+      const sessionResult = ['native_bootstrap', 'plan', 'confirm', 'retry_failed_step'].includes(body.action)
         ? await client.auth.refreshSession()
         : await client.auth.getSession();
       const { data: sessionData, error: sessionError } = sessionResult;
@@ -115,6 +115,9 @@ export function createHarnessClient({
   // legacy plan/confirm methods remain available only for historical task
   // recovery and explicit fallback screens.
   return Object.freeze({
+    createNativeBootstrap({ projectId = null, requestId }) {
+      return invoke({ action: 'native_bootstrap', project_id: projectId, request_id: requestId });
+    },
     createThread({ workspaceId, projectId = null, requestId, title = null }) {
       return invoke({ action: 'thread_create', workspace_id: workspaceId, project_id: projectId, request_id: requestId, title });
     },

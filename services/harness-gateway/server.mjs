@@ -15,6 +15,7 @@ import { createConversationProjector } from './conversation-projector.mjs';
 import { createConversationDeliveryQueue } from './conversation-delivery-queue.mjs';
 import { appendConversationEvent, loadConversationEvents } from './conversation-event-store.mjs';
 import { buildCapabilityManifest } from './capability-registry.mjs';
+import { createNativeSessionRegistry } from './native-session-registry.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -33,6 +34,7 @@ const MAX_BODY = 64 * 1024;
 const TASK_TIMEOUT_MS = Number(process.env.HARNESS_TASK_TIMEOUT_MS || 600_000);
 const TOOL_WINDOW_MS = 150_000;
 const QUEUE_CAPACITY = 2;
+const nativeSessions = createNativeSessionRegistry();
 const semanticPlanner = createDeepSeekSemanticPlanner({
   endpoint: process.env.AMS_MODEL_PROXY_URL || 'http://127.0.0.1:8791/v1/chat/completions',
   model: process.env.HARNESS_PLANNER_MODEL || 'deepseek-chat',
@@ -152,7 +154,7 @@ async function readBody(request) {
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
-  if (request.method === 'GET' && url.pathname === '/healthz') return send(response, 200, { ok: true, service: 'ams-harness-gateway', queue: queue.status() });
+  if (request.method === 'GET' && url.pathname === '/healthz') return send(response, 200, { ok: true, service: 'ams-harness-gateway', queue: queue.status(), native_sessions: nativeSessions.counts() });
   if (request.method === 'GET' && url.pathname === '/readyz') {
     const readiness = harnessReadiness();
     const queueStatus = queue.status();
@@ -184,6 +186,43 @@ const server = createServer(async (request, response) => {
     rawBody,
   });
   if (!signed) return send(response, 401, { ok: false, code: 'UNAUTHORIZED' });
+  if (request.method === 'POST' && url.pathname === '/v1/native-bootstrap') {
+    if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {
+      return send(response, 401, { ok: false, code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+    }
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    if (body.user_id !== userId) return send(response, 403, { ok: false, code: 'USER_BINDING_MISMATCH' });
+    if (body.project_id != null && !/^prj-[0-9a-f]{24}$/.test(String(body.project_id))) {
+      return send(response, 400, { ok: false, code: 'PROJECT_ID_INVALID' });
+    }
+    const created = nativeSessions.create({ delegatedAuthorization, userId, projectId: body.project_id ?? null });
+    return send(response, created.ok ? 201 : 401, created.ok
+      ? { ok: true, bootstrap_id: created.bootstrapId, expires_in: created.expiresIn }
+      : created);
+  }
+  if (request.method === 'POST' && url.pathname === '/v1/native-sessions/bind') {
+    if (userId !== 'harness-web') return send(response, 403, { ok: false, code: 'SERVICE_BINDING_MISMATCH' });
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    const bound = nativeSessions.bind(body.bootstrap_id, body.session_id);
+    return send(response, bound.ok ? 200 : 409, bound.ok
+      ? { ok: true, user_id: bound.userId, project_id: bound.projectId, expires_at: new Date(bound.expiresAt).toISOString() }
+      : bound);
+  }
+  if (request.method === 'POST' && url.pathname === '/v1/native-sessions/context') {
+    if (userId !== 'ams-tools') return send(response, 403, { ok: false, code: 'SERVICE_BINDING_MISMATCH' });
+    let body;
+    try { body = JSON.parse(rawBody); } catch { return send(response, 400, { ok: false, code: 'INVALID_JSON' }); }
+    const context = nativeSessions.read(body.session_id);
+    return send(response, context.ok ? 200 : 401, context.ok ? {
+      ok: true,
+      user_id: context.userId,
+      project_id: context.projectId,
+      delegated_authorization: context.delegatedAuthorization,
+      approval: { paid_external_calls: false, online_writes: false, handoff_creation: false },
+    } : context);
+  }
   const messageMatch = url.pathname.match(/^\/v1\/threads\/(thr_[0-9a-f-]{36})\/messages$/);
   if (request.method === 'POST' && messageMatch) {
     if (!/^Bearer [A-Za-z0-9._~-]{20,8192}$/.test(delegatedAuthorization)) {

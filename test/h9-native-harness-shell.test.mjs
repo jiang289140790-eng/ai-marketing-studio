@@ -78,7 +78,8 @@ test('H9 AI workspace yields the full page to official Harness Web', async () =>
   assert.doesNotMatch(workspace, /official-business-dock/);
   assert.doesNotMatch(workspace, /BUSINESS_LINKS/);
   assert.doesNotMatch(workspace, /读取当前项目状态/);
-  assert.doesNotMatch(workspace, /conversation-transcript|harness-intent|harness-submit|createHarnessClient/);
+  assert.doesNotMatch(workspace, /conversation-transcript|harness-intent|harness-submit/);
+  assert.match(workspace, /createNativeBootstrap/);
   assert.doesNotMatch(workspace, /capabilityLabelFor|kind === 'tool_call'|kind === 'tool_result'/);
   assert.doesNotMatch(workspace, /official-harness-frame/);
   assert.doesNotMatch(workspace, /fingerprint|raw JSON|ai-technical-details/i);

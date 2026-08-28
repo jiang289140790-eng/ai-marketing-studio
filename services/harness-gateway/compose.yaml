@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ams-harness-gateway:0.9.15-native-tools-h9
+    image: ams-harness-gateway:0.9.20-native-session-auth
     container_name: ams-harness-gateway
     restart: unless-stopped
     read_only: true
@@ -42,7 +42,7 @@ services:
       - tool_egress
 
   harness-web:
-    image: ams-harness-gateway:0.9.15-native-tools-h9
+    image: ams-harness-gateway:0.9.20-native-session-auth
     container_name: ams-harness-web
     restart: unless-stopped
     read_only: true
@@ -52,7 +52,7 @@ services:
     security_opt:
       - no-new-privileges:true
     network_mode: host
-    command: ["sh", "-lc", "node init-profile.mjs && exec node --expose-internals /app/node_modules/@deepseek-ai/dsh/lib/bin.js web --host 127.0.0.1 --port 8792 --no-open --trusted-host harness-web.47-251-244-196.sslip.io"]
+    command: ["sh", "-lc", "node init-profile.mjs && exec node web-auth-proxy.mjs"]
     environment:
       HARNESS_WORKSPACE: /workspace
       HARNESS_HOME: /data/harness
@@ -62,10 +62,13 @@ services:
       AMS_MODEL_PROXY_URL: http://127.0.0.1:8791/v1/chat/completions
       AMS_TOOL_BRIDGE_URL: ${AMS_TOOL_BRIDGE_URL:?required}
       AMS_TOOL_BRIDGE_SECRET_FILE: /run/secrets/ams_tool_bridge_secret
+      AMS_GATEWAY_HMAC_SECRET_FILE: /run/secrets/ams_gateway_hmac_secret
+      AMS_NATIVE_SESSION_GATEWAY_URL: http://127.0.0.1:8790
       AMS_CONVERSATION_MODE: agent
       AMS_CAPABILITY_MANIFEST: "[]"
     secrets:
       - ams_tool_bridge_secret
+      - ams_gateway_hmac_secret
     volumes:
       - harness_web_runtime:/data/harness
       - harness_workspace:/workspace:ro

@@ -1,5 +1,6 @@
+/* global AbortSignal, fetch */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { appendTaskArtifactRefs } from './artifact-journal.mjs';
 import { writeRequiredFailure } from './required-failure-journal.mjs';
@@ -7,7 +8,7 @@ import { writeRequiredFailure } from './required-failure-journal.mjs';
 const name = 'ams-harness-tools';
 const inject = ['tools', 'systemPrompt'];
 
-function runtimeContext() {
+function environmentRuntime() {
   let approval = {};
   try { approval = JSON.parse(process.env.AMS_TASK_APPROVAL || '{}'); } catch { approval = {}; }
   return {
@@ -18,7 +19,74 @@ function runtimeContext() {
   };
 }
 
-async function loadClient() {
+function nativeTaskId(sessionId) {
+  const hex = createHash('sha256').update(String(sessionId)).digest('hex').slice(0, 32).split('');
+  hex[12] = '4';
+  hex[16] = ['8', '9', 'a', 'b'][Number.parseInt(hex[16], 16) % 4];
+  return `ht-${hex.slice(0, 8).join('')}-${hex.slice(8, 12).join('')}-${hex.slice(12, 16).join('')}-${hex.slice(16, 20).join('')}-${hex.slice(20).join('')}`;
+}
+
+function signGatewayContext(secret, path, userId, timestamp, rawBody) {
+  return createHmac('sha256', secret)
+    .update(`POST\n${path}\n${userId}\n${timestamp}\n\n${rawBody}`)
+    .digest('hex');
+}
+
+async function resolveRuntime(execution) {
+  const environment = environmentRuntime();
+  const delegatedAuthorization = String(process.env.AMS_DELEGATED_AUTHORIZATION || '').trim();
+  if (delegatedAuthorization) return { context: environment, delegatedAuthorization };
+
+  const sessionId = String(execution?.agent?.id || execution?.agent?.sessionId || '').trim();
+  if (!sessionId) {
+    throw Object.assign(new Error('A delegated bearer authorization is required.'), { code: 'DELEGATED_AUTHORIZATION_REQUIRED' });
+  }
+  const secretPath = process.env.AMS_GATEWAY_HMAC_SECRET_FILE || '';
+  const gatewaySecret = secretPath ? readFileSync(secretPath, 'utf8').trim() : '';
+  if (gatewaySecret.length < 32) {
+    throw Object.assign(new Error('Native Harness session authorization is unavailable.'), { code: 'NATIVE_SESSION_AUTH_UNAVAILABLE' });
+  }
+  const path = '/v1/native-sessions/context';
+  const rawBody = JSON.stringify({ session_id: sessionId });
+  const userId = 'ams-tools';
+  const timestamp = String(Date.now());
+  const signature = signGatewayContext(gatewaySecret, path, userId, timestamp, rawBody);
+  const gatewayUrl = String(process.env.AMS_NATIVE_SESSION_GATEWAY_URL || 'http://127.0.0.1:8790').replace(/\/$/, '');
+  let response;
+  try {
+    response = await fetch(`${gatewayUrl}${path}`, {
+      method: 'POST',
+      redirect: 'error',
+      headers: {
+        'content-type': 'application/json',
+        'x-ams-user-id': userId,
+        'x-ams-timestamp': timestamp,
+        'x-ams-signature': signature,
+      },
+      body: rawBody,
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch {
+    throw Object.assign(new Error('Native Harness session authorization is unavailable.'), { code: 'NATIVE_SESSION_AUTH_UNAVAILABLE' });
+  }
+  const result = await response.json().catch(() => null);
+  if (!response.ok || !result?.delegated_authorization) {
+    throw Object.assign(new Error('A delegated bearer authorization is required.'), {
+      code: String(result?.code || 'DELEGATED_AUTHORIZATION_REQUIRED'),
+    });
+  }
+  return {
+    context: {
+      task_id: nativeTaskId(sessionId),
+      user_id: result.user_id,
+      project_id: result.project_id ?? null,
+      approval: result.approval || {},
+    },
+    delegatedAuthorization: result.delegated_authorization,
+  };
+}
+
+async function loadClient(delegatedAuthorization) {
   const modulePath = process.env.AMS_TOOL_CLIENT_MODULE || '/app/tool-client.mjs';
   const module = await import(modulePath);
   const secretPath = process.env.AMS_TOOL_BRIDGE_SECRET_FILE || '';
@@ -26,7 +94,7 @@ async function loadClient() {
   return module.createToolClient({
     bridgeUrl: process.env.AMS_TOOL_BRIDGE_URL,
     bridgeSecret,
-    delegatedAuthorization: process.env.AMS_DELEGATED_AUTHORIZATION || '',
+    delegatedAuthorization,
     allowInternalHttp: true,
   });
 }
@@ -172,7 +240,7 @@ const AMS_AGENT_PLAYBOOK = [
 ].join('\n');
 
 function apply(ctx) {
-  let requiredFailure = null;
+  const requiredFailures = new Map();
   const manifest = String(process.env.AMS_CAPABILITY_MANIFEST || '[]').slice(0, 24_000);
   const conversationMode = ['agent', 'qa'].includes(process.env.AMS_CONVERSATION_MODE || '');
   ctx.systemPrompt.section({
@@ -201,6 +269,9 @@ function apply(ctx) {
   });
 
   async function callAms(args, execution, operationOverride = '') {
+    const { context, delegatedAuthorization } = await resolveRuntime(execution);
+    const failureKey = context.task_id;
+    const requiredFailure = requiredFailures.get(failureKey);
     if (requiredFailure) {
       throw Object.assign(new Error('A required predecessor tool failed; dependent actions are blocked.'), {
         code: 'AMS_DEPENDENCY_BLOCKED',
@@ -208,8 +279,7 @@ function apply(ctx) {
     }
     const operation = operationOverride || args.operation;
     const payload = args.payload && typeof args.payload === 'object' ? args.payload : {};
-    const client = await loadClient();
-    const context = runtimeContext();
+    const client = await loadClient(delegatedAuthorization);
     const request = {
       schema_version: 'ams_harness_tool_v1',
       operation,
@@ -220,19 +290,21 @@ function apply(ctx) {
     try {
       const result = await client(request, context, execution?.signal);
       if (!result || result.ok === false) {
-        requiredFailure = {
+        const failure = {
           code: String(result?.code || 'AMS_REQUIRED_TOOL_FAILED'),
           operation,
         };
-        writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
-        throw Object.assign(new Error('A required AI Marketing Studio tool failed.'), { code: requiredFailure.code });
+        requiredFailures.set(failureKey, failure);
+        writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, failure);
+        throw Object.assign(new Error('A required AI Marketing Studio tool failed.'), { code: failure.code });
       }
       appendTaskArtifactRefs(process.env.DSH_HOME || process.env.HOME || '', context.task_id, result);
       return result;
     } catch (error) {
-      if (!requiredFailure) {
-        requiredFailure = { code: String(error?.code || 'AMS_REQUIRED_TOOL_FAILED'), operation };
-        writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, requiredFailure);
+      if (!requiredFailures.has(failureKey)) {
+        const failure = { code: String(error?.code || 'AMS_REQUIRED_TOOL_FAILED'), operation };
+        requiredFailures.set(failureKey, failure);
+        writeRequiredFailure(process.env.DSH_HOME || process.env.HOME || '', context.task_id, failure);
       }
       throw error;
     }
@@ -302,4 +374,4 @@ function apply(ctx) {
   }));
 }
 
-export { apply, inject, name };
+export { apply, inject, name, nativeTaskId, signGatewayContext };

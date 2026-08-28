@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
 import { resolveHarnessLaunch } from '../harness-runner.mjs';
+import { verifySignedRequest } from '../gateway-core.mjs';
+import { nativeTaskId, signGatewayContext } from '../plugins/ams-tools/index.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -97,7 +99,7 @@ test('persistent profile version advances for the agent-first conversation and o
   assert.match(plugin, /'research\.generate_similar', 'research\.inspect_attachments'/);
   assert.match(init, /const profileWebSource = join\(appRoot, 'profile-web'\);/);
   assert.match(init, /const webTarget = join\(home, 'profiles', 'web'\);/);
-  assert.match(init, /const version = 'ams-profile-v17';/);
+  assert.match(init, /const version = 'ams-profile-v18-native-session-auth';/);
   assert.match(init, /installCommonProfileDependencies\(webTarget\)/);
   assert.equal(webPackage.name, 'dsh-profile-web');
   assert.equal(webPackage.dependencies['@ams/harness-tools'], 'file:/app/plugins/ams-tools');
@@ -106,13 +108,28 @@ test('persistent profile version advances for the agent-first conversation and o
   assert.doesNotMatch(webPatch, /ams-conversation-runner/);
 });
 
+test('native plugin context uses a valid stable task identity and Gateway HMAC contract', () => {
+  const taskId = nativeTaskId('native-session-1');
+  assert.match(taskId, /^ht-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(nativeTaskId('native-session-1'), taskId);
+  const secret = 's'.repeat(32);
+  const path = '/v1/native-sessions/context';
+  const userId = 'ams-tools';
+  const timestamp = '1800000000000';
+  const rawBody = JSON.stringify({ session_id: 'native-session-1' });
+  const signature = signGatewayContext(secret, path, userId, timestamp, rawBody);
+  assert.equal(verifySignedRequest({ secret, method: 'POST', path, userId, timestamp, signature, authorizationDigest: '', rawBody, now: Number(timestamp) }), true);
+});
+
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {
   const compose = await text('compose.yaml');
   assert.match(compose, /- harness_gateway_data:\/data/);
   assert.match(compose, /- harness_runtime_rc8:\/data\/harness/);
   assert.match(compose, /harness-web:/);
   assert.match(compose, /network_mode: host/);
-  assert.match(compose, /node --expose-internals \/app\/node_modules\/@deepseek-ai\/dsh\/lib\/bin\.js web --host 127\.0\.0\.1 --port 8792 --no-open/);
+  assert.match(compose, /node web-auth-proxy\.mjs/);
+  assert.match(compose, /AMS_NATIVE_SESSION_GATEWAY_URL: http:\/\/127\.0\.0\.1:8790/);
+  assert.match(compose, /AMS_GATEWAY_HMAC_SECRET_FILE: \/run\/secrets\/ams_gateway_hmac_secret/);
   assert.doesNotMatch(compose, /dsh\/lib\/bin\.js web --host 0\.0\.0\.0/);
   assert.doesNotMatch(compose, /127\.0\.0\.1:8792:8792/);
   assert.match(compose, /127\.0\.0\.1:8791:8791/);

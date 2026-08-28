@@ -78,6 +78,16 @@ export function validateEdgeRequest(input, { userId, accessRole } = {}) {
   if (input.schema_version !== EDGE_SCHEMA_VERSION) return fail('SCHEMA_VERSION_MISMATCH', 'schema_version');
   if (typeof userId !== 'string' || !userId) return fail('AUTH_REQUIRED');
   if (!Object.hasOwn(ROLE_RANK, accessRole)) return fail('STAGING_ROLE_DENIED');
+  if (input.action === 'native_bootstrap') {
+    if (ROLE_RANK[accessRole] < ROLE_RANK.operator) return fail('OPERATOR_REQUIRED');
+    if (!REQUEST_ID.test(String(input.request_id || ''))) return fail('REQUEST_ID_INVALID', 'request_id');
+    if (input.project_id != null && !PROJECT_ID.test(String(input.project_id))) return fail('PROJECT_ID_INVALID', 'project_id');
+    return {
+      ok: true,
+      contract: 'native_bootstrap',
+      body: { request_id: input.request_id, project_id: input.project_id ?? null },
+    };
+  }
   const threadActions = new Set(['thread_create', 'thread_get', 'thread_send', 'thread_send_agent', 'thread_messages', 'thread_events', 'thread_stop']);
   if (threadActions.has(input.action)) {
     if (input.action === 'thread_create') {

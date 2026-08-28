@@ -168,8 +168,8 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.match(gatewaySource, /project_id: event\.payload\.task\.request\?\.project_id/);
   assert.equal(
     (gatewaySource.match(/approval: \{ paid_external_calls: false, online_writes: false, handoff_creation: false \}/g) || []).length,
-    2,
-    'agent-first message and delivery routes must default to read-only, non-paid execution',
+    3,
+    'agent-first message, delivery and native Harness context routes must default to read-only, non-paid execution',
   );
   assert.doesNotMatch(
     gatewaySource,
@@ -199,4 +199,21 @@ test('Edge source implements real SSE replay, heartbeat and no simulated model s
   assert.doesNotMatch(workspaceSource, /ACTIVE_AGENT_THREAD_KEY/);
   assert.doesNotMatch(workspaceSource, /removeItem\(ACTIVE_THREAD_KEY\)/);
   assert.doesNotMatch(workspaceSource, /data-testid="official-harness-frame"/);
+});
+
+test('native Harness bootstrap is operator-only and project-bound', () => {
+  const context = { userId: 'user-1', accessRole: 'operator' };
+  const result = validateEdgeRequest({
+    schema_version: EDGE_SCHEMA_VERSION,
+    action: 'native_bootstrap',
+    request_id: 'web-native-1',
+    project_id: 'prj-111111111111111111111111',
+  }, context);
+  assert.deepEqual(result, {
+    ok: true,
+    contract: 'native_bootstrap',
+    body: { request_id: 'web-native-1', project_id: 'prj-111111111111111111111111' },
+  });
+  assert.equal(validateEdgeRequest({ ...result.body, schema_version: EDGE_SCHEMA_VERSION, action: 'native_bootstrap' }, { ...context, accessRole: 'viewer' }).code, 'OPERATOR_REQUIRED');
+  assert.equal(validateEdgeRequest({ ...result.body, schema_version: EDGE_SCHEMA_VERSION, action: 'native_bootstrap', project_id: 'wrong' }, context).code, 'PROJECT_ID_INVALID');
 });

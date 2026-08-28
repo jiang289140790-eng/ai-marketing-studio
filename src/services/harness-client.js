@@ -62,9 +62,13 @@ export function createHarnessClient({
 
   async function invoke(body) {
     if (client) {
-      const sessionResult = ['native_bootstrap', 'plan', 'confirm', 'retry_failed_step'].includes(body.action)
+      let sessionResult = ['plan', 'confirm', 'retry_failed_step'].includes(body.action)
         ? await client.auth.refreshSession()
         : await client.auth.getSession();
+      if (body.action === 'native_bootstrap') {
+        const currentToken = sessionResult?.data?.session?.access_token;
+        if (!currentToken) sessionResult = await client.auth.refreshSession();
+      }
       const { data: sessionData, error: sessionError } = sessionResult;
       const token = sessionData?.session?.access_token;
       if (sessionError || !token) throw boundedError('AUTH_REQUIRED', '请先登录后再运行 AI 任务。');

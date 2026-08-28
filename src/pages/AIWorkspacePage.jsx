@@ -24,6 +24,7 @@ function getHarnessWebUrl() {
 export function AIWorkspacePage() {
   const harnessWebUrl = getHarnessWebUrl();
   const { authUrl, error: authError, isAuthenticated, loading: authLoading, loginWithGitHub } = useAuth();
+  const [bootstrapError, setBootstrapError] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
 
@@ -31,9 +32,11 @@ export function AIWorkspacePage() {
     if (!harnessWebUrl || authLoading || !isAuthenticated) return;
     let active = true;
     const openHarness = async () => {
+      setBootstrapError('');
       const client = createHarnessClient();
       const activeProjectId = readHarnessActiveProject();
       const bootstrapProjectIds = activeProjectId ? [activeProjectId, null] : [null];
+      let lastError = null;
 
       for (const projectId of bootstrapProjectIds) {
         try {
@@ -45,19 +48,26 @@ export function AIWorkspacePage() {
             globalThis.location?.replace?.(`${harnessWebUrl}#ams-bootstrap=${encodeURIComponent(result.bootstrapId)}`);
             return;
           }
-        } catch { /* Try a user-only bootstrap if the remembered project no longer exists. */ }
+        } catch (error) {
+          lastError = error;
+          /* Try a user-only bootstrap if the remembered project no longer exists. */
+        }
         if (!active) return;
         if (projectId) {
           try { globalThis.localStorage?.removeItem?.(HARNESS_ACTIVE_PROJECT_KEY); } catch { /* Storage is best-effort. */ }
         }
       }
-      if (active) globalThis.location?.replace?.(harnessWebUrl);
+      if (active) setBootstrapError(
+        lastError?.code
+          ? `${lastError.code}: ${lastError.message || 'Native bootstrap failed.'}`
+          : 'NATIVE_BOOTSTRAP_FAILED: Native bootstrap failed.',
+      );
     };
     openHarness();
     return () => { active = false; };
   }, [authLoading, harnessWebUrl, isAuthenticated]);
 
-  if (authLoading || isAuthenticated) return null;
+  if (authLoading || (isAuthenticated && !bootstrapError)) return null;
 
   const signIn = async () => {
     setLoginError('');
@@ -102,7 +112,9 @@ export function AIWorkspacePage() {
           {isSigningIn ? '正在跳转 GitHub...' : 'GitHub 登录并进入 Harness'}
         </button>
         {authUrl ? <p style={{ marginTop: 16 }}><a href={authUrl}>继续 GitHub 授权</a></p> : null}
-        {authError || loginError ? <p style={{ color: '#dc2626', marginTop: 16 }}>{authError || loginError}</p> : null}
+        {authError || loginError || bootstrapError
+          ? <p style={{ color: '#dc2626', marginTop: 16 }}>{authError || loginError || bootstrapError}</p>
+          : null}
       </section>
     </main>
   );

@@ -76,9 +76,10 @@ test('H9 AI workspace uses AMS-authenticated Harness conversation instead of a b
   assert.match(workspace, /sendAgentMessage/);
   assert.match(workspace, /thread_send_agent|dispatch = client\.sendAgentMessage/);
   assert.match(workspace, /readHarnessActiveProject/);
-  assert.match(workspace, /id: 'characters'/);
-  assert.match(workspace, /official-business-dock/);
-  assert.match(workspace, /BUSINESS_LINKS/);
+  assert.doesNotMatch(workspace, /id: 'characters'/);
+  assert.doesNotMatch(workspace, /official-business-dock/);
+  assert.doesNotMatch(workspace, /BUSINESS_LINKS/);
+  assert.doesNotMatch(workspace, /读取当前项目状态/);
   assert.match(workspace, /data-testid="conversation-transcript"/);
   assert.match(workspace, /data-testid="harness-intent"/);
   assert.match(workspace, /data-testid="harness-submit"/);

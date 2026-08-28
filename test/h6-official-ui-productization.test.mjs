@@ -40,17 +40,22 @@ test('H6 results page leads with outcomes, artifacts and recovery actions', asyn
 
 test('H6 AI workspace keeps a native Harness-style conversation surface without fixed prompt clutter', async () => {
   const aiPage = await read('src/pages/AIWorkspacePage.jsx');
+  const aiCss = await read('src/pages/AIWorkspacePage.css');
   const generationPage = await read('src/pages/GenerationTasksPage.jsx');
 
   assert.match(aiPage, /data-testid="ai-official-harness-page"/);
-  assert.match(aiPage, /native-harness-controls/);
+  assert.match(aiPage, /native-harness-topbar/);
   assert.match(aiPage, /sendAgentMessage/);
   assert.match(aiPage, /data-testid="harness-intent"/);
-  assert.match(aiPage, /AMS 结果页/);
-  assert.match(aiPage, /Harness 负责执行，AMS 只沉淀结果/);
+  assert.match(aiPage, /placeholder="描述你想要构建的内容"/);
+  assert.match(aiCss, /探索未至之境/);
+  assert.match(aiCss, /border: 1\.5px dashed #8bb5ff/);
   assert.doesNotMatch(aiPage, /data-testid="official-harness-frame"/);
   assert.doesNotMatch(aiPage, /QUICK_PROMPTS/);
   assert.doesNotMatch(aiPage, /quick-prompts/);
+  assert.doesNotMatch(aiPage, /conversation-hero/);
+  assert.doesNotMatch(aiPage, /official-business-dock/);
+  assert.doesNotMatch(aiPage, /AMS × DeepSeek Harness/);
   assert.doesNotMatch(aiPage, /data-testid="ai-task-flow"/);
   assert.doesNotMatch(aiPage, /技术诊断（默认隐藏）/);
   assert.doesNotMatch(aiPage, /Harness 已批准能力与对应页面/);

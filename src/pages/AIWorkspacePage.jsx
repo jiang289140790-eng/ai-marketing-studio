@@ -13,15 +13,6 @@ const MAX_ATTACHMENTS = 8;
 const TOOL_CALL_KIND = 'tool_call';
 const TOOL_RESULT_KIND = 'tool_result';
 
-const BUSINESS_LINKS = [
-  { id: 'research', label: '研究与 Brief' },
-  { id: 'knowledge', label: '知识库' },
-  { id: 'generation', label: '生成结果' },
-  { id: 'assets', label: '素材库' },
-  { id: 'characters', label: '角色库' },
-  { id: 'publish', label: '发布中心' },
-];
-
 function normalizeMessages(input) {
   const byId = new Map();
   for (const message of Array.isArray(input) ? input : []) {
@@ -142,8 +133,8 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
   const cursorRef = useRef(0);
 
   const activeThreadId = thread?.id || thread?.thread_id || '';
-  const currentTaskId = thread?.currentTaskId || thread?.current_task_id || '';
   const busy = sending || ['executing', 'running', 'queued'].includes(String(thread?.status || '').toLowerCase());
+  const hasConversation = messages.length > 0 || liveText;
 
   const loadMessages = useCallback(async (threadId) => {
     if (!threadId) return;
@@ -289,33 +280,20 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
 
   return (
     <main className="ai-workspace harness-native-shell" data-testid="ai-official-harness-page">
-      <section className="conversation-workspace">
-        <header className="conversation-hero">
-          <div>
-            <p>AMS × DeepSeek Harness</p>
-            <h1>今天想完成什么？</h1>
-            <span>Harness 原生对话入口。AMS 只负责登录、项目绑定和业务结果沉淀。</span>
-          </div>
-          <div className="conversation-status">
-            <span className={`dot dot-${connection}`} />
-            {activeProjectId ? `当前项目 ${activeProjectId.slice(0, 10)}…` : '未绑定项目'}
-          </div>
-        </header>
-
-        <div className="native-harness-controls" aria-label="Harness session controls">
+      <section className={`conversation-workspace ${hasConversation ? 'has-conversation' : 'is-empty'}`}>
+        <div className="native-harness-topbar" aria-label="Harness session controls">
           <button type="button" disabled>AI Marketing Studio</button>
           <button type="button" disabled>标准模式</button>
           <button type="button" disabled>DeepSeek</button>
+          <span className={`dot dot-${connection}`} aria-label={connection} />
+          <span className="project-chip">{activeProjectId ? `当前项目 ${activeProjectId.slice(0, 10)}…` : '未绑定项目'}</span>
         </div>
 
         {error && <div className="conversation-error" role="alert">{error}</div>}
 
         <section className="conversation-transcript" data-testid="conversation-transcript" ref={transcriptRef}>
-          {messages.length === 0 && !liveText ? (
-            <div className="conversation-empty">
-              <h2>只管说你想完成什么</h2>
-              <p>不需要点固定任务。直接输入目标，Harness 会通过 AMS 插件完成研究、知识、Brief 和生成。</p>
-            </div>
+          {!hasConversation ? (
+            <div className="conversation-empty" aria-label="Harness native empty state" />
           ) : (
             messages.map((message) => <MessageCard key={message.id} message={message} onNavigate={onNavigate} />)
           )}
@@ -335,12 +313,12 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="输入问题或任务；Enter 发送，Shift+Enter 换行"
+            placeholder="描述你想要构建的内容"
             disabled={busy}
           />
           <div className="composer-actions">
             <input ref={fileInputRef} type="file" accept={ACCEPT} multiple hidden onChange={onFilesSelected} />
-            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={busy}>+ 附件</button>
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={busy}>+</button>
             {busy && activeThreadId ? (
               <button type="button" className="composer-stop" onClick={stop}>停止</button>
             ) : (
@@ -349,22 +327,6 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           </div>
         </footer>
       </section>
-
-      <aside className="official-business-dock" aria-label="AMS 业务结果入口">
-        <strong>AMS 结果页</strong>
-        <p>Harness 负责执行，AMS 只沉淀结果。</p>
-        <div className="official-business-grid">
-          {BUSINESS_LINKS.map((item) => (
-            <button type="button" key={item.id} onClick={() => onNavigate?.(item.id)}>{item.label}</button>
-          ))}
-        </div>
-        {currentTaskId && (
-          <div className="conversation-toolbar">
-            <button type="button" data-testid="ai-task-flow-execution" onClick={() => onNavigate?.('ai-execution', currentTaskId)}>执行详情</button>
-            <button type="button" data-testid="ai-task-flow-results" onClick={() => onNavigate?.('ai-results', currentTaskId)}>结果与审核</button>
-          </div>
-        )}
-      </aside>
     </main>
   );
 }

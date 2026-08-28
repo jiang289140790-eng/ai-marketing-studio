@@ -29,6 +29,16 @@ function json(request: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: headers(request) });
 }
 
+function nativeBootstrapError(request: Request, stage: string, code = 'NATIVE_BOOTSTRAP_UNAVAILABLE', status = 503) {
+  return json(request, {
+    ok: false,
+    code,
+    diagnostics: {
+      stage,
+    },
+  }, status);
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: headers(request) });
   if (request.method !== 'POST' && request.method !== 'GET') return json(request, { ok: false, code: 'METHOD_NOT_ALLOWED' }, 405);
@@ -202,9 +212,14 @@ Deno.serve(async (request) => {
   };
 
   if (checked.contract === 'native_bootstrap') {
+    let resolvedProject: any;
     try {
-      const resolvedProject = await resolveBootstrapProjectId(checked.body.project_id);
-      if (!resolvedProject.ok) return json(request, { ok: false, code: resolvedProject.code }, 403);
+      resolvedProject = await resolveBootstrapProjectId(checked.body.project_id);
+    } catch {
+      return nativeBootstrapError(request, 'project_resolve');
+    }
+    if (!resolvedProject.ok) return json(request, { ok: false, code: resolvedProject.code }, 403);
+    try {
       const gateway = fixedGatewayBase(gatewayRaw);
       const path = '/v1/native-bootstrap';
       const rawBody = JSON.stringify({
@@ -231,15 +246,22 @@ Deno.serve(async (request) => {
       });
       const result = await response.json().catch(() => null);
       if (!response.ok || !result?.bootstrap_id) {
-        return json(request, { ok: false, code: String(result?.code || 'NATIVE_BOOTSTRAP_FAILED') }, response.status >= 400 && response.status < 500 ? response.status : 503);
+        return nativeBootstrapError(
+          request,
+          'gateway_response',
+          String(result?.code || 'NATIVE_BOOTSTRAP_FAILED'),
+          response.status >= 400 && response.status < 500 ? response.status : 503,
+        );
       }
       return json(request, {
         ok: true,
         bootstrapId: result.bootstrap_id,
         expiresIn: result.expires_in,
       }, 201);
-    } catch {
-      return json(request, { ok: false, code: 'NATIVE_BOOTSTRAP_UNAVAILABLE' }, 503);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const stage = message === 'GATEWAY_URL_INVALID' ? 'gateway_url' : 'gateway_fetch';
+      return nativeBootstrapError(request, stage);
     }
   }
 

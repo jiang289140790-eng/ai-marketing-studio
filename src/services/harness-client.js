@@ -37,9 +37,17 @@ export function readHarnessDemoUser(storage = globalThis.localStorage) {
   return next;
 }
 
-function boundedError(code, message) {
-  const error = new Error(String(message || 'AI 工作台暂时不可用。').slice(0, 240));
+function boundedError(code, message, diagnostics = null) {
+  const stage = diagnostics?.stage ? ` stage=${String(diagnostics.stage).slice(0, 64)}` : '';
+  const field = diagnostics?.field ? ` field=${String(diagnostics.field).slice(0, 64)}` : '';
+  const error = new Error(`${String(message || 'AI 工作台暂时不可用。').slice(0, 240)}${stage}${field}`);
   error.code = String(code || 'HARNESS_REQUEST_FAILED').slice(0, 80);
+  if (diagnostics && typeof diagnostics === 'object') {
+    error.diagnostics = {
+      stage: diagnostics.stage ? String(diagnostics.stage).slice(0, 64) : null,
+      field: diagnostics.field ? String(diagnostics.field).slice(0, 64) : null,
+    };
+  }
   return error;
 }
 
@@ -84,9 +92,9 @@ export function createHarnessClient({
         const message = context?.message || context?.error || (context?.code
           ? `AI 任务未被接受（${context.code}）。`
           : 'AI 任务入口暂时不可用。');
-        throw boundedError(code, message);
+        throw boundedError(code, message, context?.diagnostics || null);
       }
-      if (!data || data.ok !== true) throw boundedError(data?.code || 'HARNESS_RESPONSE_INVALID', data?.message || 'AI 任务未被接受。');
+      if (!data || data.ok !== true) throw boundedError(data?.code || 'HARNESS_RESPONSE_INVALID', data?.message || 'AI 任务未被接受。', data?.diagnostics || null);
       return data;
     }
     // demo/测试模式：直连固定 base（本地测试注入 fake edge），与 G1 一致；

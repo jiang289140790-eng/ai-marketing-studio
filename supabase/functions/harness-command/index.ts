@@ -200,11 +200,26 @@ Deno.serve(async (request) => {
 
   const resolveBootstrapProjectId = async (requestedProjectId: string | null) => {
     if (requestedProjectId) {
-      const project = await rpc('p19_get_project', { p_user_id: userId, p_project_id: requestedProjectId });
+      let project = null;
+      try {
+        project = await rpc('p19_get_project', { p_user_id: userId, p_project_id: requestedProjectId });
+      } catch {
+        // Native bootstrap only transports the verified Supabase user session
+        // into official Harness. The project id is a convenience hint, not an
+        // authorization grant. If the project lookup RPC is unavailable on the
+        // target environment, bind a user-only session and let AMS tools resolve
+        // project access later through their own RLS/business contracts.
+        return { ok: true, projectId: null };
+      }
       if (!project) return { ok: false, code: 'PROJECT_ACCESS_DENIED' };
       return { ok: true, projectId: requestedProjectId };
     }
-    const projects = await rpc('p20_list_projects', { p_user_id: userId });
+    let projects: any[] = [];
+    try {
+      projects = await rpc('p20_list_projects', { p_user_id: userId });
+    } catch {
+      return { ok: true, projectId: null };
+    }
     const projectList = Array.isArray(projects) ? projects : [];
     const selected = projectList.find((project: any) => project?.status !== 'archived' && /^prj-[0-9a-f]{24}$/.test(String(project?.id || '')))
       || projectList.find((project: any) => /^prj-[0-9a-f]{24}$/.test(String(project?.id || '')));

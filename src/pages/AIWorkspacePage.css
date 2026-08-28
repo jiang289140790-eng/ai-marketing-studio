@@ -14,7 +14,7 @@
 
 .conversation-workspace {
   display: grid;
-  grid-template-rows: auto auto auto minmax(220px, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(240px, 1fr) auto;
   min-height: calc(100vh - 150px);
   max-width: 1220px;
   width: min(1220px, 100%);
@@ -30,7 +30,7 @@
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  padding: 34px 38px 20px;
+  padding: 34px 38px 12px;
 }
 
 .conversation-hero p {
@@ -82,14 +82,7 @@
   background: #ef6072;
 }
 
-.quick-prompts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 0 38px 22px;
-}
-
-.quick-prompts button,
+.native-harness-controls button,
 .official-business-grid button,
 .conversation-toolbar button,
 .composer-actions button,
@@ -102,9 +95,22 @@
   font-weight: 800;
 }
 
-.quick-prompts button {
-  padding: 12px 14px;
-  text-align: center;
+.native-harness-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 38px 12px;
+  color: #53655e;
+}
+
+.native-harness-controls button {
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #53655e;
+  background: #f7faf8;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .conversation-error {
@@ -120,9 +126,9 @@
   display: grid;
   align-content: start;
   gap: 14px;
-  min-height: 260px;
-  max-height: calc(100vh - 430px);
-  padding: 12px 38px 26px;
+  min-height: 300px;
+  max-height: calc(100vh - 360px);
+  padding: 8px 38px 26px;
   overflow: auto;
 }
 
@@ -130,7 +136,7 @@
   display: grid;
   place-items: center;
   align-content: center;
-  min-height: 240px;
+  min-height: 280px;
   color: #53655e;
   text-align: center;
 }
@@ -355,9 +361,10 @@ textarea:disabled {
     padding: 24px 20px 16px;
   }
 
-  .quick-prompts {
-    grid-template-columns: 1fr;
-    padding: 0 20px 18px;
+  .native-harness-controls {
+    justify-content: flex-start;
+    padding: 0 20px 14px;
+    overflow-x: auto;
   }
 
   .conversation-transcript {

@@ -13,13 +13,6 @@ const MAX_ATTACHMENTS = 8;
 const TOOL_CALL_KIND = 'tool_call';
 const TOOL_RESULT_KIND = 'tool_result';
 
-const QUICK_PROMPTS = [
-  '读取当前项目状态，并告诉我下一步可以做什么',
-  '搜索 X 和 Reddit 上本周热门的 AI 营销话题，选 3 条保存为 Evidence，并生成分析、Knowledge Card 和 pending-review Brief。允许本次付费采集和模型分析，允许结果写入 staging。',
-  '分析我上传的图片或视频，保存 Evidence，执行一次多模态分析，并生成 Knowledge Card 和 pending-review Brief。',
-  '根据当前项目最新 Brief，生成一张测试图片并保存成品。',
-];
-
 const BUSINESS_LINKS = [
   { id: 'research', label: '研究与 Brief' },
   { id: 'knowledge', label: '知识库' },
@@ -301,7 +294,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           <div>
             <p>AMS × DeepSeek Harness</p>
             <h1>今天想完成什么？</h1>
-            <span>直接说目标。Harness 会选择已接入的 AMS 插件工具，结果沉淀到研究、知识、Brief 或成品页。</span>
+            <span>Harness 原生对话入口。AMS 只负责登录、项目绑定和业务结果沉淀。</span>
           </div>
           <div className="conversation-status">
             <span className={`dot dot-${connection}`} />
@@ -309,10 +302,10 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           </div>
         </header>
 
-        <div className="quick-prompts" aria-label="常用任务">
-          {QUICK_PROMPTS.map((prompt) => (
-            <button type="button" key={prompt} onClick={() => setDraft(prompt)}>{prompt}</button>
-          ))}
+        <div className="native-harness-controls" aria-label="Harness session controls">
+          <button type="button" disabled>AI Marketing Studio</button>
+          <button type="button" disabled>标准模式</button>
+          <button type="button" disabled>DeepSeek</button>
         </div>
 
         {error && <div className="conversation-error" role="alert">{error}</div>}
@@ -321,7 +314,7 @@ export function AIWorkspacePage({ onNavigate, routeParams, harnessClient: provid
           {messages.length === 0 && !liveText ? (
             <div className="conversation-empty">
               <h2>只管说你想完成什么</h2>
-              <p>不需要先选“研究 / 生成 / Brief”。Harness 会调用 AMS 插件，涉及付费或写入时再确认。</p>
+              <p>不需要点固定任务。直接输入目标，Harness 会通过 AMS 插件完成研究、知识、Brief 和生成。</p>
             </div>
           ) : (
             messages.map((message) => <MessageCard key={message.id} message={message} onNavigate={onNavigate} />)

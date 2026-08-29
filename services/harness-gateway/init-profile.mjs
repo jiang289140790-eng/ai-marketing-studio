@@ -18,12 +18,13 @@ const homeLockdownSource = join(appRoot, 'home-lockdown.patch.yml');
 const target = join(home, 'profiles', 'ams');
 const webTarget = join(home, 'profiles', 'web');
 const marker = join(target, '.ams-profile-version');
+const webMarker = join(webTarget, '.ams-profile-version');
 const settingsFile = join(home, 'settings.yaml');
 // Advance this marker whenever a persisted profile input changes.  The
 // runtime volume survives container replacement, so reusing an old marker
 // would leave the previous plugin copy active even though the image contains
 // a newer AMS conversation tool catalog.
-const version = 'ams-profile-v20-native-standard-session';
+const version = 'ams-profile-v22-web-profile-refresh';
 // The only plugins promoted from the isolated plugin lab, pinned by exact
 // version. Each entry maps a vendored directory (name) to its npm scope and
 // the exact published version the promotion is bound to; a mismatch aborts
@@ -55,8 +56,8 @@ const peerPackages = [
   'schemastery',
 ];
 
-async function current() {
-  try { return (await readFile(marker, 'utf8')).trim(); } catch { return ''; }
+async function current(markerPath = marker) {
+  try { return (await readFile(markerPath, 'utf8')).trim(); } catch { return ''; }
 }
 
 async function installCommonProfileDependencies(profileTarget, { includeConversationRunner = false } = {}) {
@@ -191,7 +192,8 @@ await ensureDeepSeekVisionModelSettings();
 // final layer on every boot so the official Harness web profile can boot its
 // standard preset while business writes remain gated by the AMS Tool Bridge.
 await writeFile(join(home, 'cordis.patch.yml'), await readFile(homeLockdownSource), { mode: 0o600 });
-if (await current() !== version) {
+await installCommonProfileDependencies(home);
+if ((await current(marker)) !== version || (await current(webMarker)) !== version) {
   await mkdir(target, { recursive: true });
   for (const filename of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
     await cp(join(profileSource, filename), join(target, filename), { force: true });
@@ -203,6 +205,7 @@ if (await current() !== version) {
   }
   await installCommonProfileDependencies(webTarget);
   await writeFile(marker, `${version}\n`, { encoding: 'utf8', mode: 0o600 });
+  await writeFile(webMarker, `${version}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 await access(join(target, 'node_modules', '@ams', 'harness-tools', 'index.mjs'), constants.R_OK);
 await access(join(target, 'node_modules', '@ams', 'conversation-runner', 'index.mjs'), constants.R_OK);

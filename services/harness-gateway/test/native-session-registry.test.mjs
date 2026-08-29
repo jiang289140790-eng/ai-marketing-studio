@@ -29,6 +29,19 @@ test('native bootstrap is one-time and binds delegated context to an exact Harne
   assert.deepEqual(registry.counts(), { bootstraps: 0, sessions: 1 });
 });
 
+test('native bootstrap remains bindable during the normal AMS to Harness redirect window', () => {
+  let clock = 1_800_000_000_000;
+  const registry = createNativeSessionRegistry({ now: () => clock });
+  const created = registry.create({
+    delegatedAuthorization: bearer(Math.floor(clock / 1000) + 3600),
+    userId: 'user-1',
+    projectId: 'prj-111111111111111111111111',
+  });
+  assert.equal(created.expiresIn, 600);
+  clock += 5 * 60_000;
+  assert.equal(registry.bind(created.bootstrapId, 'session-native-redirect').ok, true);
+});
+
 test('native context expires with the delegated bearer and is never returned in health counts', () => {
   let clock = 1_800_000_000_000;
   const registry = createNativeSessionRegistry({ now: () => clock });

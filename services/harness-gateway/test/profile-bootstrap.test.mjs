@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
 import { resolveHarnessLaunch } from '../harness-runner.mjs';
 import { verifySignedRequest } from '../gateway-core.mjs';
-import { nativeSessionIdFromExecution, nativeTaskId, signGatewayContext } from '../plugins/ams-tools/index.mjs';
+import { nativeSessionIdFromExecution, nativeTaskId, resolveRuntime, signGatewayContext } from '../plugins/ams-tools/index.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -78,6 +79,10 @@ test('legacy AMS profile remains locked while official Harness web home can boot
     assert.doesNotMatch(patch, /tool-pwsh-persistent/);
   }
   const homePatch = await text('home-lockdown.patch.yml');
+  assert.match(homePatch, /- id: system-prompt\r?\n\s+config:/);
+  assert.match(homePatch, /use the AMS business tools\r?\n\s+first/);
+  assert.match(homePatch, /Do not inspect the local filesystem as a substitute for AMS\r?\n\s+business state/);
+  assert.doesNotMatch(homePatch, /- id: ams-harness-tools\r?\n\s+name: '@ams\/harness-tools'/);
   assert.match(homePatch, /- id: sandbox-policy\r?\n\s+config:\r?\n\s+mode: read-only/);
   for (const requiredByStandard of ['tool-bash', 'tool-fs-search', 'tool-web', 'web', 'subprocess']) {
     assert.doesNotMatch(homePatch, new RegExp(`- id: ${requiredByStandard}\\r?\\n\\s+disabled: true`));
@@ -99,12 +104,18 @@ test('persistent profile version advances for the agent-first conversation and o
   assert.doesNotMatch(plugin, /name: 'ams_request_plan'/);
   assert.match(plugin, /prefer the specific ams_\* tools registered by this plugin/);
   assert.match(plugin, /Use ams_call only as a compatibility fallback/);
+  assert.match(plugin, /HARD AMS PROJECT RULE/);
+  assert.match(plugin, /查看当前项目状态/);
+  assert.match(plugin, /The local Harness workspace path such as \/home\/node\/\*/);
+  assert.match(plugin, /Do not answer those by inspecting the local Harness workspace directory/);
   assert.match(plugin, /Do not request or create a separate deterministic AMS execution plan/);
   assert.match(plugin, /'generation\.quote', 'generation\.submit', 'generation\.status', 'generation\.artifact'/);
   assert.match(plugin, /'research\.generate_similar', 'research\.inspect_attachments'/);
   assert.match(init, /const profileWebSource = join\(appRoot, 'profile-web'\);/);
   assert.match(init, /const webTarget = join\(home, 'profiles', 'web'\);/);
-  assert.match(init, /const version = 'ams-profile-v20-native-standard-session';/);
+  assert.match(init, /const version = 'ams-profile-v22-web-profile-refresh';/);
+  assert.match(init, /writeFile\(join\(home, 'cordis\.patch\.yml'\), await readFile\(homeLockdownSource\)/);
+  assert.match(init, /installCommonProfileDependencies\(home\)/);
   assert.match(init, /installCommonProfileDependencies\(webTarget\)/);
   assert.equal(webPackage.name, 'dsh-profile-web');
   assert.equal(webPackage.dependencies['@ams/harness-tools'], 'file:/app/plugins/ams-tools');
@@ -147,6 +158,60 @@ test('native plugin extracts the official Harness session identity from bounded 
   assert.equal(nativeSessionIdFromExecution({ token: 'session-secret', deep: { token: 'session-secret-2' } }), '');
   assert.equal(nativeSessionIdFromExecution({ agent: { id: 'x'.repeat(193) } }), '');
   assert.equal(nativeSessionIdFromExecution({}), '');
+});
+
+test('native plugin falls back to the current bound session when Harness exposes a non-bound execution id', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ams-native-context-'));
+  const secretFile = join(home, 'gateway-secret');
+  await writeFile(secretFile, 's'.repeat(64), 'utf8');
+  const previous = {
+    gatewaySecret: process.env.AMS_GATEWAY_HMAC_SECRET_FILE,
+    gatewayUrl: process.env.AMS_NATIVE_SESSION_GATEWAY_URL,
+    delegated: process.env.AMS_DELEGATED_AUTHORIZATION,
+    task: process.env.AMS_TASK_ID,
+    user: process.env.AMS_USER_ID,
+    project: process.env.AMS_PROJECT_ID,
+  };
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  process.env.AMS_GATEWAY_HMAC_SECRET_FILE = secretFile;
+  process.env.AMS_NATIVE_SESSION_GATEWAY_URL = 'https://gateway.example.test';
+  delete process.env.AMS_DELEGATED_AUTHORIZATION;
+  delete process.env.AMS_TASK_ID;
+  delete process.env.AMS_USER_ID;
+  delete process.env.AMS_PROJECT_ID;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), body: init?.body });
+    if (String(url).endsWith('/v1/native-sessions/context')) {
+      return new Response(JSON.stringify({ ok: false, code: 'NATIVE_SESSION_CONTEXT_REQUIRED' }), { status: 401 });
+    }
+    assert.equal(String(url), 'https://gateway.example.test/v1/native-sessions/current');
+    return new Response(JSON.stringify({
+      ok: true,
+      user_id: 'user-native',
+      project_id: 'prj-aaaaaaaaaaaaaaaaaaaaaaaa',
+      delegated_authorization: 'Bearer native.delegated.authorization-value',
+      approval: { paid_external_calls: false, online_writes: false },
+    }), { status: 200 });
+  };
+  try {
+    const runtime = await resolveRuntime({ agent: { id: 'session-unbound-from-harness' } });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].body, JSON.stringify({ session_id: 'session-unbound-from-harness' }));
+    assert.equal(calls[1].body, '{}');
+    assert.equal(runtime.context.user_id, 'user-native');
+    assert.equal(runtime.context.project_id, 'prj-aaaaaaaaaaaaaaaaaaaaaaaa');
+    assert.equal(runtime.delegatedAuthorization, 'Bearer native.delegated.authorization-value');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previous.gatewaySecret === undefined) delete process.env.AMS_GATEWAY_HMAC_SECRET_FILE; else process.env.AMS_GATEWAY_HMAC_SECRET_FILE = previous.gatewaySecret;
+    if (previous.gatewayUrl === undefined) delete process.env.AMS_NATIVE_SESSION_GATEWAY_URL; else process.env.AMS_NATIVE_SESSION_GATEWAY_URL = previous.gatewayUrl;
+    if (previous.delegated === undefined) delete process.env.AMS_DELEGATED_AUTHORIZATION; else process.env.AMS_DELEGATED_AUTHORIZATION = previous.delegated;
+    if (previous.task === undefined) delete process.env.AMS_TASK_ID; else process.env.AMS_TASK_ID = previous.task;
+    if (previous.user === undefined) delete process.env.AMS_USER_ID; else process.env.AMS_USER_ID = previous.user;
+    if (previous.project === undefined) delete process.env.AMS_PROJECT_ID; else process.env.AMS_PROJECT_ID = previous.project;
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('rc.8 runtime uses a fresh Harness home without replacing gateway audit state', async () => {

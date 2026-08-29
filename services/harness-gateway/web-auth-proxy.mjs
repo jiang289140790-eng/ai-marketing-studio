@@ -11,7 +11,7 @@ const BOOTSTRAP_HEADER = 'x-ams-bootstrap';
 const MAX_JSON_BODY = 2 * 1024 * 1024;
 const SESSION_ID_MAX = 192;
 
-export const BOOTSTRAP_SCRIPT = `<script>(()=>{const k='ams_native_bootstrap_v1';const p=new URLSearchParams(location.hash.slice(1));const incoming=p.get('ams-bootstrap');if(incoming){sessionStorage.setItem(k,incoming);history.replaceState(null,'',location.pathname+location.search)}const original=globalThis.fetch.bind(globalThis);globalThis.fetch=(input,init={})=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url,location.href);if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return original(input,init);const headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));const bootstrap=sessionStorage.getItem(k);if(bootstrap)headers.set('${BOOTSTRAP_HEADER}',bootstrap);return original(input,{...init,headers})}})()</script>`;
+export const BOOTSTRAP_SCRIPT = `<script>(()=>{const k='ams_native_bootstrap_v1';const sk='ams_native_session_id_v1';const bk='ams_native_bootstrap_bound_v1';const ck='ams_native_session_created_v1';const rk='ams_native_session_ready_v1';const p=new URLSearchParams(location.hash.slice(1));const incoming=p.get('ams-bootstrap');function clearHarnessSessionSelection(){const re=/(^|[-_.:])(session|conversation|thread|agent)([-_.:]|$)|current.*session|active.*session|selected.*session/i;for(const store of [sessionStorage,localStorage]){try{for(let i=store.length-1;i>=0;i--){const key=store.key(i)||'';if(key.startsWith('ams_native_'))continue;if(re.test(key))store.removeItem(key)}}catch{}}}function cleanHash(){try{history.replaceState(null,'',location.pathname+location.search)}catch{}}function makeSessionId(){return 'session-'+(crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2))}function rememberSelection(sessionId){try{localStorage.setItem('dsh.sessions.current',JSON.stringify({sessionId}))}catch{}try{sessionStorage.setItem(sk,sessionId)}catch{}}if(incoming){try{sessionStorage.removeItem(k);sessionStorage.removeItem(bk);sessionStorage.removeItem(sk);sessionStorage.removeItem(ck);sessionStorage.removeItem(rk);clearHarnessSessionSelection()}catch{}try{sessionStorage.setItem(k,incoming)}catch{}cleanHash()}let sid=sessionStorage.getItem(sk);if(!sid){sid=makeSessionId();rememberSelection(sid)}else rememberSelection(sid);const original=globalThis.fetch.bind(globalThis);globalThis.fetch=(input,init={})=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url,location.href);if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return original(input,init);const headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));const bootstrap=sessionStorage.getItem(k);if(bootstrap)headers.set('${BOOTSTRAP_HEADER}',bootstrap);return original(input,{...init,headers})};async function api(method,payload){const rpcId='ams-native-'+Date.now()+'-'+Math.random().toString(36).slice(2);const r=await fetch('/api/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'client-request',rpcId,method,payload}),redirect:'error'});return await r.json()}async function bindNow(){const bootstrap=sessionStorage.getItem(k);if(!bootstrap||sessionStorage.getItem(bk)===bootstrap+':'+sid)return false;const r=await fetch('/ams/native-bootstrap/bind',{method:'POST',headers:{'content-type':'application/json','${BOOTSTRAP_HEADER}':bootstrap},body:JSON.stringify({session_id:sid}),redirect:'error'});if(r.ok){sessionStorage.setItem(bk,bootstrap+':'+sid);return true}return false}async function ensureNativeSession(){const bootstrap=sessionStorage.getItem(k);if(!bootstrap)return;rememberSelection(sid);if(sessionStorage.getItem(ck)!==bootstrap+':'+sid){const listed=await api('workspace.list',{});const workspaces=listed&&listed.result&&listed.result.ok&&listed.result.value&&Array.isArray(listed.result.value.items)?listed.result.value.items:[];const workspace=workspaces.find((item)=>item&&item.title==='AI Marketing Studio')||workspaces[0];if(!workspace||!workspace.workspaceId)return;const created=await api('session.create',{workspaceId:workspace.workspaceId,sessionId:sid});if(created&&created.result&&created.result.ok)sessionStorage.setItem(ck,bootstrap+':'+sid)}const bound=await bindNow();rememberSelection(sid);if(bound&&sessionStorage.getItem(rk)!==bootstrap+':'+sid){sessionStorage.setItem(rk,bootstrap+':'+sid);location.replace(location.pathname+location.search)}}void ensureNativeSession().catch(()=>{})})()</script>`;
 
 export function injectBootstrapScript(html) {
   const source = String(html || '');
@@ -68,6 +68,14 @@ export function requestSessionId(pathname, rawBody, responseBody = '') {
   return '';
 }
 
+export function bootstrapBindSessionId(rawBody = '') {
+  try {
+    const request = JSON.parse(rawBody || '{}');
+    return stableSessionId(request?.session_id);
+  } catch { /* malformed bind requests are rejected by caller */ }
+  return '';
+}
+
 function readBoundedBody(request) {
   return new Promise((resolveBody, reject) => {
     const chunks = [];
@@ -113,17 +121,27 @@ export function createWebAuthProxy({
       body: rawBody,
       redirect: 'error',
     });
-    if (!response.ok) throw Object.assign(new Error('native session binding failed'), { code: 'NATIVE_SESSION_BIND_FAILED' });
+    if (!response.ok) {
+      let code = 'NATIVE_SESSION_BIND_FAILED';
+      try {
+        const body = await response.json();
+        if (body?.code) code = String(body.code);
+      } catch { /* keep bounded fallback */ }
+      throw Object.assign(new Error('native session binding failed'), { code });
+    }
     bound.add(key);
   }
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    const isGatewayNativeBootstrap = request.method === 'POST' && url.pathname === '/v1/native-bootstrap';
+    const isBootstrapBind = request.method === 'POST' && url.pathname === '/ams/native-bootstrap/bind';
     const isJsonApi = request.method === 'POST' && url.pathname.startsWith('/api/')
       && String(request.headers['content-type'] || '').toLowerCase().includes('application/json');
+    const shouldReadJson = isJsonApi || isBootstrapBind || isGatewayNativeBootstrap;
     let requestBody = null;
     try {
-      if (isJsonApi) requestBody = await readBoundedBody(request);
+      if (shouldReadJson) requestBody = await readBoundedBody(request);
     } catch {
       response.writeHead(413, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ ok: false, code: 'BODY_TOO_LARGE' }));
@@ -132,11 +150,57 @@ export function createWebAuthProxy({
 
     const bootstrapId = String(request.headers[BOOTSTRAP_HEADER] || '').trim();
     const rawBody = requestBody?.toString('utf8') || '';
+    if (isGatewayNativeBootstrap) {
+      try {
+        const forwardHeaders = {
+          'content-type': 'application/json',
+          'x-ams-user-id': String(request.headers['x-ams-user-id'] || ''),
+          'x-ams-timestamp': String(request.headers['x-ams-timestamp'] || ''),
+          'x-ams-signature': String(request.headers['x-ams-signature'] || ''),
+          'x-ams-delegated-authorization': String(request.headers['x-ams-delegated-authorization'] || ''),
+        };
+        const gatewayResponse = await fetch(new URL(url.pathname, gatewayUrl), {
+          method: 'POST',
+          headers: forwardHeaders,
+          body: rawBody,
+          redirect: 'error',
+        });
+        const body = Buffer.from(await gatewayResponse.text(), 'utf8');
+        response.writeHead(gatewayResponse.status, {
+          'content-type': gatewayResponse.headers.get('content-type') || 'application/json',
+          'content-length': String(body.length),
+          'cache-control': 'no-store',
+        });
+        response.end(body);
+      } catch {
+        response.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ ok: false, code: 'HARNESS_GATEWAY_UNAVAILABLE' }));
+      }
+      return;
+    }
+    if (isBootstrapBind) {
+      const sessionId = bootstrapBindSessionId(rawBody);
+      if (!bootstrapId || !sessionId) {
+        response.writeHead(400, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ ok: false, code: 'NATIVE_BOOTSTRAP_BIND_INVALID' }));
+        return;
+      }
+      try {
+        await bind(bootstrapId, sessionId);
+        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        response.writeHead(401, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ ok: false, code: error?.code || 'NATIVE_SESSION_BIND_FAILED' }));
+      }
+      return;
+    }
+
     const beforeSessionId = requestSessionId(url.pathname, rawBody);
     if (bootstrapId && beforeSessionId) {
-      try { await bind(bootstrapId, beforeSessionId); } catch {
+      try { await bind(bootstrapId, beforeSessionId); } catch (error) {
         response.writeHead(401, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        response.end(JSON.stringify({ ok: false, code: 'NATIVE_SESSION_BIND_FAILED' }));
+        response.end(JSON.stringify({ ok: false, code: error?.code || 'NATIVE_SESSION_BIND_FAILED' }));
         return;
       }
     }
@@ -160,13 +224,14 @@ export function createWebAuthProxy({
         }
         if (captureCreate && (upstreamResponse.statusCode || 500) < 400) {
           const sessionId = requestSessionId(url.pathname, rawBody, body.toString('utf8'));
-          try { await bind(bootstrapId, sessionId); } catch {
+          try { await bind(bootstrapId, sessionId); } catch (error) {
             response.writeHead(401, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-            response.end(JSON.stringify({ ok: false, code: 'NATIVE_SESSION_BIND_FAILED' }));
+            response.end(JSON.stringify({ ok: false, code: error?.code || 'NATIVE_SESSION_BIND_FAILED' }));
             return;
           }
         }
         const responseHeaders = { ...upstreamResponse.headers, 'content-length': String(body.length) };
+        if (transformHtml) responseHeaders['cache-control'] = 'no-store';
         delete responseHeaders['content-encoding'];
         response.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
         response.end(body);
@@ -202,13 +267,14 @@ export function startWebAuthProxy() {
   if (gatewaySecret.length < 32) throw new Error('AMS gateway signing secret is required.');
   const upstreamPort = Number(process.env.HARNESS_WEB_UPSTREAM_PORT || 8793);
   const listenPort = Number(process.env.HARNESS_WEB_PORT || 8792);
+  const gatewayUrl = String(process.env.AMS_NATIVE_SESSION_GATEWAY_URL || 'http://127.0.0.1:8790').replace(/\/$/, '');
   const dshBin = '/app/node_modules/@deepseek-ai/dsh/lib/bin.js';
   const child = spawn(process.execPath, [
     '--expose-internals', dshBin, 'web', '--host', '127.0.0.1', '--port', String(upstreamPort),
     '--no-open', '--trusted-host', 'harness-web.47-251-244-196.sslip.io',
   ], { stdio: 'inherit', env: process.env });
   child.once('exit', (code) => process.exit(code ?? 1));
-  const server = createWebAuthProxy({ listenPort, upstreamPort, gatewaySecret });
+  const server = createWebAuthProxy({ listenPort, upstreamPort, gatewaySecret, gatewayUrl });
   server.listen(listenPort, '127.0.0.1');
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
     server.close();

@@ -10,6 +10,10 @@
       plan; choose tools directly from the plugin catalog.
       Use the installed plugin discovery and context tools when the user asks
       what can be extended or why a session became too large.
+      If the user asks for 当前项目, 当前项目状态, 项目状态, Evidence,
+      Knowledge, Brief, or “我现在能做什么” inside AMS, call the AMS project
+      read tool first; do not inspect the local workspace directory as a
+      substitute for AMS business state.
       Use subagent tools only when the user explicitly asks to delegate coding,
       review, implementation, or long-running engineering work to Codex or
       Claude Code; keep ordinary marketing tasks inside AMS business tools.

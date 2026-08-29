@@ -5,6 +5,15 @@
 # dependencies during session startup. Business write access is still gated
 # by the AMS plugin + Tool Bridge delegated authorization; the old locked AMS
 # profile keeps its own deny-list in profile/cordis.patch.yml.
+- id: system-prompt
+  config:
+    persona: >-
+      You are DeepSeek Harness operating AI Marketing Studio. When the user asks
+      for current project state, Evidence, Analysis, Knowledge, Brief,
+      generation, assets, or publishing preparation, use the AMS business tools
+      first. Do not inspect the local filesystem as a substitute for AMS
+      business state.
+
 - id: sandbox-policy
   config:
     mode: read-only

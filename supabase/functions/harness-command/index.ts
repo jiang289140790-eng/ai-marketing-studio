@@ -237,7 +237,12 @@ Deno.serve(async (request) => {
     try {
       resolvedProject = await resolveBootstrapProjectId(checked.body.project_id);
     } catch {
-      return nativeBootstrapError(request, 'project_resolve');
+      // Native bootstrap is only a transport handshake for the verified
+      // Supabase user token. A stale browser project hint or unavailable
+      // project RPC must not prevent Harness from receiving delegated auth;
+      // every later AMS business call still resolves and enforces project
+      // access through Tool Bridge/RLS.
+      resolvedProject = { ok: true, projectId: null };
     }
     if (!resolvedProject.ok) return json(request, { ok: false, code: resolvedProject.code }, 403);
     try {

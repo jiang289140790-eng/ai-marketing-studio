@@ -15,7 +15,7 @@ function bearerExpiryMs(authorization, now) {
   }
 }
 
-export function createNativeSessionRegistry({ now = () => Date.now(), bootstrapTtlMs = 90_000 } = {}) {
+export function createNativeSessionRegistry({ now = () => Date.now(), bootstrapTtlMs = 10 * 60_000 } = {}) {
   const bootstraps = new Map();
   const sessions = new Map();
 

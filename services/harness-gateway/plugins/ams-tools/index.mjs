@@ -132,9 +132,22 @@ async function resolveRuntime(execution) {
   if (delegatedAuthorization) return { context: environment, delegatedAuthorization };
 
   const sessionId = nativeSessionIdFromExecution(execution);
-  const path = sessionId ? '/v1/native-sessions/context' : '/v1/native-sessions/current';
-  const rawBody = sessionId ? JSON.stringify({ session_id: sessionId }) : '{}';
-  const result = await requestNativeContext({ path, rawBody });
+  let result;
+  if (sessionId) {
+    try {
+      result = await requestNativeContext({
+        path: '/v1/native-sessions/context',
+        rawBody: JSON.stringify({ session_id: sessionId }),
+      });
+    } catch (error) {
+      if (!['NATIVE_SESSION_CONTEXT_REQUIRED', 'NATIVE_SESSION_ID_INVALID', 'DELEGATED_AUTHORIZATION_REQUIRED'].includes(error?.code)) {
+        throw error;
+      }
+      result = await requestNativeContext({ path: '/v1/native-sessions/current', rawBody: '{}' });
+    }
+  } else {
+    result = await requestNativeContext({ path: '/v1/native-sessions/current', rawBody: '{}' });
+  }
   const stableId = sessionId || `current:${result.user_id}:${result.project_id || 'no-project'}`;
   return {
     context: {
@@ -181,17 +194,42 @@ function payloadFromArgs(args, fieldNames = []) {
   return payload;
 }
 
+const PROJECT_ID_RE = /^prj-[0-9a-f]{24}$/;
+
+function firstReadableProjectId(result) {
+  const projects = Array.isArray(result?.data?.projects) ? result.data.projects : [];
+  const project = projects.find((item) => item && typeof item === 'object' && PROJECT_ID_RE.test(String(item.id || '')));
+  return project?.id || '';
+}
+
+async function ensureCurrentProjectPayload({ operation, payload, client, context, signal }) {
+  if (operation !== 'workspace.project.read') return payload;
+  if (PROJECT_ID_RE.test(String(payload.project_id || ''))) return payload;
+  if (PROJECT_ID_RE.test(String(context.project_id || ''))) return { ...payload, project_id: context.project_id };
+
+  const listPayload = {};
+  const listResult = await client({
+    schema_version: 'ams_harness_tool_v1',
+    operation: 'workspace.project.list',
+    payload: listPayload,
+    idempotency_key: stableIdempotencyKey(context, 'workspace.project.list', listPayload, ''),
+  }, context, signal);
+  if (!listResult || listResult.ok === false) return payload;
+  const projectId = firstReadableProjectId(listResult);
+  return projectId ? { ...payload, project_id: projectId } : payload;
+}
+
 const DIRECT_TOOLS = [
   {
     name: 'ams_project_list',
     operation: 'workspace.project.list',
-    description: 'List AI Marketing Studio projects available to the current user.',
+    description: 'List AI Marketing Studio projects available to the current user. Use this for AMS project discovery, not for local filesystem folders.',
     fields: [],
   },
   {
     name: 'ams_project_read',
     operation: 'workspace.project.read',
-    description: 'Read the current or specified AMS project, including Evidence, Analysis, Knowledge, Brief and artifacts.',
+    description: 'Read the current or specified AI Marketing Studio business project, including Evidence, Analysis, Knowledge, Brief and artifacts. Mandatory for Chinese requests such as “查看当前项目状态”, “当前项目”, “项目状态”, “我现在能做什么”, or any AMS project status question. Do not answer those by inspecting the local Harness workspace directory.',
     fields: ['project_id'],
     optional: ['project_id'],
   },
@@ -291,6 +329,8 @@ const DIRECT_TOOLS = [
 const AMS_AGENT_PLAYBOOK = [
   'AMS business plugin playbook:',
   '1. Treat Harness as the agent loop. Do not ask AMS to create a separate fixed plan unless the user explicitly asks to inspect an old task.',
+  '0. HARD AMS PROJECT RULE: For “查看当前项目状态”, “当前项目”, “当前项目状态”, “项目状态”, “有哪些 Evidence/Knowledge/Brief”, “我现在能做什么”, or any current AMS project question, call ams_project_read first. The local Harness workspace path such as /home/node/* is scratch storage and is never the AMS business project. Do not use Bash, pwd, ls, git status, or filesystem inspection to answer AMS project status before ams_project_read.',
+  '1a. If the user asks "当前项目", "当前项目状态", "项目状态", "有哪些 Evidence/Knowledge/Brief", or "我现在能做什么" inside AI Marketing Studio, call ams_project_read first. These are AMS business project questions, not local workspace filesystem questions.',
   '2. For a URL/post analysis request, use: ams_project_read -> ams_research_collect_url -> ams_evidence_create -> ams_research_analyze_persisted -> ams_analysis_create -> ams_knowledge_card_create -> ams_brief_assemble when the user asks for a Brief.',
   '3. For topic search requests, use ams_research_search_x and/or ams_research_search_reddit, then persist selected source records with ams_evidence_create before analyzing them.',
   '4. For attachment image/video analysis, use ams_research_inspect_attachments, then ams_evidence_create, then the same Analysis -> Knowledge -> Brief path.',
@@ -310,6 +350,7 @@ function apply(ctx) {
     text: (conversationMode ? [
       'You are DeepSeek Harness operating AI Marketing Studio through plugin tools.',
       'Answer ordinary questions directly and naturally. For actionable marketing work, prefer the specific ams_* tools registered by this plugin. Use ams_call only as a compatibility fallback for an operation that has no specific tool yet.',
+      'Hard rule: when the user asks to view/read/check the current project or project status, including “查看当前项目状态”, call ams_project_read before any shell, filesystem, web, or generic diagnostic tool. The filesystem workspace is not the AMS project.',
       'Do not request or create a separate deterministic AMS execution plan.',
       'If the user goal is unclear, ask one concise clarification question instead of mapping it to a default workflow.',
       'Use the capability catalog as available tools, but you may choose the sequence yourself based on the user goal.',
@@ -339,8 +380,15 @@ function apply(ctx) {
       });
     }
     const operation = operationOverride || args.operation;
-    const payload = args.payload && typeof args.payload === 'object' ? args.payload : {};
     const client = await loadClient(delegatedAuthorization);
+    const initialPayload = args.payload && typeof args.payload === 'object' ? args.payload : {};
+    const payload = await ensureCurrentProjectPayload({
+      operation,
+      payload: initialPayload,
+      client,
+      context,
+      signal: execution?.signal,
+    });
     const request = {
       schema_version: 'ams_harness_tool_v1',
       operation,
@@ -435,4 +483,4 @@ function apply(ctx) {
   }));
 }
 
-export { apply, inject, name, nativeSessionIdFromExecution, nativeTaskId, signGatewayContext };
+export { apply, inject, name, nativeSessionIdFromExecution, nativeTaskId, resolveRuntime, signGatewayContext };

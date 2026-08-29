@@ -164,6 +164,10 @@ export default function App() {
     ? pageTitles[activePage][routeView] || pageTitles.tasks.new
     : pageTitles[activePage] || pageTitles.tasks.new;
 
+  if (activePage === 'ai' || (activePage === 'tasks' && routeView === 'new')) {
+    return <AIWorkspacePage key={routeParams?.legacy === '1' ? 'legacy' : 'harness-native'} />;
+  }
+
   return (
     <div className={`app-shell harness-app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar

@@ -6,6 +6,7 @@ import {
   newHarnessRequestId,
   readHarnessActiveProject,
 } from '../services/harness-client.js';
+import './AIWorkspacePage.css';
 
 const DEFAULT_HARNESS_WEB_URL = 'https://harness-web.47-251-244-196.sslip.io';
 
@@ -17,10 +18,6 @@ function getHarnessWebUrl() {
   ).trim().replace(/\/$/, '');
 }
 
-/**
- * The AI workspace is the official DeepSeek Harness Web application itself.
- * AMS must not reproduce, wrap, decorate, or productize the Harness homepage.
- */
 export function AIWorkspacePage() {
   const harnessWebUrl = getHarnessWebUrl();
   const { authUrl, error: authError, isAuthenticated, loading: authLoading, loginWithGitHub } = useAuth();
@@ -31,7 +28,8 @@ export function AIWorkspacePage() {
   useEffect(() => {
     if (!harnessWebUrl || authLoading || !isAuthenticated) return;
     let active = true;
-    const openHarness = async () => {
+
+    async function openHarness() {
       setBootstrapError('');
       const client = createHarnessClient();
       const activeProjectId = readHarnessActiveProject();
@@ -50,26 +48,27 @@ export function AIWorkspacePage() {
           }
         } catch (error) {
           lastError = error;
-          /* Try a user-only bootstrap if the remembered project no longer exists. */
         }
         if (!active) return;
         if (projectId) {
-          try { globalThis.localStorage?.removeItem?.(HARNESS_ACTIVE_PROJECT_KEY); } catch { /* Storage is best-effort. */ }
+          try { globalThis.localStorage?.removeItem?.(HARNESS_ACTIVE_PROJECT_KEY); } catch { /* best effort */ }
         }
       }
-      if (active) setBootstrapError(
-        lastError?.code
-          ? `${lastError.code}: ${lastError.message || 'Native bootstrap failed.'}`
-          : 'NATIVE_BOOTSTRAP_FAILED: Native bootstrap failed.',
-      );
-    };
+
+      if (active) {
+        setBootstrapError(
+          lastError?.code
+            ? `${lastError.code}: ${lastError.message || 'Native bootstrap failed.'}`
+            : 'NATIVE_BOOTSTRAP_FAILED: Native bootstrap failed.',
+        );
+      }
+    }
+
     openHarness();
     return () => { active = false; };
   }, [authLoading, harnessWebUrl, isAuthenticated]);
 
-  if (authLoading || (isAuthenticated && !bootstrapError)) return null;
-
-  const signIn = async () => {
+  async function signIn() {
     setLoginError('');
     setIsSigningIn(true);
     try {
@@ -78,42 +77,24 @@ export function AIWorkspacePage() {
       setIsSigningIn(false);
       setLoginError(error?.message || 'GitHub 登录启动失败，请稍后重试。');
     }
-  };
+  }
+
+  if (authLoading || (isAuthenticated && !bootstrapError)) {
+    return null;
+  }
 
   return (
-    <main className="official-harness-auth-gate" style={{
-      alignItems: 'center',
-      background: '#fff',
-      color: '#0f172a',
-      display: 'flex',
-      minHeight: '100vh',
-      justifyContent: 'center',
-      padding: 24,
-    }}>
-      <section style={{ maxWidth: 720, textAlign: 'center' }}>
-        <p style={{ color: '#0f766e', fontWeight: 800, letterSpacing: '0.08em', marginBottom: 12 }}>AMS × DEEPSEEK HARNESS</p>
-        <h1 style={{ fontSize: 'clamp(40px, 8vw, 72px)', lineHeight: 1, margin: 0 }}>探索未至之境</h1>
-        <p style={{ color: '#475569', fontSize: 18, margin: '20px 0 28px' }}>先登录 AMS，再进入 Harness。这样插件才能读取当前项目和业务结果。</p>
-        <button
-          type="button"
-          onClick={signIn}
-          disabled={isSigningIn}
-          style={{
-            background: '#0f172a',
-            border: 0,
-            borderRadius: 999,
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: 16,
-            fontWeight: 800,
-            padding: '14px 28px',
-          }}
-        >
-          {isSigningIn ? '正在跳转 GitHub...' : 'GitHub 登录并进入 Harness'}
+    <main className="official-harness-auth-gate">
+      <section>
+        <p className="official-harness-kicker">AMS × DEEPSEEK HARNESS</p>
+        <h1>探索未至之境</h1>
+        <p>先登录 AMS，再进入官方 Harness。AMS 只负责授权和结果沉淀。</p>
+        <button type="button" onClick={signIn} disabled={isSigningIn}>
+          {isSigningIn ? '正在跳转 GitHub…' : 'GitHub 登录并进入 Harness'}
         </button>
-        {authUrl ? <p style={{ marginTop: 16 }}><a href={authUrl}>继续 GitHub 授权</a></p> : null}
+        {authUrl ? <p className="official-harness-auth-link"><a href={authUrl}>继续 GitHub 授权</a></p> : null}
         {authError || loginError || bootstrapError
-          ? <p style={{ color: '#dc2626', marginTop: 16 }}>{authError || loginError || bootstrapError}</p>
+          ? <p className="official-harness-error">{authError || loginError || bootstrapError}</p>
           : null}
       </section>
     </main>

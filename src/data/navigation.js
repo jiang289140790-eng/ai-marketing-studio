@@ -1,17 +1,18 @@
-// 导航唯一注册源。用户可见入口只保留 Harness 对话入口
-// 和业务结果/资产业务页；旧固定规划器、调试页和后台配置页仍保留
-// 路由兼容，但不再作为产品入口展示。
-export const harnessJourney = [
-  { id: 'ai', key: 'new', label: '新任务', icon: '✦', testId: 'harness-journey-new' },
-  { id: 'ai', key: 'session', label: '当前会话', icon: '⋯', testId: 'harness-journey-session' },
-];
-
-export const compatibilitySections = [
+// 用户可见导航只保留 Harness 入口和 AMS 业务沉淀页。
+// 旧固定规划器、调试页、提示词库、工作流配置仍可被历史深链访问，
+// 但不再作为产品主入口展示。
+export const navigationSections = [
+  {
+    label: 'AI 工作',
+    items: [
+      { id: 'ai', label: '进入 Harness', icon: '✦', testId: 'harness-entry' },
+    ],
+  },
   {
     label: '业务结果',
     items: [
       { id: 'research', label: '研究与 Brief', icon: '⌕', testId: 'harness-plugin-research' },
-      { id: 'knowledge', label: '知识库', icon: '◈', testId: 'harness-plugin-knowledge' },
+      { id: 'knowledge', label: '知识库', icon: '◇', testId: 'harness-plugin-knowledge' },
       { id: 'generation', label: '生成结果', icon: '▣', testId: 'harness-plugin-generation' },
       { id: 'publish', label: '发布中心', icon: '↗' },
     ],
@@ -25,15 +26,18 @@ export const compatibilitySections = [
   },
 ];
 
-// 用户可见导航唯一来源：主旅程入口 + 业务页，每页只有一个定义。
-export const navigationItems = [
-  { id: 'ai', label: '新任务', icon: '✦' },
-  ...compatibilitySections.flatMap((section) => section.items),
+export const navigationItems = navigationSections.flatMap((section) => section.items);
+
+export const harnessJourney = [
+  { id: 'ai', key: 'new', label: '新任务', icon: '✦', testId: 'harness-journey-new' },
+  { id: 'ai', key: 'session', label: '当前会话', icon: '⋯', testId: 'harness-journey-session' },
 ];
 
-// 可见导航保持精简；旧页面仍在路由白名单中，以保证书签和历史深链接可用。
+export const compatibilitySections = navigationSections.filter((section) => section.label !== 'AI 工作');
+
 export const routablePageIds = Object.freeze([
   ...navigationItems.map((item) => item.id),
+  'tasks',
   'prompts',
   'workflows',
   'health',
@@ -84,7 +88,7 @@ export const assetTypes = [
 ];
 
 export const contentTypes = [
-  { value: 'text', label: '纯文字' },
+  { value: 'text', label: '纯文本' },
   { value: 'image', label: '图片' },
   { value: 'video', label: '视频' },
   { value: 'short_video', label: '短视频' },

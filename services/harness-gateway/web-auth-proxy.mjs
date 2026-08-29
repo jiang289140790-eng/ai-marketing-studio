@@ -11,7 +11,7 @@ const BOOTSTRAP_HEADER = 'x-ams-bootstrap';
 const MAX_JSON_BODY = 2 * 1024 * 1024;
 const SESSION_ID_MAX = 192;
 
-export const BOOTSTRAP_SCRIPT = `<script>(()=>{const k='ams_native_bootstrap_v1';const sk='ams_native_session_id_v1';const bk='ams_native_bootstrap_bound_v1';const ck='ams_native_session_created_v1';const rk='ams_native_session_ready_v1';const p=new URLSearchParams(location.hash.slice(1));const incoming=p.get('ams-bootstrap');function clearHarnessSessionSelection(){const re=/(^|[-_.:])(session|conversation|thread|agent)([-_.:]|$)|current.*session|active.*session|selected.*session/i;for(const store of [sessionStorage,localStorage]){try{for(let i=store.length-1;i>=0;i--){const key=store.key(i)||'';if(key.startsWith('ams_native_'))continue;if(re.test(key))store.removeItem(key)}}catch{}}}function cleanHash(){try{history.replaceState(null,'',location.pathname+location.search)}catch{}}function makeSessionId(){return 'session-'+(crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2))}function rememberSelection(sessionId){try{localStorage.setItem('dsh.sessions.current',JSON.stringify({sessionId}))}catch{}try{sessionStorage.setItem(sk,sessionId)}catch{}}if(incoming){try{sessionStorage.removeItem(k);sessionStorage.removeItem(bk);sessionStorage.removeItem(sk);sessionStorage.removeItem(ck);sessionStorage.removeItem(rk);clearHarnessSessionSelection()}catch{}try{sessionStorage.setItem(k,incoming)}catch{}cleanHash()}let sid=sessionStorage.getItem(sk);if(!sid){sid=makeSessionId();rememberSelection(sid)}else rememberSelection(sid);const original=globalThis.fetch.bind(globalThis);globalThis.fetch=(input,init={})=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url,location.href);if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return original(input,init);const headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));const bootstrap=sessionStorage.getItem(k);if(bootstrap)headers.set('${BOOTSTRAP_HEADER}',bootstrap);return original(input,{...init,headers})};async function api(method,payload){const rpcId='ams-native-'+Date.now()+'-'+Math.random().toString(36).slice(2);const r=await fetch('/api/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'client-request',rpcId,method,payload}),redirect:'error'});return await r.json()}async function bindNow(){const bootstrap=sessionStorage.getItem(k);if(!bootstrap||sessionStorage.getItem(bk)===bootstrap+':'+sid)return false;const r=await fetch('/ams/native-bootstrap/bind',{method:'POST',headers:{'content-type':'application/json','${BOOTSTRAP_HEADER}':bootstrap},body:JSON.stringify({session_id:sid}),redirect:'error'});if(r.ok){sessionStorage.setItem(bk,bootstrap+':'+sid);return true}return false}async function ensureNativeSession(){const bootstrap=sessionStorage.getItem(k);if(!bootstrap)return;rememberSelection(sid);if(sessionStorage.getItem(ck)!==bootstrap+':'+sid){const listed=await api('workspace.list',{});const workspaces=listed&&listed.result&&listed.result.ok&&listed.result.value&&Array.isArray(listed.result.value.items)?listed.result.value.items:[];const workspace=workspaces.find((item)=>item&&item.title==='AI Marketing Studio')||workspaces[0];if(!workspace||!workspace.workspaceId)return;const created=await api('session.create',{workspaceId:workspace.workspaceId,sessionId:sid});if(created&&created.result&&created.result.ok)sessionStorage.setItem(ck,bootstrap+':'+sid)}const bound=await bindNow();rememberSelection(sid);if(bound&&sessionStorage.getItem(rk)!==bootstrap+':'+sid){sessionStorage.setItem(rk,bootstrap+':'+sid);location.replace(location.pathname+location.search)}}void ensureNativeSession().catch(()=>{})})()</script>`;
+export const BOOTSTRAP_SCRIPT = `<script>(()=>{const k='ams_native_bootstrap_v1';const sk='ams_native_session_id_v1';const bk='ams_native_bootstrap_bound_v1';const ck='ams_native_session_created_v1';const rk='ams_native_session_ready_v1';const p=new URLSearchParams(location.hash.slice(1));const incoming=p.get('ams-bootstrap');function clearHarnessSessionSelection(){const re=/(^|[-_.:])(session|conversation|thread|agent)([-_.:]|$)|current.*session|active.*session|selected.*session/i;for(const store of [sessionStorage,localStorage]){try{for(let i=store.length-1;i>=0;i--){const key=store.key(i)||'';if(key.startsWith('ams_native_'))continue;if(re.test(key))store.removeItem(key)}}catch{}}}function cleanHash(){try{history.replaceState(null,'',location.pathname+location.search)}catch{}}function makeSessionId(){return 'session-'+(crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2))}function rememberSelection(sessionId){try{localStorage.setItem('dsh.sessions.current',JSON.stringify({sessionId}))}catch{}try{sessionStorage.setItem(sk,sessionId)}catch{}}function forceSessionPayload(value,sessionId){if(!value||typeof value!=='object')return value;if(value.payload&&typeof value.payload==='object'){value.payload.sessionId=sessionId;value.payload.id=sessionId;value.payload.agentId=sessionId}if(value.params&&typeof value.params==='object'){value.params.sessionId=sessionId;value.params.id=sessionId;value.params.agentId=sessionId}if('sessionId'in value)value.sessionId=sessionId;if(value.session&&typeof value.session==='object')value.session.id=sessionId;if('agentId'in value)value.agentId=sessionId;if(value.agent&&typeof value.agent==='object')value.agent.id=sessionId;return value}function forceSessionBody(method,body,sessionId){if(typeof body!=='string'||!body.trim())return body;try{const value=JSON.parse(body);if(value&&typeof value==='object'&&String(method||'').startsWith('session.')){const payload=value.payload&&typeof value.payload==='object'?value.payload:{};value.payload={...payload,sessionId};if(value.payload.id)value.payload.id=sessionId;if(value.payload.agentId)value.payload.agentId=sessionId;return JSON.stringify(value)}return JSON.stringify(forceSessionPayload(value,sessionId))}catch{return body}}if(incoming){try{sessionStorage.removeItem(k);sessionStorage.removeItem(bk);sessionStorage.removeItem(sk);sessionStorage.removeItem(ck);sessionStorage.removeItem(rk);clearHarnessSessionSelection()}catch{}try{sessionStorage.setItem(k,incoming)}catch{}cleanHash()}let sid=sessionStorage.getItem(sk);if(!sid){sid=makeSessionId();rememberSelection(sid)}else rememberSelection(sid);const original=globalThis.fetch.bind(globalThis);globalThis.fetch=(input,init={})=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url,location.href);if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return original(input,init);const headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));const bootstrap=sessionStorage.getItem(k);let nextInit={...init,headers};if(bootstrap){headers.set('${BOOTSTRAP_HEADER}',bootstrap);headers.set('x-ams-native-session-id',sid);const contentType=String(headers.get('content-type')||'').toLowerCase();const originalBody=init.body||(input instanceof Request?input.body:undefined);if(typeof originalBody==='string'&&contentType.includes('application/json')){const method=url.pathname.replace(/^\\/api\\//,'');nextInit={...nextInit,body:forceSessionBody(method,originalBody,sid)}}}return original(input,nextInit)};async function api(method,payload){const rpcId='ams-native-'+Date.now()+'-'+Math.random().toString(36).slice(2);const r=await fetch('/api/'+method,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'client-request',rpcId,method,payload:{...payload,sessionId:sid}}),redirect:'error'});return await r.json()}async function bindNow(){const bootstrap=sessionStorage.getItem(k);if(!bootstrap||sessionStorage.getItem(bk)===bootstrap+':'+sid)return false;const r=await fetch('/ams/native-bootstrap/bind',{method:'POST',headers:{'content-type':'application/json','${BOOTSTRAP_HEADER}':bootstrap},body:JSON.stringify({session_id:sid}),redirect:'error'});if(r.ok){sessionStorage.setItem(bk,bootstrap+':'+sid);return true}return false}async function ensureNativeSession(){const bootstrap=sessionStorage.getItem(k);if(!bootstrap)return;rememberSelection(sid);if(sessionStorage.getItem(ck)!==bootstrap+':'+sid){const listed=await api('workspace.list',{});const workspaces=listed&&listed.result&&listed.result.ok&&listed.result.value&&Array.isArray(listed.result.value.items)?listed.result.value.items:[];const workspace=workspaces.find((item)=>item&&item.title==='AI Marketing Studio')||workspaces[0];if(!workspace||!workspace.workspaceId)return;const created=await api('session.create',{workspaceId:workspace.workspaceId,sessionId:sid,id:sid,agentId:sid});if(created&&created.result&&created.result.ok)sessionStorage.setItem(ck,bootstrap+':'+sid)}const bound=await bindNow();rememberSelection(sid);if(bound&&sessionStorage.getItem(rk)!==bootstrap+':'+sid){sessionStorage.setItem(rk,bootstrap+':'+sid);location.replace(location.pathname+location.search)}}void ensureNativeSession().catch(()=>{})})()</script>`;
 
 export function injectBootstrapScript(html) {
   const source = String(html || '');
@@ -54,6 +54,38 @@ function explicitSessionId(value) {
   return '';
 }
 
+function forceSessionPayload(value, sessionId) {
+  const stable = stableSessionId(sessionId);
+  if (!stable || !value || typeof value !== 'object') return value;
+  if (value.payload && typeof value.payload === 'object') {
+    value.payload.sessionId = stable;
+    if ('id' in value.payload) value.payload.id = stable;
+    if ('agentId' in value.payload) value.payload.agentId = stable;
+  }
+  if (value.params && typeof value.params === 'object') {
+    value.params.sessionId = stable;
+    if ('id' in value.params) value.params.id = stable;
+    if ('agentId' in value.params) value.params.agentId = stable;
+  }
+  if ('sessionId' in value) value.sessionId = stable;
+  if (value.session && typeof value.session === 'object') value.session.id = stable;
+  if ('agentId' in value) value.agentId = stable;
+  if (value.agent && typeof value.agent === 'object') value.agent.id = stable;
+  return value;
+}
+
+export function forceApiSessionBody(pathname, rawBody = '', sessionId = '') {
+  const stable = stableSessionId(sessionId);
+  if (!stable || typeof rawBody !== 'string' || !rawBody.trim()) return rawBody;
+  const method = String(pathname || '').replace(/^\/api\//, '');
+  if (!method.startsWith('session.')) return rawBody;
+  try {
+    return JSON.stringify(forceSessionPayload(JSON.parse(rawBody), stable));
+  } catch {
+    return rawBody;
+  }
+}
+
 export function requestSessionId(pathname, rawBody, responseBody = '') {
   try {
     const request = JSON.parse(rawBody || '{}');
@@ -66,6 +98,25 @@ export function requestSessionId(pathname, rawBody, responseBody = '') {
     }
   } catch { /* malformed requests remain the upstream API's responsibility */ }
   return '';
+}
+
+export function pinSessionListCurrent(rawBody = '', sessionId = '') {
+  const stable = stableSessionId(sessionId);
+  if (!stable) return Buffer.from(String(rawBody || ''), 'utf8');
+  let parsed;
+  try {
+    parsed = JSON.parse(String(rawBody || '{}'));
+  } catch {
+    return Buffer.from(String(rawBody || ''), 'utf8');
+  }
+  const value = parsed?.result?.value;
+  if (!parsed?.result?.ok || !value || typeof value !== 'object') return Buffer.from(String(rawBody || ''), 'utf8');
+  const ids = Array.isArray(value.ids) ? value.ids : [];
+  const byId = value.byId && typeof value.byId === 'object' ? value.byId : {};
+  const present = ids.includes(stable) || Boolean(byId[stable]);
+  if (!present) return Buffer.from(String(rawBody || ''), 'utf8');
+  value.current = stable;
+  return Buffer.from(JSON.stringify(parsed), 'utf8');
 }
 
 export function bootstrapBindSessionId(rawBody = '') {
@@ -149,7 +200,12 @@ export function createWebAuthProxy({
     }
 
     const bootstrapId = String(request.headers[BOOTSTRAP_HEADER] || '').trim();
-    const rawBody = requestBody?.toString('utf8') || '';
+    const nativeSessionId = stableSessionId(String(request.headers['x-ams-native-session-id'] || ''));
+    let rawBody = requestBody?.toString('utf8') || '';
+    if (isJsonApi && bootstrapId && nativeSessionId) {
+      rawBody = forceApiSessionBody(url.pathname, rawBody, nativeSessionId);
+      requestBody = Buffer.from(rawBody, 'utf8');
+    }
     if (isGatewayNativeBootstrap) {
       try {
         const forwardHeaders = {
@@ -207,10 +263,12 @@ export function createWebAuthProxy({
 
     const headers = { ...request.headers, 'accept-encoding': 'identity' };
     delete headers[BOOTSTRAP_HEADER];
+    delete headers['x-ams-native-session-id'];
     const upstream = httpRequest({ hostname: '127.0.0.1', port: upstreamPort, method: request.method, path: request.url, headers }, (upstreamResponse) => {
       const transformHtml = request.method === 'GET' && url.pathname === '/';
       const captureCreate = isJsonApi && url.pathname === '/api/session.create' && bootstrapId;
-      if (!transformHtml && !captureCreate) {
+      const pinSessionList = isJsonApi && url.pathname === '/api/session.list' && bootstrapId && nativeSessionId;
+      if (!transformHtml && !captureCreate && !pinSessionList) {
         response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
         upstreamResponse.pipe(response);
         return;
@@ -229,6 +287,9 @@ export function createWebAuthProxy({
             response.end(JSON.stringify({ ok: false, code: error?.code || 'NATIVE_SESSION_BIND_FAILED' }));
             return;
           }
+        }
+        if (pinSessionList && (upstreamResponse.statusCode || 500) < 400) {
+          body = pinSessionListCurrent(body.toString('utf8'), nativeSessionId);
         }
         const responseHeaders = { ...upstreamResponse.headers, 'content-length': String(body.length) };
         if (transformHtml) responseHeaders['cache-control'] = 'no-store';

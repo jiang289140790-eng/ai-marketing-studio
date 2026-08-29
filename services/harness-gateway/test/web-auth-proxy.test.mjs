@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { BOOTSTRAP_SCRIPT, bootstrapBindSessionId, injectBootstrapScript, requestSessionId } from '../web-auth-proxy.mjs';
+import { BOOTSTRAP_SCRIPT, bootstrapBindSessionId, forceApiSessionBody, injectBootstrapScript, pinSessionListCurrent, requestSessionId } from '../web-auth-proxy.mjs';
 
 test('web bootstrap changes transport only, removes the opaque fragment, and keeps the token for API binding', () => {
   const html = injectBootstrapScript('<html><head><title>DeepSeek Harness</title></head><body>native</body></html>');
@@ -17,7 +17,10 @@ test('web bootstrap changes transport only, removes the opaque fragment, and kee
   assert.match(html, /sessionStorage\.removeItem\(sk\)/);
   assert.match(html, /clearHarnessSessionSelection/);
   assert.match(html, /current\.\*session\|active\.\*session\|selected\.\*session/);
-  assert.match(html, /if\(bootstrap\)headers\.set\('x-ams-bootstrap',bootstrap\)/);
+  assert.match(html, /headers\.set\('x-ams-bootstrap',bootstrap\)/);
+  assert.match(html, /headers\.set\('x-ams-native-session-id',sid\)/);
+  assert.match(html, /forceSessionBody\(method,originalBody,sid\)/);
+  assert.match(html, /payload:\{\.\.\.payload,sessionId:sid\}/);
   assert.doesNotMatch(html, /ams-web-/);
   assert.doesNotMatch(html, /if\(r\.ok\)[^;]+sessionStorage\.removeItem\(k\)/);
   assert.doesNotMatch(html, /sessionStorage\.getItem\(bk\)!==bootstrap\+':'\+sid\)headers/);
@@ -25,6 +28,35 @@ test('web bootstrap changes transport only, removes the opaque fragment, and kee
   assert.doesNotMatch(html, /sessionStorage\.clear/);
   assert.match(html, /<title>DeepSeek Harness<\/title>/);
   assert.doesNotMatch(BOOTSTRAP_SCRIPT, /button|card|badge|快捷|项目状态/i);
+});
+
+test('bootstrap-bound session pins official session.list current only when the exact session exists', () => {
+  const body = JSON.stringify({
+    type: 'server-response',
+    result: {
+      ok: true,
+      value: {
+        current: 'session-old',
+        ids: ['session-old', 'session-native-1'],
+        byId: {
+          'session-old': { id: 'session-old' },
+          'session-native-1': { id: 'session-native-1' },
+        },
+      },
+    },
+  });
+  assert.equal(
+    JSON.parse(pinSessionListCurrent(body, 'session-native-1').toString('utf8')).result.value.current,
+    'session-native-1',
+  );
+  assert.equal(
+    JSON.parse(pinSessionListCurrent(body, 'session-missing').toString('utf8')).result.value.current,
+    'session-old',
+  );
+  assert.equal(
+    pinSessionListCurrent('{bad json', 'session-native-1').toString('utf8'),
+    '{bad json',
+  );
 });
 
 test('native bootstrap bind endpoint accepts only stable browser session ids', () => {
@@ -46,6 +78,26 @@ test('native session id is extracted from requests and session.create responses'
   assert.equal(requestSessionId('/api/session.get', JSON.stringify({ payload: { sessionId: '../bad' } })), '');
   assert.equal(requestSessionId('/api/session.get', JSON.stringify({ payload: { sessionId: 'x'.repeat(193) } })), '');
   assert.equal(requestSessionId('/api/session.create', '{bad json', '{}'), '');
+});
+
+test('bootstrap-bound official session API requests are forced to the explicit native session server-side', () => {
+  const raw = JSON.stringify({
+    type: 'client-request',
+    method: 'session.prompt',
+    payload: {
+      sessionId: 'session-stale',
+      id: 'session-stale',
+      agentId: 'session-stale',
+      prompt: '查看当前项目状态',
+    },
+  });
+  const forced = JSON.parse(forceApiSessionBody('/api/session.prompt', raw, 'session-native-exact'));
+  assert.equal(forced.payload.sessionId, 'session-native-exact');
+  assert.equal(forced.payload.id, 'session-native-exact');
+  assert.equal(forced.payload.agentId, 'session-native-exact');
+  assert.equal(requestSessionId('/api/session.prompt', JSON.stringify(forced)), 'session-native-exact');
+  assert.equal(forceApiSessionBody('/api/workspace.list', raw, 'session-native-exact'), raw);
+  assert.equal(forceApiSessionBody('/api/session.prompt', raw, '../bad'), raw);
 });
 
 test('official Harness web uses the official web command without unsupported profile flags', async () => {
